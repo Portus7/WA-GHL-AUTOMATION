@@ -1,7 +1,6 @@
 // src/index.js
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
-
 const express = require("express");
 const pino = require("pino");
 const qrcodeTerminal = require("qrcode-terminal");
@@ -25,7 +24,7 @@ const GHL_API_VERSION = process.env.GHL_API_VERSION;
 // Instancia del SDK
 const ghl = new HighLevel({
   privateIntegrationToken: GHL_PIT,
-  apiVersion: GHL_API_VERSION,
+  apiVersion: GHL_API_VERSION, // VER PARA AUTOMATIZAR
 });
 
 // Parche crypto para Baileys en Node
@@ -240,6 +239,7 @@ async function getGHLContactById(contactId) {
 async function startWhatsApp() {
   if (baileysLoaded && sock) return;
 
+  // Un solo import de Baileys
   const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -251,8 +251,11 @@ async function startWhatsApp() {
   const { version } = await fetchLatestBaileysVersion();
   console.log("▶ Usando versión WA:", version);
 
-  const { state, saveCreds } = await useMultiFileAuthState("sessions/default");
+  // Usa la misma carpeta que vas a montar como volumen
+  const authDir = process.env.BAILEYS_AUTH_DIR || "sessions/default";
+  const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
+  // IMPORTANTE: asigna al sock GLOBAL
   sock = makeWASocket({
     version,
     logger: pino({ level: "info" }),
@@ -268,7 +271,6 @@ async function startWhatsApp() {
     if (qr) {
       console.log("\n📌 Escanea este QR con WhatsApp:\n");
       qrcodeTerminal.generate(qr, { small: true });
-
       currentQR = qr;
       isConnected = false;
     }
@@ -278,18 +280,12 @@ async function startWhatsApp() {
       isConnected = true;
       currentQR = null;
 
-      const waId =
-        sock?.user?.id ||
-        update?.user?.id ||
-        update?.id ||
-        null;
-
-      if (!waId) return;
-
-      const myNumber = waId.split("@")[0].split(":")[0];
-      console.log("📞 Número conectado:", myNumber);
-
-      savePhoneForLocation(GHL_LOCATION_ID, myNumber);
+      const waId = sock?.user?.id || null;
+      if (waId) {
+        const myNumber = waId.split("@")[0].split(":")[0];
+        console.log("📞 Número conectado:", myNumber);
+        savePhoneForLocation(GHL_LOCATION_ID, myNumber);
+      }
     }
 
     if (connection === "close") {
@@ -316,9 +312,7 @@ async function startWhatsApp() {
     }
   });
 
-  // ---------------------------------------------------------
-  // 🔥 AQUÍ SE CAPTA EL MENSAJE Y SE PASA EL NOMBRE A GHL
-  // ---------------------------------------------------------
+  // 👇 Mantén aquí tus listeners de mensajes (ya los tienes):
   sock.ev.on("messages.upsert", async (msg) => {
     const m = msg.messages[0];
     if (!m?.message || m.key.fromMe) return;
@@ -336,17 +330,16 @@ async function startWhatsApp() {
     console.log("📩 Recibido de", waName, ":", text);
 
     const phone = extractPhoneFromJid(from);
-
-    // 👇 PASAMOS EL NOMBRE AQUÍ
     const contact = await findOrCreateGHLContact(phone, waName);
-
-    if (!contact?.id) {
-      console.error("Error obteniendo/creando contacto:", phone);
-      return;
-    }
+    if (!contact?.id) return;
 
     await sendMessageToGHLConversation(contact.id, text);
   });
+}
+
+// (opcional) Arranque automático
+if (process.env.AUTO_START_WHATSAPP === "true") {
+  startWhatsApp().catch(console.error);
 }
 
 // -----------------------------
