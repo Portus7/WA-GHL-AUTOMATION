@@ -1,0 +1,23 @@
+{
+  "name": "wa-baileys",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "db": "node src/db_conexion.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "@gohighlevel/api-client": "^2.2.2",
+    "@whiskeysockets/baileys": "^6.7.21",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "pg": "^8.16.3",
+    "pino": "^10.1.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}
