@@ -405,10 +405,10 @@ app.post("/ghl/webhook", async (req, res) => {
     }
 
     // 1) Enviar mensaje por WhatsApp usando BAILEYS
-    await sendWhatsAppMessage(phone, message);
+    //await sendWhatsAppMessage(phone, message);
 
     // 2) (Opcional) Registrar OUTBOUND en GHL para dejar trazabilidad
-    // await sendMessageToGHLConversationOutbound(contactId, message);
+    await sendMessageToGHLConversationOutbound(contactId, message);
 
     return res.status(200).json({ ok: true });
   } catch (err) {
