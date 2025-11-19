@@ -403,7 +403,7 @@ app.post("/ghl/webhook", async (req, res) => {
     await sendWhatsAppMessage(phone, message);
 
     // 5) Registrar OUTBOUND en GHL para mostrarlo en conversacion
-    await sendMessageToGHLConversationOutbound(contactId, message);
+    // await sendMessageToGHLConversationOutbound(contactId, message);
 
     res.status(200).json({ ok: true });
 
