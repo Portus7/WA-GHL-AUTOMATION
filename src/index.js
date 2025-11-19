@@ -95,7 +95,6 @@ async function sendWhatsAppMessage(phone, text) {
 // 🔥 findOrCreateGHLContact (YA ACTUALIZADO PARA GUARDAR NOMBRE)
 // ------------------------------------------------------------
 async function findOrCreateGHLContact(phone, waName = "WhatsApp Lead") {
-
   if (!GHL_PIT || !GHL_LOCATION_ID) {
     console.error("⚠️ Faltan GHL_PIT o GHL_LOCATION_ID en .env");
     return null;
@@ -115,12 +114,17 @@ async function findOrCreateGHLContact(phone, waName = "WhatsApp Lead") {
     });
 
     if (lookupRes.data && lookupRes.data.contact) {
-      console.log("🔍 Contacto encontrado:", lookupRes.data.contact.id);
+      console.log("🔍 Contacto encontrado (lookup):", lookupRes.data.contact.id);
       return lookupRes.data.contact;
     }
   } catch (err) {
-    if (err.statusCode !== 404) {
-      console.error("Error buscando contacto:", err.response || err);
+    // Si es 404, no pasa nada: significa que no existe aún.
+    if (err instanceof GHLError) {
+      if (err.statusCode !== 404) {
+        console.error("Error buscando contacto:", err.statusCode, err.response);
+      }
+    } else {
+      console.error("Error buscando contacto (desconocido):", err);
     }
   }
 
@@ -129,30 +133,38 @@ async function findOrCreateGHLContact(phone, waName = "WhatsApp Lead") {
     const created = await ghl.contacts.createContact({
       locationId: GHL_LOCATION_ID,
       phone: normalizedPhone,
-      firstName: waName,        
+      firstName: waName,
       source: "WhatsApp Baileys",
     });
 
     console.log("👤 Contacto creado:", created.contact?.id || created.id);
     return created.contact || created;
-
   } catch (err) {
-    const data = err.response || err;
+    // 💥 AQUÍ MANEJAMOS DUPLICADOS DE VERDAD
+    if (err instanceof GHLError) {
+      const statusCode = err.statusCode;
+      const body = err.response; // normalmente aquí viene { message, meta, ... }
 
-    // si la ubicación no permite duplicados:
-    if (
-      data?.statusCode === 400 &&
-      data?.message === "Esta localizacion no permite duplicados" &&
-      data?.meta?.contactId
-    ) {
-      console.log("ℹ️ Contacto ya existía:", data.meta.contactId);
-      return { id: data.meta.contactId, phone: normalizedPhone };
+      console.error("Error creando contacto (GHL):", statusCode, body);
+
+      // caso: "Esta localizacion no permite duplicados" con meta.contactId
+      const msg = body?.message || err.message;
+
+      if (
+        statusCode === 400 &&
+        body?.meta?.contactId // más fiable que matchear el texto del mensaje
+      ) {
+        console.log("ℹ️ Contacto ya existía (desde error 400):", body.meta.contactId);
+        return { id: body.meta.contactId, phone: normalizedPhone };
+      }
+    } else {
+      console.error("Error creando contacto (desconocido):", err);
     }
 
-    console.error("Error creando contacto:", data);
     return null;
   }
 }
+
 
 // ------------------------------------------------------------
 // Crear mensaje INBOUND (WhatsApp ➜ GHL) como SMS
