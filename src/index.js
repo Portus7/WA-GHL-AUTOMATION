@@ -409,10 +409,10 @@ app.post("/ghl/webhook", async (req, res) => {
       return res.status(200).json({ ignored: true });
     }
 
-    if (type !== "SMS") {
-      console.log("No es SMS, se ignora.");
-      return res.status(200).json({ ignored: true });
-    }
+    //if (type !== "SMS") {
+    //  console.log("No es SMS, se ignora.");
+    //  return res.status(200).json({ ignored: true });
+    //}
 
     if (!contactId) {
       console.warn("⚠️ Webhook sin contactId, no se puede continuar.");
@@ -451,7 +451,7 @@ app.post("/ghl/webhook", async (req, res) => {
     await sendWhatsAppMessage(phone, text);
 
     // 3) (Opcional) Registrar outbound también vía API si lo necesitas:
-    // await sendMessageToGHLConversationOutbound(contactId, text);
+    await sendMessageToGHLConversationOutbound(contactId, text);
 
     res.status(200).json({ ok: true });
   } catch (err) {
