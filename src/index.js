@@ -367,8 +367,7 @@ app.post("/start-whatsapp", async (req, res) => {
 });
 
 // 🔥 Webhook desde GoHighLevel -> enviar mensaje por WhatsApp
-//    Esta URL es la que pones en "Delivery URL":
-//    https://express.clicandapp.com/ghl/webhook   (ajusta al dominio real)
+//    https://express.clicandapp.com/ghl/webhook   
 app.post("/ghl/webhook", async (req, res) => {
   try {
     console.log("📩 Webhook GHL recibido:", JSON.stringify(req.body, null, 2));
@@ -399,9 +398,19 @@ app.post("/ghl/webhook", async (req, res) => {
       body.message ||
       "";
 
+    const type =
+      body.message?.type ||
+      body.type ||
+      "SMS";
+
     // Solo nos interesan mensajes OUTBOUND de nuestra location
     if (direction !== "outbound") {
       console.log("➡️ No es outbound, se ignora.");
+      return res.status(200).json({ ignored: true });
+    }
+
+    if (type !== "SMS") {
+      console.log("No es SMS, se ignora.");
       return res.status(200).json({ ignored: true });
     }
 
