@@ -370,49 +370,52 @@ app.post("/start-whatsapp", async (req, res) => {
 //    https://express.clicandapp.com/ghl/webhook   
 app.post("/ghl/webhook", async (req, res) => {
   try {
-    console.log("📩 Webhook GHL recibido:", req.body);
+    console.log("📩 Webhook GHL recibido:", JSON.stringify(req.body, null, 2));
 
     const {
-      userId,       // <-- clave para evitar loop
+      userId,
       contactId,
       locationId,
       phone,
-      message,
-      type
+      message,    // texto
+      type,       // "SMS"
     } = req.body;
 
-    // 1) SI EL WEBHOOK PROVIENE DE TU PROPIO MENSAJE OUTBOUND, IGNÓRALO
-    if (!userId) {
-      console.log("⏭️ Ignorando mensaje OUTBOUND generado por API (evita loop)");
+    const direction = "outbound";
+
+    if (!contactId) {
+      console.warn("⚠️ Webhook sin contactId, no se puede continuar.");
       return res.status(200).json({ ignored: true });
     }
 
-    // 2) Validaciones normales
-    if (!contactId || !phone || !message) {
-      console.warn("⚠️ Webhook incompleto");
-      return res.status(200).json({ ignored: true });
-    }
-
-    // 3) Solo filtrar por location si quieres
+    // Si quieres limitar a una sola location:
     if (locationId && GHL_LOCATION_ID && locationId !== GHL_LOCATION_ID) {
       console.log("➡️ Webhook de otra location, se ignora.");
       return res.status(200).json({ ignored: true });
     }
 
-    // 4) Enviar mensaje a WhatsApp
+    if (!phone) {
+      console.warn("⚠️ El webhook no trae phone, no puedo enviar WhatsApp.");
+      return res.status(200).json({ ignored: true });
+    }
+
+    if (!message) {
+      console.warn("⚠️ Webhook sin texto, nada que enviar.");
+      return res.status(200).json({ ignored: true });
+    }
+
+    // 1) Enviar mensaje por WhatsApp usando BAILEYS
     await sendWhatsAppMessage(phone, message);
 
-    // 5) Registrar OUTBOUND en GHL para mostrarlo en conversacion
+    // 2) (Opcional) Registrar OUTBOUND en GHL para dejar trazabilidad
     await sendMessageToGHLConversationOutbound(contactId, message);
 
-    res.status(200).json({ ok: true });
-
+    return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("Error en webhook /ghl/webhook:", err);
-    res.status(500).json({ error: "Error interno en webhook" });
+    return res.status(500).json({ error: "Error interno en webhook" });
   }
 });
-
 
 
 app.get("/qr", (req, res) => {
