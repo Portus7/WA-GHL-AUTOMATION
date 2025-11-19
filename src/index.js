@@ -372,91 +372,48 @@ app.post("/ghl/webhook", async (req, res) => {
   try {
     console.log("📩 Webhook GHL recibido:", JSON.stringify(req.body, null, 2));
 
-    const body = req.body;
+    const {
+      userId,
+      contactId,
+      locationId,
+      phone,
+      message,    // texto
+      type,       // "SMS"
+    } = req.body;
 
-    // Dependiendo de cómo GHL envíe el payload desde Conversation Provider,
-    // ajustamos estos campos. Esto es bastante genérico:
-    const direction =
-      body.direction ||
-      body.message?.direction ||
-      body.payload?.direction;
-
-    const contactId =
-      body.contactId ||
-      body.message?.contactId ||
-      body.payload?.contactId;
-
-    const locationId =
-      body.locationId ||
-      body.message?.locationId ||
-      body.payload?.locationId;
-
-    const text =
-      body.message?.message ||
-      body.message?.text ||
-      body.body ||
-      body.message ||
-      "";
-
-    const type =
-      body.message?.type ||
-      body.type ||
-      "SMS";
-
-    // Solo nos interesan mensajes OUTBOUND de nuestra location
-    if (direction !== "outbound") {
-      console.log("➡️ No es outbound, se ignora.");
-      return res.status(200).json({ ignored: true });
-    }
-
-    //if (type !== "SMS") {
-    //  console.log("No es SMS, se ignora.");
-    //  return res.status(200).json({ ignored: true });
-    //}
+    const direction = "outbound";
 
     if (!contactId) {
       console.warn("⚠️ Webhook sin contactId, no se puede continuar.");
       return res.status(200).json({ ignored: true });
     }
 
+    // Si quieres limitar a una sola location:
     if (locationId && GHL_LOCATION_ID && locationId !== GHL_LOCATION_ID) {
       console.log("➡️ Webhook de otra location, se ignora.");
       return res.status(200).json({ ignored: true });
     }
 
-    // 1) Obtener el contacto en GHL para conocer el teléfono
-    const contact = await getGHLContactById(contactId);
-
-    if (!contact) {
-      console.warn("⚠️ No se encontró el contacto en GHL:", contactId);
-      return res.status(200).json({ ignored: true });
-    }
-
-    const phone =
-      contact.phone ||
-      contact.phoneNumber ||
-      (Array.isArray(contact.phones) ? contact.phones[0]?.phone : null);
-
     if (!phone) {
-      console.warn("⚠️ El contacto no tiene teléfono, no se puede enviar WhatsApp.");
+      console.warn("⚠️ El webhook no trae phone, no puedo enviar WhatsApp.");
       return res.status(200).json({ ignored: true });
     }
 
-    if (!text) {
+    if (!message) {
       console.warn("⚠️ Webhook sin texto, nada que enviar.");
       return res.status(200).json({ ignored: true });
     }
 
-    // 2) Enviar mensaje por WhatsApp usando Baileys
-    await sendWhatsAppMessage(phone, text);
+    // 1) Enviar mensaje por WhatsApp usando BAILEYS
+    await sendWhatsAppMessage(phone, message);
 
-    // 3) (Opcional) Registrar outbound también vía API si lo necesitas:
-    await sendMessageToGHLConversationOutbound(contactId, text);
+    // 2) (Opcional) Registrar OUTBOUND en GHL para dejar trazabilidad
+    await sendMessageToGHLConversationOutbound(contactId, message);
 
-    res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("Error en webhook /ghl/webhook:", err);
-    res.status(500).json({ error: "Error interno en webhook" });
+    return res.status(500).json({ error: "Error interno en webhook" });
   }
 });
 
