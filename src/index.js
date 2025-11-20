@@ -56,7 +56,6 @@ async function getTokens(locationId) {
     "SELECT raw_token FROM auth_db WHERE locationid = $1",
     [locationId]
   );
-   console.log("aca paaso el codigo con raw: ", result.rows[0].raw_token)
   return result.rows[0]?.raw_token || null;
 }
 
@@ -225,7 +224,7 @@ async function callGHLWithLocation(locationId, config) {
     ...(config.headers || {}),
     Authorization: `Bearer ${accessToken}`,
   };
-
+  console.log("HEADERS!!!!: ", headers)
   return axios({
     ...config,
     headers,
