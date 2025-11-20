@@ -67,10 +67,11 @@ async function getTokens(locationId) {
 // Asegurar token de AGENCIA
 async function ensureAgencyToken() {
   let tokens = await getTokens(AGENCY_ROW_ID);
-  if (!tokens) throw new Error("No hay tokens de agencia guardados en BD ");
-  console.log(" todos los tokens: ", tokens)
+  if (!tokens) throw new Error("No hay tokens de agencia guardados en BD");
+  console.log(" todos los tokens: ", tokens);
+
   try {
-    await axios.get("https://services.leadconnectorhq.com/companies/:companyId", {
+    await axios.get("https://services.leadconnectorhq.com/users/me", {
       headers: {
         Authorization: `Bearer ${tokens.access_token}`,
         Accept: "application/json",
@@ -80,9 +81,13 @@ async function ensureAgencyToken() {
       timeout: 15000,
     });
 
+    // si llega aquí, el token es válido
     return tokens.access_token;
+
   } catch (err) {
-    if (err.response?.status === 401) {
+    const status = err.response?.status;
+
+    if (status === 401) {
       console.log("🔄 Token de agencia expirado → refrescando...");
 
       try {
@@ -119,7 +124,8 @@ async function ensureAgencyToken() {
       }
     }
 
-    console.log("ERROOOOOOR:", err);
+    console.error("❌ Error verificando token de agencia:", status, err.response?.data || err.message);
+    throw err;
   }
 }
 
