@@ -9,6 +9,7 @@ const { webcrypto } = require("crypto");
 const fs = require("fs");
 const { Pool } = require("pg");
 const axios = require("axios");
+const { Console } = require("console");
 
 // Parche crypto para Baileys en Node
 if (!globalThis.crypto) {
@@ -217,6 +218,7 @@ async function callGHLWithAgency(config) {
 
 async function callGHLWithLocation(locationId, config) {
   const accessToken = await ensureLocationToken(locationId);
+  Console.log(accessToken, "iIMPORTANTE!!!!")
 
   const headers = {
     Accept: "application/json",
@@ -278,7 +280,6 @@ function getRoutingForPhone(phone) {
 // -----------------------------
 async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead") {
   const normalizedPhone = normalizePhone(phone);
-  console.log(locationId, phone, waName, "datos DATOS IMPORTANTES")
   // 1) lookup
   try {
     const lookupRes = await callGHLWithLocation(locationId, {
