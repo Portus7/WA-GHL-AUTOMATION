@@ -68,6 +68,7 @@ async function getTokens(locationId) {
 async function ensureAgencyToken() {
   let tokens = await getTokens(AGENCY_ROW_ID);
   if (!tokens) throw new Error("No hay tokens de agencia guardados en BD");
+  console.log(" todos los tokens: ", tokens)
   try {
     await axios.get("https://services.leadconnectorhq.com/companies/:companyId", {
       headers: {
