@@ -71,7 +71,7 @@ async function ensureAgencyToken() {
   console.log(" todos los tokens: ", tokens);
 
   try {
-    await axios.get("https://services.leadconnectorhq.com/users/me", {
+    await axios.get("https://services.leadconnectorhq.com/companies", {
       headers: {
         Authorization: `Bearer ${tokens.access_token}`,
         Accept: "application/json",
