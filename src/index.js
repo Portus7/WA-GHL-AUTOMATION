@@ -56,6 +56,7 @@ async function getTokens(locationId) {
     "SELECT raw_token FROM auth_db WHERE locationid = $1",
     [locationId]
   );
+   console.log("aca paaso el codigo: ", result)
   return result.rows[0]?.raw_token || null;
 }
 
@@ -556,7 +557,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
 
     // Volver a leer tokens de agencia (pueden haberse refrescado)
     const agencyTokens = await getTokens(AGENCY_ROW_ID);
-    console.log("aca paaso el codigo: ", agencyTokens)
+   
     if (!agencyTokens || !agencyTokens.access_token) {
       console.error("❌ No hay tokens de agencia guardados en BD (fila __AGENCY__).");
       return res.status(200).json({ ok: false, reason: "no_agency_token" });
