@@ -278,7 +278,7 @@ function getRoutingForPhone(phone) {
 // -----------------------------
 async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead") {
   const normalizedPhone = normalizePhone(phone);
-
+  console.log(locationId, phone, waName, "datos DATOS IMPORTANTES")
   // 1) lookup
   try {
     const lookupRes = await callGHLWithLocation(locationId, {
