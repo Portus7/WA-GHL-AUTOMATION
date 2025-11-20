@@ -640,8 +640,8 @@ app.post("/ghl/app-webhook", async (req, res) => {
       return res.status(200).json({ ok: false, error: "location_token_failed" });
     }
   } catch (e) {
-    console.error("❌ Error general en /ghl/app-webhook:", e);
-    return res.status(500).json({ error: `Error interno en app webhook: ${e}` });
+    console.error("❌ Error general en /ghl/app-webhook:");
+    return res.status(500).json({ error: `Error interno en app webhook` });
   }
 });
 
