@@ -641,7 +641,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
     }
   } catch (e) {
     console.error("❌ Error general en /ghl/app-webhook:", e);
-    return res.status(500).json({ error: "Error interno en app webhook" });
+    return res.status(500).json({ error: `Error interno en app webhook: ${e}` });
   }
 });
 
