@@ -1,86 +1,400 @@
 // src/index.js
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+
 const express = require("express");
 const pino = require("pino");
 const qrcodeTerminal = require("qrcode-terminal");
 const { webcrypto } = require("crypto");
 const fs = require("fs");
-
-// 🔹 SDK oficial HighLevel
-const { HighLevel, GHLError } = require("@gohighlevel/api-client");
-
-// -----------------------------
-// Config & estado
-// -----------------------------
-
-let isConnected = false;
-
-// HighLevel (via SDK)
-const GHL_PIT = process.env.GHL_PIT;               // Private Integration Token
-const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
-const GHL_API_VERSION = process.env.GHL_API_VERSION;
-
-// Instancia del SDK
-const ghl = new HighLevel({
-  privateIntegrationToken: GHL_PIT,
-  apiVersion: GHL_API_VERSION, // VER PARA AUTOMATIZAR
-});
+const { Pool } = require("pg");
+const axios = require("axios");
 
 // Parche crypto para Baileys en Node
 if (!globalThis.crypto) {
   globalThis.crypto = webcrypto;
 }
 
-// Express
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, "..", "public")));
+// -----------------------------
+// Config & estado
+// -----------------------------
+const PORT = process.env.PORT || 5000;
+const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
+const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "https://wa.clicandapp.com";
+const AGENCY_ROW_ID = "__AGENCY__";
 
-const PORT = process.env.PORT || 3000;
-
-// Baileys
+let isConnected = false;
 let sock = null;
 let baileysLoaded = false;
 let currentQR = null;
 
 // -----------------------------
-// Helpers
+// PostgreSQL (misma BD que proyecto 1)
 // -----------------------------
+const pool = new Pool({
+  host: process.env.PGHOST,
+  port: process.env.PGPORT,
+  database: process.env.PGDATABASE,
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
+  ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
+});
 
-function extractPhoneFromJid(jid) {
-  return jid.split("@")[0];
+// Helpers BD tokens
+async function saveTokens(locationId, tokenData) {
+  const sql = `
+    INSERT INTO auth_db (locationid, raw_token)
+    VALUES ($1, $2::jsonb)
+    ON CONFLICT (locationid) DO UPDATE
+    SET raw_token = EXCLUDED.raw_token
+  `;
+  await pool.query(sql, [locationId, JSON.stringify(tokenData)]);
 }
 
-function loadNumbersDb() {
+async function getTokens(locationId) {
+  const result = await pool.query(
+    "SELECT raw_token FROM auth_db WHERE locationid = $1",
+    [locationId]
+  );
+  return result.rows[0]?.raw_token || null;
+}
+
+// ─────────────────────────────
+// Helpers tokens: Agencia / Location
+// ─────────────────────────────
+
+// Asegurar token de AGENCIA
+async function ensureAgencyToken() {
+  let tokens = await getTokens(AGENCY_ROW_ID);
+  if (!tokens) throw new Error("No hay tokens de agencia guardados en BD");
+
   try {
-    const raw = fs.readFileSync("./numbers.json", "utf8");
+    await axios.get("https://services.leadconnectorhq.com/companies", {
+      headers: {
+        Authorization: `Bearer ${tokens.access_token}`,
+        Accept: "application/json",
+        Version: GHL_API_VERSION,
+      },
+      params: { limit: 1 },
+      timeout: 15000,
+    });
+
+    return tokens.access_token;
+  } catch (err) {
+    if (err.response?.status === 401) {
+      console.log("🔄 Token de agencia expirado → refrescando...");
+
+      try {
+        const body = new URLSearchParams({
+          client_id: process.env.GHL_CLIENT_ID,
+          client_secret: process.env.GHL_CLIENT_SECRET,
+          grant_type: "refresh_token",
+          refresh_token: tokens.refresh_token,
+        });
+
+        const refreshRes = await axios.post(
+          "https://services.leadconnectorhq.com/oauth/token",
+          body.toString(),
+          {
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            timeout: 15000,
+          }
+        );
+
+        const newTokens = refreshRes.data;
+        await saveTokens(AGENCY_ROW_ID, newTokens);
+
+        console.log("✅ Token de agencia refrescado correctamente");
+        return newTokens.access_token;
+      } catch (e) {
+        console.error(
+          "❌ Error refrescando token de agencia:",
+          e.response?.data || e.message
+        );
+        throw new Error("No se pudo refrescar el token de agencia");
+      }
+    }
+
+    throw err;
+  }
+}
+
+// Asegurar token de LOCATION
+async function ensureLocationToken(locationId) {
+  let tokens = await getTokens(locationId);
+  if (!tokens) throw new Error(`No hay tokens guardados para la location ${locationId}`);
+
+  let locationToken = tokens.locationAccess;
+  if (!locationToken) throw new Error(`No hay locationAccess para ${locationId}`);
+
+  try {
+    await axios.get("https://services.leadconnectorhq.com/contacts", {
+      headers: {
+        Authorization: `Bearer ${locationToken.access_token}`,
+        Accept: "application/json",
+        Version: GHL_API_VERSION,
+      },
+      params: { limit: 1 },
+      timeout: 15000,
+    });
+
+    return locationToken.access_token;
+  } catch (err) {
+    if (err.response?.status === 401) {
+      console.log(
+        `🔄 Token expirado para location ${locationId} → refrescando con refresh_token...`
+      );
+
+      try {
+        const body = new URLSearchParams({
+          client_id: process.env.GHL_CLIENT_ID,
+          client_secret: process.env.GHL_CLIENT_SECRET,
+          grant_type: "refresh_token",
+          refresh_token: locationToken.refresh_token,
+        });
+
+        const refreshRes = await axios.post(
+          "https://services.leadconnectorhq.com/oauth/token",
+          body.toString(),
+          {
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            timeout: 15000,
+          }
+        );
+
+        const newToken = refreshRes.data;
+
+        await saveTokens(locationId, {
+          ...tokens,
+          locationAccess: newToken,
+        });
+
+        console.log(`✅ Token refrescado correctamente para location ${locationId}`);
+        return newToken.access_token;
+      } catch (e) {
+        console.error(
+          `❌ Error refrescando token para location ${locationId}:`,
+          e.response?.data || e.message
+        );
+        throw new Error("No se pudo refrescar el token de location");
+      }
+    }
+
+    throw err;
+  }
+}
+
+// Wrappers axios
+async function callGHLWithAgency(config) {
+  const accessToken = await ensureAgencyToken();
+
+  const headers = {
+    Accept: "application/json",
+    Version: GHL_API_VERSION,
+    ...(config.headers || {}),
+    Authorization: `Bearer ${accessToken}`,
+  };
+
+  return axios({
+    ...config,
+    headers,
+  });
+}
+
+async function callGHLWithLocation(locationId, config) {
+  const accessToken = await ensureLocationToken(locationId);
+
+  const headers = {
+    Accept: "application/json",
+    Version: GHL_API_VERSION,
+    ...(config.headers || {}),
+    Authorization: `Bearer ${accessToken}`,
+  };
+
+  return axios({
+    ...config,
+    headers,
+  });
+}
+
+// -----------------------------
+// Helpers generales
+// -----------------------------
+function normalizePhone(phone) {
+  if (!phone) return "";
+  const cleaned = phone.replace(/[^\d+]/g, "");
+  if (!cleaned.startsWith("+")) return `+${cleaned}`;
+  return cleaned;
+}
+
+function extractPhoneFromJid(jid) {
+  return jid.split("@")[0].split(":")[0];
+}
+
+// DB local de rutas phone -> { locationId, contactId }
+function loadRoutingDb() {
+  try {
+    const raw = fs.readFileSync("./routing.json", "utf8");
     return JSON.parse(raw);
   } catch {
     return {};
   }
 }
 
-function savePhoneForLocation(locationId, phone) {
-  const db = loadNumbersDb();
-  db[locationId] = phone;
-  fs.writeFileSync("./numbers.json", JSON.stringify(db, null, 2));
+function saveRouting(phone, locationId, contactId) {
+  const db = loadRoutingDb();
+  const normalizedPhone = normalizePhone(phone);
+  db[normalizedPhone] = {
+    locationId,
+    contactId: contactId || null,
+    updatedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync("./routing.json", JSON.stringify(db, null, 2));
+  console.log("💾 Routing actualizado:", normalizedPhone, "→", locationId, contactId);
 }
 
-// Enviar mensaje de WhatsApp a un número en formato internacional (+569..., +52..., etc.)
+function getRoutingForPhone(phone) {
+  const db = loadRoutingDb();
+  const normalizedPhone = normalizePhone(phone);
+  return db[normalizedPhone] || null;
+}
+
+// -----------------------------
+// GHL helpers (multi-location)
+// -----------------------------
+async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead") {
+  const normalizedPhone = normalizePhone(phone);
+
+  // 1) lookup
+  try {
+    const lookupRes = await callGHLWithLocation(locationId, {
+      method: "GET",
+      url: "https://services.leadconnectorhq.com/contacts/lookup",
+      params: {
+        locationId,
+        phone: normalizedPhone,
+      },
+      timeout: 15000,
+    });
+
+    if (lookupRes.data && lookupRes.data.contact) {
+      console.log("🔍 Contacto encontrado (lookup):", lookupRes.data.contact.id);
+      return lookupRes.data.contact;
+    }
+  } catch (err) {
+    if (err.response?.status !== 404) {
+      console.error(
+        "Error buscando contacto:",
+        err.response?.status,
+        err.response?.data || err.message
+      );
+    } else {
+      console.log("ℹ️ Contacto no encontrado por lookup, se creará uno nuevo");
+    }
+  }
+
+  // 2) crear
+  try {
+    const createdRes = await callGHLWithLocation(locationId, {
+      method: "POST",
+      url: "https://services.leadconnectorhq.com/contacts/",
+      data: {
+        locationId,
+        phone: normalizedPhone,
+        firstName: waName,
+        source: "WhatsApp Baileys",
+      },
+      timeout: 15000,
+    });
+
+    const created = createdRes.data.contact || createdRes.data;
+    console.log("👤 Contacto creado:", created.id);
+    return created;
+  } catch (err) {
+    const statusCode = err.response?.status;
+    const body = err.response?.data;
+    console.error("Error creando contacto:", statusCode, body || err.message);
+
+    if (statusCode === 400 && body?.meta?.contactId) {
+      console.log("ℹ️ Contacto ya existía (desde error 400):", body.meta.contactId);
+      return { id: body.meta.contactId, phone: normalizedPhone };
+    }
+
+    return null;
+  }
+}
+
+async function sendMessageToGHLConversation(locationId, contactId, text) {
+  try {
+    const res = await callGHLWithLocation(locationId, {
+      method: "POST",
+      url: "https://services.leadconnectorhq.com/conversations/messages/inbound",
+      data: {
+        type: "SMS",
+        contactId,
+        locationId,
+        message: text,
+        direction: "inbound",
+      },
+      timeout: 15000,
+    });
+
+    console.log("📨 Mensaje INBOUND creado en GHL:", res.data);
+  } catch (err) {
+    console.error(
+      "Error GHL (inbound):",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+  }
+}
+
+async function sendMessageToGHLConversationOutbound(locationId, contactId, text) {
+  try {
+    const res = await callGHLWithLocation(locationId, {
+      method: "POST",
+      url: "https://services.leadconnectorhq.com/conversations/messages",
+      data: {
+        type: "SMS",
+        contactId,
+        locationId,
+        message: text,
+        direction: "outbound",
+      },
+      timeout: 15000,
+    });
+
+    console.log("📤 Mensaje OUTBOUND registrado en GHL:", res.data);
+    return res.data;
+  } catch (err) {
+    console.error(
+      "Error GHL (outbound):",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+  }
+}
+
+// -----------------------------
+// WhatsApp / Baileys
+// -----------------------------
+const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "..", "public")));
+
 async function sendWhatsAppMessage(phone, text) {
   if (!sock || !isConnected) {
     console.error("⚠️ WhatsApp no está conectado, no se puede enviar mensaje.");
     return;
   }
 
-  // Normalizar: quitar espacios, guiones, etc.
-  const numericPhone = phone.replace(/[^\d+]/g, "");
-
-  // Si viene sin "+", le añadimos (ajusta si tus números vienen de otra forma)
-  const waPhone = numericPhone.startsWith("+") ? numericPhone : `+${numericPhone}`;
-
-  // JID de WhatsApp
+  const waPhone = normalizePhone(phone);
   const jid = waPhone.replace("+", "") + "@s.whatsapp.net";
 
   try {
@@ -91,167 +405,9 @@ async function sendWhatsAppMessage(phone, text) {
   }
 }
 
-// ------------------------------------------------------------
-// 🔥 findOrCreateGHLContact (YA ACTUALIZADO PARA GUARDAR NOMBRE)
-// ------------------------------------------------------------
-async function findOrCreateGHLContact(phone, waName = "WhatsApp Lead") {
-  if (!GHL_PIT || !GHL_LOCATION_ID) {
-    console.error("⚠️ Faltan GHL_PIT o GHL_LOCATION_ID en .env");
-    return null;
-  }
-
-  const normalizedPhone = phone.startsWith("+") ? phone : `+${phone}`;
-
-  // 1) lookup por teléfono
-  try {
-    const lookupRes = await ghl.request({
-      method: "GET",
-      url: "/contacts/lookup",
-      params: {
-        locationId: GHL_LOCATION_ID,
-        phone: normalizedPhone,
-      },
-    });
-
-    if (lookupRes.data && lookupRes.data.contact) {
-      console.log("🔍 Contacto encontrado (lookup):", lookupRes.data.contact.id);
-      return lookupRes.data.contact;
-    }
-  } catch (err) {
-    // Si es 404, no pasa nada: significa que no existe aún.
-    if (err instanceof GHLError) {
-      if (err.statusCode !== 404) {
-        console.error("Error buscando contacto:", err.statusCode, err.response);
-      }
-    } else {
-      console.error("Error buscando contacto (desconocido):", err);
-    }
-  }
-
-  // 2) crear contacto si no existe
-  try {
-    const created = await ghl.contacts.createContact({
-      locationId: GHL_LOCATION_ID,
-      phone: normalizedPhone,
-      firstName: waName,
-      source: "WhatsApp Baileys",
-    });
-
-    console.log("👤 Contacto creado:", created.contact?.id || created.id);
-    return created.contact || created;
-  } catch (err) {
-    // 💥 AQUÍ MANEJAMOS DUPLICADOS DE VERDAD
-    if (err instanceof GHLError) {
-      const statusCode = err.statusCode;
-      const body = err.response; // normalmente aquí viene { message, meta, ... }
-
-      console.error("Error creando contacto (GHL):", statusCode, body);
-
-      // caso: "Esta localizacion no permite duplicados" con meta.contactId
-      const msg = body?.message || err.message;
-
-      if (
-        statusCode === 400 &&
-        body?.meta?.contactId // más fiable que matchear el texto del mensaje
-      ) {
-        console.log("ℹ️ Contacto ya existía (desde error 400):", body.meta.contactId);
-        return { id: body.meta.contactId, phone: normalizedPhone };
-      }
-    } else {
-      console.error("Error creando contacto (desconocido):", err);
-    }
-
-    return null;
-  }
-}
-
-
-// ------------------------------------------------------------
-// Crear mensaje INBOUND (WhatsApp ➜ GHL) como SMS
-// ------------------------------------------------------------
-async function sendMessageToGHLConversation(contactId, text) {
-  if (!GHL_PIT || !GHL_LOCATION_ID) {
-    console.error("⚠️ Faltan GHL_PIT o GHL_LOCATION_ID en .env");
-    return;
-  }
-
-  try {
-    const res = await ghl.request({
-      method: "POST",
-      url: "/conversations/messages/inbound",
-      data: {
-        type: "SMS",
-        contactId,
-        locationId: GHL_LOCATION_ID,
-        message: text,
-        direction: "inbound",
-      },
-    });
-
-    console.log("📨 Mensaje INBOUND creado en GHL:", res.data);
-  } catch (err) {
-    if (err instanceof GHLError) {
-      console.error("Error GHL (inbound):", err.statusCode, err.response);
-    } else {
-      console.error("Error enviando inbound:", err);
-    }
-  }
-}
-
-async function sendMessageToGHLConversationOutbound(contactId, text) {
-  if (!GHL_PIT || !GHL_LOCATION_ID) {
-    console.error("⚠️ Faltan GHL_PIT o GHL_LOCATION_ID en .env");
-    return;
-  }
-
-  try {
-    const res = await ghl.request({
-      method: "POST",
-      url: "/conversations/messages",
-      data: {
-        type: "SMS",            // O "WHATSAPP" si tu custom provider lo soporta
-        contactId,
-        locationId: GHL_LOCATION_ID,
-        message: text,
-        direction: "outbound",
-      },
-    });
-
-    console.log("📤 Mensaje OUTBOUND enviado desde GHL:", res.data);
-    return res.data;
-  } catch (err) {
-    if (err instanceof GHLError) {
-      console.error("Error GHL (outbound):", err.statusCode, err.response);
-    } else {
-      console.error("Error enviando outbound:", err);
-    }
-  }
-}
-
-async function getGHLContactById(contactId) {
-  try {
-    const res = await ghl.request({
-      method: "GET",
-      url: `/contacts/${contactId}`,
-    });
-
-    return res.data?.contact || res.data;
-  } catch (err) {
-    if (err instanceof GHLError) {
-      console.error("Error GHL (get contact):", err.statusCode, err.response);
-    } else {
-      console.error("Error obteniendo contacto:", err);
-    }
-    return null;
-  }
-}
-// -----------------------------
-// Arranque de WhatsApp / Baileys
-// -----------------------------
 async function startWhatsApp() {
   if (baileysLoaded && sock) return;
 
-  // Un solo import de Baileys
   const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -263,11 +419,9 @@ async function startWhatsApp() {
   const { version } = await fetchLatestBaileysVersion();
   console.log("▶ Usando versión WA:", version);
 
-  // Usa la misma carpeta que vas a montar como volumen
   const authDir = process.env.BAILEYS_AUTH_DIR || "sessions/default";
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-  // IMPORTANTE: asigna al sock GLOBAL
   sock = makeWASocket({
     version,
     logger: pino({ level: "info" }),
@@ -296,7 +450,6 @@ async function startWhatsApp() {
       if (waId) {
         const myNumber = waId.split("@")[0].split(":")[0];
         console.log("📞 Número conectado:", myNumber);
-        savePhoneForLocation(GHL_LOCATION_ID, myNumber);
       }
     }
 
@@ -324,7 +477,7 @@ async function startWhatsApp() {
     }
   });
 
-  // 👇 Mantén aquí tus listeners de mensajes (ya los tienes):
+  // Mensajes entrantes desde WhatsApp
   sock.ev.on("messages.upsert", async (msg) => {
     const m = msg.messages[0];
     if (!m?.message || m.key.fromMe) return;
@@ -339,81 +492,203 @@ async function startWhatsApp() {
       sock?.contacts?.[from]?.notify ||
       "WhatsApp Lead";
 
-    console.log("📩 Recibido de", waName, ":", text);
+    const phoneRaw = extractPhoneFromJid(from);
+    const phone = normalizePhone(phoneRaw);
 
-    const phone = extractPhoneFromJid(from);
-    const contact = await findOrCreateGHLContact(phone, waName);
+    console.log("📩 Recibido de", waName, "(", phone, "):", text);
+
+    const route = getRoutingForPhone(phone);
+    if (!route || !route.locationId) {
+      console.warn(
+        "⚠️ No se encontró routing para este teléfono, no se envía a GHL:",
+        phone
+      );
+      return;
+    }
+
+    const locationId = route.locationId;
+
+    const contact = await findOrCreateGHLContact(locationId, phone, waName);
     if (!contact?.id) return;
 
-    await sendMessageToGHLConversation(contact.id, text);
+    saveRouting(phone, locationId, contact.id);
+
+    await sendMessageToGHLConversation(locationId, contact.id, text);
   });
 }
 
-// (opcional) Arranque automático
 if (process.env.AUTO_START_WHATSAPP === "true") {
   startWhatsApp().catch(console.error);
 }
 
 // -----------------------------
-// Endpoints HTTP
+// ENDPOINTS HTTP
 // -----------------------------
-app.post("/start-whatsapp", async (req, res) => {
+
+// 1) Webhook de la APP del Marketplace (INSTALL / etc.)
+app.post("/ghl/app-webhook", async (req, res) => {
   try {
-    await startWhatsApp();
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: "No se pudo iniciar WhatsApp" });
+    const event = req.body;
+    console.log("🔔 App Webhook recibido:", JSON.stringify(event, null, 2));
+
+    const { type, locationId, companyId } = event;
+
+    console.log(
+      "Se ejecutó /ghl/app-webhook",
+      "locationid:",
+      locationId,
+      "companyid:",
+      companyId
+    );
+
+    if (type !== "INSTALL") {
+      console.log("ℹ️ Evento no manejado (tipo distinto de INSTALL).");
+      return res.status(200).json({ ignored: true });
+    }
+
+    if (!locationId || !companyId) {
+      console.warn("⚠️ Webhook INSTALL sin locationId o companyId, se ignora.");
+      return res.status(200).json({ ignored: true });
+    }
+
+    // 1) Asegurar token de agencia
+    const agencyAccessToken = await ensureAgencyToken();
+
+    // Volver a leer tokens de agencia (pueden haberse refrescado)
+    const agencyTokens = await getTokens(AGENCY_ROW_ID);
+    if (!agencyTokens || !agencyTokens.access_token) {
+      console.error("❌ No hay tokens de agencia guardados en BD (fila __AGENCY__).");
+      return res.status(200).json({ ok: false, reason: "no_agency_token" });
+    }
+
+    // 2) Pedir token de Location
+    try {
+      const locBody = new URLSearchParams({
+        companyId,
+        locationId,
+      });
+
+      const locTokenRes = await axios.post(
+        "https://services.leadconnectorhq.com/oauth/locationToken",
+        locBody.toString(),
+        {
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization: `Bearer ${agencyAccessToken}`,
+            Version: GHL_API_VERSION,
+          },
+          timeout: 15000,
+        }
+      );
+
+      const locationTokens = locTokenRes.data;
+      console.log("🔑 Tokens Location obtenidos para:", locationId);
+
+      // 3) Guardar combinando agencyTokens + locationAccess
+      await saveTokens(locationId, {
+        ...agencyTokens,
+        locationAccess: locationTokens,
+      });
+
+      // 4) Crear Custom Menu SOLO para esta Location
+      try {
+        const bodyMenu = {
+          title: "WhatsApp - Clic&App",
+          url: CUSTOM_MENU_URL_WA,
+          icon: { name: "whatsapp", fontFamily: "fab" },
+
+          showOnCompany: false,
+          showOnLocation: true,
+
+          showToAllLocations: false,
+          locations: [locationId],
+
+          openMode: "iframe",
+          userRole: "all",
+          allowCamera: false,
+          allowMicrophone: false,
+        };
+
+        const createMenuRes = await callGHLWithAgency({
+          method: "post",
+          url: "https://services.leadconnectorhq.com/custom-menus/",
+          data: bodyMenu,
+          timeout: 15000,
+        });
+
+        console.log(
+          "✅ Custom Menu creado para location:",
+          locationId,
+          createMenuRes.data
+        );
+      } catch (e) {
+        console.error(
+          "❌ Error creando Custom Menu en webhook INSTALL:",
+          e.response?.status,
+          e.response?.data || e.message
+        );
+      }
+
+      return res.status(200).json({ ok: true });
+    } catch (e) {
+      console.error(
+        "❌ Error obteniendo token de Location en webhook INSTALL:",
+        e.response?.status,
+        e.response?.data || e.message
+      );
+      return res.status(200).json({ ok: false, error: "location_token_failed" });
+    }
+  } catch (e) {
+    console.error("❌ Error general en /ghl/app-webhook:", e);
+    return res.status(500).json({ error: "Error interno en app webhook" });
   }
 });
 
-// 🔥 Webhook desde GoHighLevel -> enviar mensaje por WhatsApp
-//    https://express.clicandapp.com/ghl/webhook   
+// 2) Webhook de workflow de GHL -> enviar a WhatsApp
 app.post("/ghl/webhook", async (req, res) => {
   try {
     console.log("📩 Webhook GHL recibido:", req.body);
 
     const {
-      userId,       // <-- clave para evitar loop
+      userId,
       contactId,
       locationId,
       phone,
       message,
-      type
+      type,
     } = req.body;
 
-    // 1) SI EL WEBHOOK PROVIENE DE TU PROPIO MENSAJE OUTBOUND, IGNÓRALO
-    if (!userId) {
-      console.log("⏭️ Ignorando mensaje OUTBOUND generado por API (evita loop)");
-      return res.status(200).json({ ignored: true });
-    }
-
-    // 2) Validaciones normales
-    if (!contactId || !phone || !message) {
+    if (!contactId || !phone || !message || !locationId) {
       console.warn("⚠️ Webhook incompleto");
       return res.status(200).json({ ignored: true });
     }
 
-    // 3) Solo filtrar por location si quieres
-    if (locationId && GHL_LOCATION_ID && locationId !== GHL_LOCATION_ID) {
-      console.log("➡️ Webhook de otra location, se ignora.");
-      return res.status(200).json({ ignored: true });
-    }
+    // Guardar routing phone -> location/contact
+    saveRouting(phone, locationId, contactId);
 
-    // 4) Enviar mensaje a WhatsApp
     await sendWhatsAppMessage(phone, message);
 
-    // 5) Registrar OUTBOUND en GHL para mostrarlo en conversacion
-    // await sendMessageToGHLConversationOutbound(contactId, message);
+    // Opcional: registrar OUTBOUND también en GHL
+    // await sendMessageToGHLConversationOutbound(locationId, contactId, message);
 
     res.status(200).json({ ok: true });
-
   } catch (err) {
     console.error("Error en webhook /ghl/webhook:", err);
     res.status(500).json({ error: "Error interno en webhook" });
   }
 });
 
-
+// 3) Otros endpoints
+app.post("/start-whatsapp", async (req, res) => {
+  try {
+    await startWhatsApp();
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "No se pudo iniciar WhatsApp" });
+  }
+});
 
 app.get("/qr", (req, res) => {
   if (!currentQR) {
@@ -426,9 +701,6 @@ app.get("/status", (req, res) => {
   res.json({ status: "ok", whatsappConnected: isConnected });
 });
 
-// -----------------------------
-// Arrancar servidor HTTP
-// -----------------------------
 app.listen(PORT, () =>
-  console.log(`API escuchando en http://localhost:${PORT}`)
+  console.log(`API WhatsApp escuchando en http://localhost:${PORT}`)
 );
