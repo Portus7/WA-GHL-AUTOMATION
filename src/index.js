@@ -56,7 +56,7 @@ async function getTokens(locationId) {
     "SELECT raw_token FROM auth_db WHERE locationid = $1",
     [locationId]
   );
-   console.log("aca paaso el codigo: ", result.rows[0].raw_token)
+   console.log("aca paaso el codigo con raw: ", result.rows[0].raw_token)
   return result.rows[0]?.raw_token || null;
 }
 
@@ -68,7 +68,7 @@ async function getTokens(locationId) {
 async function ensureAgencyToken() {
   let tokens = await getTokens(AGENCY_ROW_ID);
   if (!tokens) throw new Error("No hay tokens de agencia guardados en BD");
-
+  console.log("Aca se tiene los tokens: ", tokens)
   try {
     await axios.get("https://services.leadconnectorhq.com/companies", {
       headers: {
