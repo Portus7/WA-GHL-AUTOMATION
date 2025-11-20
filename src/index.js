@@ -556,6 +556,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
 
     // Volver a leer tokens de agencia (pueden haberse refrescado)
     const agencyTokens = await getTokens(AGENCY_ROW_ID);
+    console.log("aca paaso el codigo", agencyTokens)
     if (!agencyTokens || !agencyTokens.access_token) {
       console.error("❌ No hay tokens de agencia guardados en BD (fila __AGENCY__).");
       return res.status(200).json({ ok: false, reason: "no_agency_token" });
@@ -567,7 +568,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
         companyId,
         locationId,
       });
-      console.log("aca paaso el codigo")
+      
       const locTokenRes = await axios.post(
         "https://services.leadconnectorhq.com/oauth/locationToken",
         locBody.toString(),
