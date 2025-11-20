@@ -56,7 +56,7 @@ async function getTokens(locationId) {
     "SELECT raw_token FROM auth_db WHERE locationid = $1",
     [locationId]
   );
-   console.log("aca paaso el codigo: ", result)
+   console.log("aca paaso el codigo: ", result.rows[0].raw_token)
   return result.rows[0]?.raw_token || null;
 }
 
