@@ -529,7 +529,7 @@ if (process.env.AUTO_START_WHATSAPP === "true") {
 app.post("/ghl/app-webhook", async (req, res) => {
   try {
     const event = req.body;
-    console.log("🔔 App Webhook recibido:", JSON.stringify(event, null, 2));
+    console.log("🔔 App Webhook recibido:");
 
     const { type, locationId, companyId } = event;
 
@@ -567,7 +567,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
         companyId,
         locationId,
       });
-
+      console.log("aca paaso el codigo")
       const locTokenRes = await axios.post(
         "https://services.leadconnectorhq.com/oauth/locationToken",
         locBody.toString(),
