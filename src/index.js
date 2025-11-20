@@ -134,6 +134,7 @@ async function ensureAgencyToken() {
 // Asegurar token de LOCATION
 async function ensureLocationToken(locationId) {
   let tokens = await getTokens(locationId);
+  console.log("TOKEEENS", tokens)
   if (!tokens) throw new Error(`No hay tokens guardados para la location ${locationId}`);
 
   let locationToken = tokens.locationAccess;
@@ -218,7 +219,6 @@ async function callGHLWithAgency(config) {
 
 async function callGHLWithLocation(locationId, config) {
   const accessToken = await ensureLocationToken(locationId);
-  Console.log(accessToken, "iIMPORTANTE!!!!")
 
   const headers = {
     Accept: "application/json",
