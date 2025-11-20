@@ -119,7 +119,7 @@ async function ensureAgencyToken() {
       }
     }
 
-    throw err;
+    console.log("ERROOOOOOR:", err);
   }
 }
 
