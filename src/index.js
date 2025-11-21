@@ -608,6 +608,7 @@ app.post("/ghl/webhook", async (req, res) => {
 app.post("/ghl/app-webhook", async (req, res) => {
   try {
     const event = req.body;
+    console.log(event)
     const { type, locationId, companyId } = event;
 
     if (type === "INSTALL") {
