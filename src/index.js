@@ -132,7 +132,7 @@ async function ensureAgencyToken() {
 
 
 // Asegurar token de LOCATION
-async function ensureLocationToken(locationId) {
+async function ensureLocationToken(locationId, contactId) {
   let tokens = await getTokens(locationId);
 
   console.log("TOKEEENS", {
@@ -149,7 +149,7 @@ async function ensureLocationToken(locationId) {
   console.log("Hasta aca llego, paso el locationtoken", locationToken)
   try {
     // Test rápido del token
-    await axios.get("https://services.leadconnectorhq.com/contacts", {
+    await axios.get(`https://services.leadconnectorhq.com/contacts/${contactId}`, {
       headers: {
         Authorization: `Bearer ${locationToken.access_token}`,
         Accept: "application/json",
@@ -237,8 +237,8 @@ async function callGHLWithAgency(config) {
   });
 }
 
-async function callGHLWithLocation(locationId, config) {
-  const { accessToken, realLocationId } = await ensureLocationToken(locationId);
+async function callGHLWithLocation(locationId, config, contactId) {
+  const { accessToken, realLocationId } = await ensureLocationToken(locationId, contactId);
 
   const headers = {
     Accept: "application/json",
@@ -317,7 +317,7 @@ async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead
         phone: normalizedPhone,
       },
       timeout: 15000,
-    });
+    }, contactId);
     console.log("contacto que se encongro guau:", lookupRes)
     if (lookupRes.data && lookupRes.data.contact) {
       console.log("🔍 Contacto encontrado (lookup):", lookupRes.data.contact.id);
