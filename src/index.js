@@ -550,6 +550,7 @@ async function startWhatsApp(locationId) {
 
 // 1. Iniciar conexión (Front solicita QR)
 app.post("/start-whatsapp", async (req, res) => {
+  console.log(req.query, "AQUIIIIIIIIIIIIIIIIIIII")
   const locationId = req.query.locationId;
   if (!locationId) return res.status(400).json({ error: "Falta locationId" });
 
