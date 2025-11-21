@@ -143,8 +143,7 @@ async function ensureAgencyToken() {
 }
 
 // Asegurar token de LOCATION
-// 👇 ya NO depende de contactId, solo del locationId
-async function ensureLocationToken(locationId) {
+async function ensureLocationToken(locationId, contactId) {
   let tokens = await getTokens(locationId);
 
   console.log("TOKEEENS", {
@@ -154,36 +153,37 @@ async function ensureLocationToken(locationId) {
     userType: tokens?.locationAccess?.userType,
   });
 
-  if (!tokens)
-    throw new Error(`No hay tokens guardados para la location ${locationId}`);
+  if (!tokens) throw new Error(`No hay tokens guardados para la location ${locationId}`);
 
   let locationToken = tokens.locationAccess;
-  if (!locationToken)
-    throw new Error(`No hay locationAccess para ${locationId}`);
+  if (!locationToken) throw new Error(`No hay locationAccess para ${locationId}`);
 
   try {
-    // Test rápido del token: un GET simple a /contacts
-    await axios.get("https://services.leadconnectorhq.com/contacts", {
-      headers: {
-        Authorization: `Bearer ${locationToken.access_token}`,
-        Accept: "application/json",
-        Version: GHL_API_VERSION,
-        "Location-Id": locationToken.locationId,
-      },
-      params: { limit: 1 },
-      timeout: 15000,
-    });
 
-    // devolvemos tanto el access_token como el locationId real
+    if (contactId) {
+      await axios.get(
+        `https://services.leadconnectorhq.com/contacts/${contactId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${locationToken.access_token}`,
+            Accept: "application/json",
+            Version: GHL_API_VERSION,
+            "Location-Id": locationToken.locationId,
+          },
+          timeout: 15000,
+        }
+      );
+    }
+
     return {
       accessToken: locationToken.access_token,
       realLocationId: locationToken.locationId,
     };
+
   } catch (err) {
+    // ❗ SOLO refrescamos si realmente es 401
     if (err.response?.status === 401) {
-      console.log(
-        `🔄 Token expirado para location ${locationId} → refrescando con refresh_token...`
-      );
+      console.log(`🔄 Token expirado para location ${locationId} → refrescando...`);
 
       try {
         const body = new URLSearchParams({
@@ -212,14 +212,13 @@ async function ensureLocationToken(locationId) {
           locationAccess: newToken,
         });
 
-        console.log(
-          `✅ Token refrescado correctamente para location ${locationId}`
-        );
+        console.log(`✅ Token refrescado correctamente para location ${locationId}`);
 
         return {
           accessToken: newToken.access_token,
-          realLocationId: newToken.locationId, // GHL lo manda en el token nuevo
+          realLocationId: newToken.locationId,
         };
+
       } catch (e) {
         console.error(
           `❌ Error refrescando token para location ${locationId}:`,
@@ -232,6 +231,7 @@ async function ensureLocationToken(locationId) {
     throw err;
   }
 }
+
 
 // Wrappers axios
 async function callGHLWithAgency(config) {
@@ -250,10 +250,8 @@ async function callGHLWithAgency(config) {
   });
 }
 
-// Nota: tercer parámetro contactId se ignora aquí, pero lo dejo en la firma
-// para no romper tus llamadas actuales.
-async function callGHLWithLocation(locationId, config /*, contactId */) {
-  const { accessToken, realLocationId } = await ensureLocationToken(locationId);
+async function callGHLWithLocation(locationId, config, contactId) {
+  const { accessToken, realLocationId } = await ensureLocationToken(locationId, contactId);
 
   const headers = {
     Accept: "application/json",
@@ -263,16 +261,9 @@ async function callGHLWithLocation(locationId, config /*, contactId */) {
     "Location-Id": realLocationId,
   };
 
-  console.log("HEADERS:", {
-    ...headers,
-    Authorization: "Bearer ***", // ocultamos token en logs
-  });
-
-  return axios({
-    ...config,
-    headers,
-  });
+  return axios({ ...config, headers });
 }
+
 
 // -----------------------------
 // Helpers generales
