@@ -318,7 +318,7 @@ async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead
       },
       timeout: 15000,
     });
-
+    console.log("contacto que se encongro guau:", lookupRes)
     if (lookupRes.data && lookupRes.data.contact) {
       console.log("🔍 Contacto encontrado (lookup):", lookupRes.data.contact.id);
       return lookupRes.data.contact;
