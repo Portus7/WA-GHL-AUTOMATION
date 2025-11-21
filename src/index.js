@@ -379,7 +379,7 @@ async function sendMessageToGHLConversation(locationId, contactId, text) {
         direction: "inbound",
       },
       timeout: 15000,
-    });
+    }, contactId);
 
     console.log("📨 Mensaje INBOUND creado en GHL:", res.data);
   } catch (err) {
