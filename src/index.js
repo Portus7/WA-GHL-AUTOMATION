@@ -311,11 +311,11 @@ async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead
   try {
     const lookupRes = await callGHLWithLocation(locationId, {
       method: "GET",
-      url: "https://services.leadconnectorhq.com/contacts/lookup",
-      params: {
-        locationId,
-        phone: normalizedPhone,
-      },
+      url: `https://services.leadconnectorhq.com/contacts/${contactId}`,
+      //params: {
+      //  contactId,
+      //  phone: normalizedPhone,
+      //},
       timeout: 15000,
     }, contactId);
     console.log("contacto que se encongro guau:", lookupRes)
