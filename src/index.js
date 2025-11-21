@@ -606,48 +606,59 @@ app.post("/ghl/webhook", async (req, res) => {
 });
 
 // 5. Webhook APP Marketplace (Evento INSTALL)
+// 5. Webhook APP Marketplace (Evento INSTALL)
 app.post("/ghl/app-webhook", async (req, res) => {
   try {
     const event = req.body;
-    console.log(event)
+    console.log("🔔 Evento Webhook Recibido:", event);
+    
     const { type, locationId, companyId } = event;
 
     if (type === "INSTALL") {
-      console.log(`🔔 App Install: Location ${locationId}`);
+      console.log(`🚀 Procesando Instalación para Location: ${locationId}`);
       
-      // Obtener token Agencia
+      // 1. Obtener token Agencia
       const agencyAccessToken = await ensureAgencyToken();
       const agencyTokens = await getTokens(AGENCY_ROW_ID);
 
-      // Obtener token Location
-      const locBody = new URLSearchParams({ companyId, locationId });
-      const locTokenRes = await axios.post(
-        "https://services.leadconnectorhq.com/oauth/locationToken",
-        locBody.toString(),
-        {
-          headers: {
-            Authorization: `Bearer ${agencyAccessToken}`,
-            Version: GHL_API_VERSION,
-            "Content-Type": "application/x-www-form-urlencoded",
-            Accept: "application/json"
+      // 2. Obtener token Location
+      // Nota: Usamos try/catch aquí por si falla la obtención del token específico
+      let locTokenRes;
+      try {
+        const locBody = new URLSearchParams({ companyId, locationId });
+        locTokenRes = await axios.post(
+          "https://services.leadconnectorhq.com/oauth/locationToken",
+          locBody.toString(),
+          {
+            headers: {
+              Authorization: `Bearer ${agencyAccessToken}`,
+              Version: GHL_API_VERSION,
+              "Content-Type": "application/x-www-form-urlencoded",
+              Accept: "application/json"
+            }
           }
-        }
-      );
+        );
+      } catch (e) {
+        console.error("❌ Error obteniendo Location Token:", e.response?.data || e.message);
+        return res.status(500).json({ error: "Falló la obtención de tokens" });
+      }
 
-      // Guardar todo
+      // 3. Guardar Tokens en BD
       await saveTokens(locationId, {
         ...agencyTokens,
         locationAccess: locTokenRes.data,
       });
+      console.log("💾 Tokens guardados en BD");
 
-      // Crear Custom Menu
+      // 4. Crear Custom Menu
       try {
          await callGHLWithAgency({
           method: "post",
           url: "https://services.leadconnectorhq.com/custom-menus/",
           data: {
             title: "WhatsApp - Clic&App",
-            url: `${CUSTOM_MENU_URL_WA}?locationid=${locationId}`,
+            // CORRECCIÓN AQUÍ: usamos 'location_id' para que coincida con el frontend
+            url: `${CUSTOM_MENU_URL_WA}?location_id=${locationId}`, 
             icon: { name: "whatsapp", fontFamily: "fab" },
             showOnCompany: false,
             showOnLocation: true,
@@ -656,19 +667,23 @@ app.post("/ghl/app-webhook", async (req, res) => {
             userRole: "all",
           },
         });
-        console.log("✅ Custom Menu creado");
-      } catch(e) { console.error("⚠️ Error creando menu", e.message); }
+        console.log("✅ Custom Menu creado exitosamente");
+      } catch(e) { 
+        // Aquí capturamos el detalle del error 422
+        const errorData = e.response?.data || e.message;
+        console.warn("⚠️ No se pudo crear el menú (Probablemente ya existe):", JSON.stringify(errorData));
+        // No hacemos throw, dejamos que el proceso termine exitosamente
+      }
 
       return res.json({ ok: true });
     }
     
     res.json({ ignored: true });
   } catch (e) {
-    console.error("❌ Error en app-webhook:", e);
+    console.error("❌ Error crítico en app-webhook:", e);
     res.status(500).json({ error: "Internal Error" });
   }
 });
-
 // -----------------------------
 // INICIO: Restauración de Sesiones y Server
 // -----------------------------
