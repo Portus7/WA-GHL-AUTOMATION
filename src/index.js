@@ -245,12 +245,12 @@ async function callGHLWithLocation(locationId, config) {
     Version: GHL_API_VERSION,
     ...(config.headers || {}),
     Authorization: `Bearer ${accessToken}`,
-    LocationId: realLocationId,   // 👈 muy importante
+    "Location-Id": realLocationId, 
   };
 
-  console.log("HEADERS!!!!:", {
+  console.log("HEADERS:", {
     ...headers,
-    Authorization: "Bearer ***", // por seguridad
+    Authorization: "Bearer ***"
   });
 
   return axios({
@@ -313,6 +313,7 @@ async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead
       method: "GET",
       url: "https://services.leadconnectorhq.com/contacts/lookup",
       params: {
+        locationId,
         phone: normalizedPhone,
       },
       timeout: 15000,
@@ -373,6 +374,7 @@ async function sendMessageToGHLConversation(locationId, contactId, text) {
       data: {
         type: "SMS",
         contactId,
+        locationId,
         message: text,
         direction: "inbound",
       },
