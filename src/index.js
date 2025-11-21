@@ -538,51 +538,68 @@ async function startWhatsApp() {
   });
 
   // Mensajes entrantes desde WhatsApp
-  sock.ev.on("messages.upsert", async (msg) => {
-    const m = msg.messages[0];
-    if (!m?.message || m.key.fromMe) return;
+// Mensajes entrantes desde WhatsApp
+sock.ev.on("messages.upsert", async (msg) => {
+  const m = msg.messages[0];
+  if (!m?.message || m.key.fromMe) return;
 
-    const from = m.key.remoteJid;
-    const text =
-      m.message.conversation || m.message.extendedTextMessage?.text;
+  const from = m.key.remoteJid;
+  const text =
+    m.message.conversation || m.message.extendedTextMessage?.text;
 
-    const waName =
-      m.pushName ||
-      sock?.contacts?.[from]?.name ||
-      sock?.contacts?.[from]?.notify ||
-      "WhatsApp Lead";
+  const waName =
+    m.pushName ||
+    sock?.contacts?.[from]?.name ||
+    sock?.contacts?.[from]?.notify ||
+    "WhatsApp Lead";
 
-    const phoneRaw = extractPhoneFromJid(from);
-    const phone = normalizePhone(phoneRaw);
+  const phoneRaw = extractPhoneFromJid(from);
+  const phone = normalizePhone(phoneRaw);
 
-    console.log("📩 Recibido de", waName, "(", phone, "):", text);
+  console.log("📩 Recibido de", waName, "(", phone, "):", text);
 
-    const route = getRoutingForPhone(phone);
-    if (!route || !route.locationId) {
-      console.warn(
-        "⚠️ No se encontró routing para este teléfono, no se envía a GHL:",
-        phone
-      );
-      return;
-    }
+  // 1) Intentar buscar routing previo
+  const route = getRoutingForPhone(phone);
 
-    const locationId = route.locationId;
-    const contactId = route.contactId;
-    console.log("contactId desde routing:", contactId);
+  // 2) Determinar locationId
+  //    - Si ya teníamos routing → usar ese locationId
+  //    - Si no hay routing → usar DEFAULT_LOCATION_ID (sub-agencia por defecto)
+  const locationId =
+    route?.locationId || process.env.DEFAULT_LOCATION_ID;
 
-    const contact = await findOrCreateGHLContact(
-      locationId,
-      phone,
-      waName,
-      contactId
+  if (!locationId) {
+    console.warn(
+      "⚠️ No hay routing y tampoco DEFAULT_LOCATION_ID. No se puede enviar a GHL:",
+      phone
     );
-    console.log("Contacto usado para la conversación:", contact);
-    if (!contact?.id) return;
+    return;
+  }
 
-    saveRouting(phone, locationId, contact.id);
+  // 3) Si teníamos contactId de antes, lo usamos. Si no, que sea null para forzar creación
+  const contactId = route?.contactId || null;
+  console.log("locationId usada:", locationId, "contactId desde routing:", contactId);
 
-    await sendMessageToGHLConversation(locationId, contact.id, text);
-  });
+  // 4) Buscar o crear contacto en esa location
+  const contact = await findOrCreateGHLContact(
+    locationId,
+    phone,
+    waName,
+    contactId
+  );
+
+  console.log("Contacto usado para la conversación:", contact);
+  if (!contact?.id) {
+    console.error("❌ No se pudo obtener/crear contacto en GHL");
+    return;
+  }
+
+  // 5) Guardar routing para siguientes mensajes de este número
+  saveRouting(phone, locationId, contact.id);
+
+  // 6) Crear mensaje inbound en conversaciones de GHL
+  await sendMessageToGHLConversation(locationId, contact.id, text);
+});
+
 }
 
 if (process.env.AUTO_START_WHATSAPP === "true") {
