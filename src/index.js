@@ -146,7 +146,7 @@ async function ensureLocationToken(locationId, contactId) {
 
   let locationToken = tokens.locationAccess;
   if (!locationToken) throw new Error(`No hay locationAccess para ${locationId}`);
-  console.log("Hasta aca llego, paso el locationtoken", locationToken)
+  console.log("Hasta aca llego, paso el locationtoken", locationToken, "Y el contactid es",contactId)
   try {
     // Test rápido del token
     await axios.get(`https://services.leadconnectorhq.com/contacts/${contactId}`, {
