@@ -305,82 +305,37 @@ function getRoutingForPhone(phone) {
 // -----------------------------
 // GHL helpers (multi-location)
 // -----------------------------
-async function findOrCreateGHLContact(
-  locationId,
-  phone,
-  waName = "WhatsApp Lead",
-  contactId
-) {
+async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead", contactId) {
   const normalizedPhone = normalizePhone(phone);
-
-  // 1) Si ya tengo contactId (desde routing.json / webhook),
-  //    lo uso directamente y solo intento validar una vez.
-  if (contactId) {
-    try {
-      const res = await callGHLWithLocation(locationId, {
-        method: "GET",
-        url: `https://services.leadconnectorhq.com/contacts/${contactId}`,
-        timeout: 15000,
-      });
-
-      const contact = res.data?.contact || res.data;
-      console.log("🔍 Contacto encontrado por ID:", contact.id);
-      return contact;
-    } catch (err) {
-      const status = err.response?.status;
-      const body = err.response?.data;
-
-      // Si simplemente no existe, seguimos al flujo normal (search + create)
-      if (status === 404) {
-        console.log(
-          `ℹ️ Contacto ${contactId} no existe, se intentará buscar/crear por teléfono.`
-        );
-      } else {
-        console.warn(
-          "⚠️ Error buscando contacto por ID, se usará contactId crudo:",
-          status,
-          body || err.message
-        );
-        // En la práctica el contacto debería existir, pero por si acaso
-        return { id: contactId, phone: normalizedPhone };
-      }
-    }
-  }
-
-  // 2) Buscar por teléfono usando GET /contacts?query=...
+  // 1) lookup
   try {
-    const searchRes = await callGHLWithLocation(locationId, {
+    const lookupRes = await callGHLWithLocation(locationId, {
       method: "GET",
-      url: "https://services.leadconnectorhq.com/contacts/",
+      url: "https://services.leadconnectorhq.com/contacts/lookup",
       params: {
-        locationId,           // requerido según docs
-        query: normalizedPhone,
-        limit: 1,
+        locationId,
+        phone: normalizedPhone,
       },
       timeout: 15000,
     });
 
-    const list = searchRes.data?.contacts || [];
-
-    if (list.length > 0) {
-      const found = list[0];
-      console.log("🔍 Contacto encontrado por búsqueda:", found.id);
-      return found;
-    } else {
-      console.log("ℹ️ No se encontró contacto por teléfono, se creará uno nuevo.");
+    if (lookupRes.data && lookupRes.data.contact) {
+      console.log("🔍 Contacto encontrado (lookup):", lookupRes.data.contact.id);
+      return lookupRes.data.contact;
     }
   } catch (err) {
-    const status = err.response?.status;
-    const body = err.response?.data;
-    console.error(
-      "Error buscando contacto (GET /contacts):",
-      status,
-      body || err.message
-    );
-    // si hay error aquí, seguimos a intentar crear
+    if (err.response?.status !== 404) {
+      console.error(
+        "Error buscando contacto:",
+        err.response?.status,
+        err.response?.data || err.message
+      );
+    } else {
+      console.log("ℹ️ Contacto no encontrado por lookup, se creará uno nuevo");
+    }
   }
 
-  // 3) Crear contacto nuevo
+  // 2) crear
   try {
     const createdRes = await callGHLWithLocation(locationId, {
       method: "POST",
@@ -400,14 +355,8 @@ async function findOrCreateGHLContact(
   } catch (err) {
     const statusCode = err.response?.status;
     const body = err.response?.data;
+    console.error("Error creando contacto:", statusCode, body || err.message);
 
-    console.error(
-      "Error creando contacto:",
-      statusCode,
-      body || err.message
-    );
-
-    // Caso típico: localización no permite duplicados, pero ya existe contacto
     if (statusCode === 400 && body?.meta?.contactId) {
       console.log("ℹ️ Contacto ya existía (desde error 400):", body.meta.contactId);
       return { id: body.meta.contactId, phone: normalizedPhone };
@@ -416,7 +365,6 @@ async function findOrCreateGHLContact(
     return null;
   }
 }
-
 
 async function sendMessageToGHLConversation(locationId, contactId, text) {
   try {
