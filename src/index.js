@@ -647,7 +647,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
           url: "https://services.leadconnectorhq.com/custom-menus/",
           data: {
             title: "WhatsApp - Clic&App",
-            url: `${CUSTOM_MENU_URL_WA}?location_id=${locationId}`,
+            url: `${CUSTOM_MENU_URL_WA}?locationid=${locationId}`,
             icon: { name: "whatsapp", fontFamily: "fab" },
             showOnCompany: false,
             showOnLocation: true,
