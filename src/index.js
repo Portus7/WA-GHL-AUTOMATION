@@ -134,6 +134,7 @@ async function ensureAgencyToken() {
 // Asegurar token de LOCATION
 async function ensureLocationToken(locationId) {
   let tokens = await getTokens(locationId);
+
   console.log("TOKEEENS", {
     locationIdParam: locationId,
     hasLocationAccess: !!tokens?.locationAccess,
@@ -147,7 +148,7 @@ async function ensureLocationToken(locationId) {
   if (!locationToken) throw new Error(`No hay locationAccess para ${locationId}`);
 
   try {
-    // test rápido de que el access_token funciona
+    // Test rápido del token
     await axios.get("https://services.leadconnectorhq.com/contacts", {
       headers: {
         Authorization: `Bearer ${locationToken.access_token}`,
@@ -158,8 +159,11 @@ async function ensureLocationToken(locationId) {
       timeout: 15000,
     });
 
-    // devolvemos el objeto entero
-    return locationToken;
+    // devolvemos tanto el access_token como el locationId real
+    return {
+      accessToken: locationToken.access_token,
+      realLocationId: locationToken.locationId,
+    };
 
   } catch (err) {
     if (err.response?.status === 401) {
@@ -195,7 +199,11 @@ async function ensureLocationToken(locationId) {
         });
 
         console.log(`✅ Token refrescado correctamente para location ${locationId}`);
-        return newToken;
+
+        return {
+          accessToken: newToken.access_token,
+          realLocationId: newToken.locationId, // GHL lo manda en el token nuevo
+        };
 
       } catch (e) {
         console.error(
@@ -209,6 +217,7 @@ async function ensureLocationToken(locationId) {
     throw err;
   }
 }
+
 
 
 // Wrappers axios
@@ -229,21 +238,27 @@ async function callGHLWithAgency(config) {
 }
 
 async function callGHLWithLocation(locationId, config) {
-  const accessToken = await ensureLocationToken(locationId);
+  const { accessToken, realLocationId } = await ensureLocationToken(locationId);
 
   const headers = {
     Accept: "application/json",
     Version: GHL_API_VERSION,
     ...(config.headers || {}),
     Authorization: `Bearer ${accessToken}`,
-    LocationId: locationToken.locationId,
+    LocationId: realLocationId,   // 👈 muy importante
   };
-  console.log("HEADERS!!!!: ", headers)
+
+  console.log("HEADERS!!!!:", {
+    ...headers,
+    Authorization: "Bearer ***", // por seguridad
+  });
+
   return axios({
     ...config,
     headers,
   });
 }
+
 
 // -----------------------------
 // Helpers generales
@@ -298,7 +313,6 @@ async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead
       method: "GET",
       url: "https://services.leadconnectorhq.com/contacts/lookup",
       params: {
-        locationId,
         phone: normalizedPhone,
       },
       timeout: 15000,
@@ -359,7 +373,6 @@ async function sendMessageToGHLConversation(locationId, contactId, text) {
       data: {
         type: "SMS",
         contactId,
-        locationId,
         message: text,
         direction: "inbound",
       },
