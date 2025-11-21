@@ -9,21 +9,23 @@ const fs = require("fs");
 const { Pool } = require("pg");
 const axios = require("axios");
 
-// Parche crypto para Baileys
-if (!globalThis.crypto) {
-  globalThis.crypto = webcrypto;
-}
+// Parche crypto
+if (!globalThis.crypto) { globalThis.crypto = webcrypto; }
 
-// -----------------------------
-// Config & Estado Global
-// -----------------------------
 const PORT = process.env.PORT || 5000;
 const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
 const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "https://wa.clicandapp.com";
 const AGENCY_ROW_ID = "__AGENCY__";
 
+// -----------------------------
+// ⚙️ CONFIGURACIÓN DE NÚMERO COMPARTIDO
+// -----------------------------
+// Si esto es TRUE, todas las locations usan el mismo WhatsApp
+const USE_SHARED_NUMBER = true; 
+// Este será el ID interno de la sesión "Maestra" que escaneará el QR
+const MASTER_SESSION_ID = "master_whatsapp_shared"; 
+
 // 🧠 GESTOR DE SESIONES (MEMORIA)
-// Mapa: locationId -> { sock, qr, isConnected }
 const sessions = new Map(); 
 
 // -----------------------------
@@ -39,184 +41,82 @@ const pool = new Pool({
 });
 
 // -----------------------------
-// HELPERS: BD Tokens (GHL)
+// HELPERS: BD Tokens & Auth
 // -----------------------------
 async function saveTokens(locationId, tokenData) {
-  const sql = `
-    INSERT INTO auth_db (locationid, raw_token)
-    VALUES ($1, $2::jsonb)
-    ON CONFLICT (locationid) DO UPDATE
-    SET raw_token = EXCLUDED.raw_token
-  `;
+  const sql = `INSERT INTO auth_db (locationid, raw_token) VALUES ($1, $2::jsonb)
+    ON CONFLICT (locationid) DO UPDATE SET raw_token = EXCLUDED.raw_token`;
   await pool.query(sql, [locationId, JSON.stringify(tokenData)]);
 }
 
 async function getTokens(locationId) {
-  const result = await pool.query(
-    "SELECT raw_token FROM auth_db WHERE locationid = $1",
-    [locationId]
-  );
+  const result = await pool.query("SELECT raw_token FROM auth_db WHERE locationid = $1", [locationId]);
   return result.rows[0]?.raw_token || null;
 }
 
-// -----------------------------
-// HELPERS: Autenticación GHL
-// -----------------------------
-
-// Asegurar token de AGENCIA
 async function ensureAgencyToken() {
   let tokens = await getTokens(AGENCY_ROW_ID);
-  if (!tokens) throw new Error("No hay tokens de agencia guardados en BD");
-
+  if (!tokens) throw new Error("No hay tokens de agencia guardados");
   const companyId = tokens.companyId;
-
   try {
-    // Prueba de validez
-    await axios.get(
-      `https://services.leadconnectorhq.com/companies/${companyId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${tokens.access_token}`,
-          Accept: "application/json",
-          Version: GHL_API_VERSION,
-        },
-        params: { limit: 1 },
-        timeout: 15000,
-      }
-    );
+    await axios.get(`https://services.leadconnectorhq.com/companies/${companyId}`, {
+        headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: "application/json", Version: GHL_API_VERSION },
+        params: { limit: 1 }, timeout: 15000
+    });
     return tokens.access_token;
   } catch (err) {
     if (err.response?.status === 401) {
-      console.log("🔄 Token de agencia expirado → refrescando...");
+      console.log("🔄 Token agencia expirado, refrescando...");
       try {
-        const body = new URLSearchParams({
-          client_id: process.env.GHL_CLIENT_ID,
-          client_secret: process.env.GHL_CLIENT_SECRET,
-          grant_type: "refresh_token",
-          refresh_token: tokens.refresh_token,
-        });
-
-        const refreshRes = await axios.post(
-          "https://services.leadconnectorhq.com/oauth/token",
-          body.toString(),
-          {
-            headers: {
-              Accept: "application/json",
-              "Content-Type": "application/x-www-form-urlencoded",
-            },
-            timeout: 15000,
-          }
-        );
-
-        const newTokens = refreshRes.data;
-        await saveTokens(AGENCY_ROW_ID, newTokens);
-        console.log("✅ Token de agencia refrescado correctamente");
-        return newTokens.access_token;
-      } catch (e) {
-        console.error("❌ Error refrescando token agencia:", e.message);
-        throw new Error("No se pudo refrescar el token de agencia");
-      }
+        const body = new URLSearchParams({ client_id: process.env.GHL_CLIENT_ID, client_secret: process.env.GHL_CLIENT_SECRET, grant_type: "refresh_token", refresh_token: tokens.refresh_token });
+        const refreshRes = await axios.post("https://services.leadconnectorhq.com/oauth/token", body.toString(), { headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } });
+        await saveTokens(AGENCY_ROW_ID, refreshRes.data);
+        return refreshRes.data.access_token;
+      } catch (e) { throw new Error("Error refrescando token agencia"); }
     }
     throw err;
   }
 }
 
-// Asegurar token de LOCATION
 async function ensureLocationToken(locationId, contactId) {
   let tokens = await getTokens(locationId);
-  if (!tokens) throw new Error(`No hay tokens guardados para ${locationId}`);
-
+  if (!tokens) throw new Error(`No hay tokens para ${locationId}`);
   let locationToken = tokens.locationAccess;
-  if (!locationToken) throw new Error(`No hay locationAccess para ${locationId}`);
-
+  
   try {
-    // Si hay contactId, probamos acceso para verificar token
     if (contactId) {
-      await axios.get(
-        `https://services.leadconnectorhq.com/contacts/${contactId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${locationToken.access_token}`,
-            Accept: "application/json",
-            Version: GHL_API_VERSION,
-            "Location-Id": locationToken.locationId,
-          },
-          timeout: 15000,
-        }
-      );
+      await axios.get(`https://services.leadconnectorhq.com/contacts/${contactId}`, {
+        headers: { Authorization: `Bearer ${locationToken.access_token}`, Accept: "application/json", Version: GHL_API_VERSION, "Location-Id": locationToken.locationId },
+        timeout: 15000
+      });
     }
-    return {
-      accessToken: locationToken.access_token,
-      realLocationId: locationToken.locationId,
-    };
-
+    return { accessToken: locationToken.access_token, realLocationId: locationToken.locationId };
   } catch (err) {
     if (err.response?.status === 401) {
-      console.log(`🔄 Token expirado location ${locationId} → refrescando...`);
+      console.log(`🔄 Token location ${locationId} expirado, refrescando...`);
       try {
-        const body = new URLSearchParams({
-          client_id: process.env.GHL_CLIENT_ID,
-          client_secret: process.env.GHL_CLIENT_SECRET,
-          grant_type: "refresh_token",
-          refresh_token: locationToken.refresh_token,
-        });
-
-        const refreshRes = await axios.post(
-          "https://services.leadconnectorhq.com/oauth/token",
-          body.toString(),
-          {
-            headers: {
-              Accept: "application/json",
-              "Content-Type": "application/x-www-form-urlencoded",
-            },
-            timeout: 15000,
-          }
-        );
-
-        const newToken = refreshRes.data;
-        // Guardamos manteniendo la estructura original
-        await saveTokens(locationId, { ...tokens, locationAccess: newToken });
-        console.log(`✅ Token refrescado para location ${locationId}`);
-
-        return {
-          accessToken: newToken.access_token,
-          realLocationId: newToken.locationId,
-        };
-      } catch (e) {
-        console.error(`❌ Error refrescando token location ${locationId}:`, e.message);
-        throw new Error("No se pudo refrescar token location");
-      }
+        const body = new URLSearchParams({ client_id: process.env.GHL_CLIENT_ID, client_secret: process.env.GHL_CLIENT_SECRET, grant_type: "refresh_token", refresh_token: locationToken.refresh_token });
+        const refreshRes = await axios.post("https://services.leadconnectorhq.com/oauth/token", body.toString(), { headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } });
+        await saveTokens(locationId, { ...tokens, locationAccess: refreshRes.data });
+        return { accessToken: refreshRes.data.access_token, realLocationId: refreshRes.data.locationId };
+      } catch (e) { throw new Error("Error refrescando token location"); }
     }
     throw err;
   }
 }
 
-// Wrappers Axios
 async function callGHLWithAgency(config) {
   const accessToken = await ensureAgencyToken();
-  const headers = {
-    Accept: "application/json",
-    Version: GHL_API_VERSION,
-    ...(config.headers || {}),
-    Authorization: `Bearer ${accessToken}`,
-  };
-  return axios({ ...config, headers });
+  return axios({ ...config, headers: { Accept: "application/json", Version: GHL_API_VERSION, Authorization: `Bearer ${accessToken}`, ...(config.headers || {}) } });
 }
 
 async function callGHLWithLocation(locationId, config, contactId) {
   const { accessToken, realLocationId } = await ensureLocationToken(locationId, contactId);
-  const headers = {
-    Accept: "application/json",
-    Version: GHL_API_VERSION,
-    ...(config.headers || {}),
-    Authorization: `Bearer ${accessToken}`,
-    "Location-Id": realLocationId,
-  };
-  return axios({ ...config, headers });
+  return axios({ ...config, headers: { Accept: "application/json", Version: GHL_API_VERSION, Authorization: `Bearer ${accessToken}`, "Location-Id": realLocationId, ...(config.headers || {}) } });
 }
 
 // -----------------------------
-// HELPERS: Routing y Utilidades
+// ROUTING (Fundamental para Shared Number)
 // -----------------------------
 function normalizePhone(phone) {
   if (!phone) return "";
@@ -225,12 +125,11 @@ function normalizePhone(phone) {
   return cleaned;
 }
 
-function extractPhoneFromJid(jid) {
-  return jid.split("@")[0].split(":")[0];
-}
+function extractPhoneFromJid(jid) { return jid.split("@")[0].split(":")[0]; }
 
 async function saveRouting(phone, locationId, contactId) {
   const normalizedPhone = normalizePhone(phone);
+  // Guardamos qué Location habló por última vez con este número
   const sql = `
     INSERT INTO phone_routing (phone, location_id, contact_id, updated_at)
     VALUES ($1, $2, $3, NOW())
@@ -239,11 +138,8 @@ async function saveRouting(phone, locationId, contactId) {
         contact_id = COALESCE(EXCLUDED.contact_id, phone_routing.contact_id),
         updated_at = NOW();
   `;
-  try {
-    await pool.query(sql, [normalizedPhone, locationId, contactId]);
-  } catch (e) {
-    console.error("❌ Error guardando routing:", e);
-  }
+  try { await pool.query(sql, [normalizedPhone, locationId, contactId]); } 
+  catch (e) { console.error("❌ Error guardando routing:", e); }
 }
 
 async function getRoutingForPhone(phone) {
@@ -251,186 +147,116 @@ async function getRoutingForPhone(phone) {
   const sql = "SELECT location_id, contact_id FROM phone_routing WHERE phone = $1";
   try {
     const res = await pool.query(sql, [normalizedPhone]);
-    if (res.rows.length > 0) {
-      return {
-        locationId: res.rows[0].location_id,
-        contactId: res.rows[0].contact_id
-      };
-    }
+    if (res.rows.length > 0) return { locationId: res.rows[0].location_id, contactId: res.rows[0].contact_id };
     return null;
-  } catch (e) {
-    console.error("❌ Error leyendo routing:", e);
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-// -----------------------------
-// HELPERS: Lógica de Contactos GHL
-// -----------------------------
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   const normalizedPhone = normalizePhone(phone);
-
-  // 1. Intentar buscar por ID si lo tenemos
   if (contactId) {
     try {
-      const lookupRes = await callGHLWithLocation(locationId, {
-        method: "GET",
-        url: `https://services.leadconnectorhq.com/contacts/${contactId}`,
-        timeout: 15000,
-      });
+      const lookupRes = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
       const contact = lookupRes.data.contact || lookupRes.data;
-      if (contact?.id) {
-        console.log("✅ Contacto existente validado:", contactId);
-        return contact;
-      }
-    } catch (err) {
-      if (err.response?.status !== 404) {
-        console.error("Error buscando contacto:", err.message);
-      }
-      // Si es 404, continuamos para crear
-    }
+      if (contact?.id) return contact;
+    } catch (err) { }
   }
-
-  // 2. Crear nuevo o buscar por teléfono (GHL maneja duplicados en POST devolviendo 400+meta)
   try {
     const createdRes = await callGHLWithLocation(locationId, {
-      method: "POST",
-      url: "https://services.leadconnectorhq.com/contacts/",
-      data: {
-        locationId,
-        phone: normalizedPhone,
-        firstName: waName,
-        source: "WhatsApp Baileys",
-      },
-      timeout: 15000,
+      method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
+      data: { locationId, phone: normalizedPhone, firstName: waName, source: "WhatsApp Baileys" }
     });
-    const created = createdRes.data.contact || createdRes.data;
-    console.log("👤 Nuevo Contacto creado:", created.id);
-    return created;
+    return createdRes.data.contact || createdRes.data;
   } catch (err) {
-    const statusCode = err.response?.status;
     const body = err.response?.data;
-
-    // Manejo de duplicados GHL (Error 400 con meta.contactId)
-    if (statusCode === 400 && body?.meta?.contactId) {
-      console.log("ℹ️ Contacto ya existía (recuperado de error 400):", body.meta.contactId);
-      return { id: body.meta.contactId, phone: normalizedPhone };
-    }
-    console.error("❌ Error creando contacto GHL:", statusCode, body || err.message);
+    if (err.response?.status === 400 && body?.meta?.contactId) return { id: body.meta.contactId, phone: normalizedPhone };
     return null;
   }
 }
 
 async function sendMessageToGHLConversation(locationId, contactId, text) {
   try {
-    await callGHLWithLocation(
-      locationId,
-      {
-        method: "POST",
-        url: "https://services.leadconnectorhq.com/conversations/messages/inbound",
-        data: {
-          type: "SMS",
-          contactId,
-          locationId,
-          message: text,
-          direction: "inbound",
-        },
-        timeout: 15000,
-      },
-      contactId
-    );
-    console.log(`📨 Inbound enviado a GHL (Contact: ${contactId})`);
-  } catch (err) {
-    console.error("❌ Error enviando Inbound a GHL:", err.message);
-  }
+    await callGHLWithLocation(locationId, {
+      method: "POST", url: "https://services.leadconnectorhq.com/conversations/messages/inbound",
+      data: { type: "SMS", contactId, locationId, message: text, direction: "inbound" }
+    }, contactId);
+    console.log(`📨 Inbound GHL (${locationId}):`, text);
+  } catch (err) { console.error("❌ Error enviando Inbound a GHL:", err.message); }
 }
 
 // -----------------------------
-// Lógica WhatsApp Multi-Tenant
+// 🚀 LÓGICA WHATSAPP (Modificada)
 // -----------------------------
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 
-// Helper para enviar mensajes salientes
-async function sendWhatsAppMessage(phone, text, locationId) {
-  const session = sessions.get(locationId);
-  if (!session || !session.isConnected || !session.sock) {
-    console.error(`⚠️ WhatsApp no conectado para location ${locationId}`);
+// Función para enviar mensaje (Lógica "Shared Source")
+async function sendWhatsAppMessage(phone, text, requestLocationId) {
+  // 1. Determinar qué sesión usar
+  let sessionToUse;
+  let finalMessage = text;
+
+  if (USE_SHARED_NUMBER) {
+    // Si es compartido, SIEMPRE usamos la sesión maestra
+    sessionToUse = sessions.get(MASTER_SESSION_ID);
+    
+    // 2. Agregar la firma (Source) para diferenciar quién mandó
+    // Esto hará que en el celular se vea "Hola... "
+    if (requestLocationId) {
+        finalMessage = `${text}\n\n_source: ${requestLocationId}_`;
+    }
+  } else {
+    // Si NO es compartido, buscamos la sesión específica de esa location
+    sessionToUse = sessions.get(requestLocationId);
+  }
+
+  if (!sessionToUse || !sessionToUse.isConnected || !sessionToUse.sock) {
+    console.error(`⚠️ No se puede enviar. Sesión desconectada. (Shared: ${USE_SHARED_NUMBER})`);
     return;
   }
+
   const waPhone = normalizePhone(phone);
   const jid = waPhone.replace("+", "") + "@s.whatsapp.net";
 
   try {
-    await session.sock.sendMessage(jid, { text });
-    console.log(`📤 [${locationId}] Enviado a ${waPhone}: ${text}`);
+    await sessionToUse.sock.sendMessage(jid, { text: finalMessage });
+    console.log(`📤 [Desde: ${requestLocationId}] Enviado a ${waPhone}`);
   } catch (err) {
-    console.error(`❌ Error enviando mensaje WA en ${locationId}:`, err);
+    console.error(`❌ Error enviando mensaje WA:`, err);
   }
 }
 
-// Función Principal: Iniciar WhatsApp para una Location
-async function startWhatsApp(locationId) {
-  // Si ya existe y tiene socket, retornar
-  const existing = sessions.get(locationId);
+async function startWhatsApp(sessionId) {
+  const existing = sessions.get(sessionId);
   if (existing && existing.sock) return existing;
 
-  // Inicializar estado
-  sessions.set(locationId, { sock: null, qr: null, isConnected: false });
-  const currentSession = sessions.get(locationId);
+  sessions.set(sessionId, { sock: null, qr: null, isConnected: false });
+  const currentSession = sessions.get(sessionId);
 
-  console.log(`▶ Iniciando proceso WhatsApp para: ${locationId}`);
+  console.log(`▶ Iniciando WhatsApp Sesión: ${sessionId}`);
 
-  // Import Dinámico de Baileys
-  const {
-    default: makeWASocket,
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    initAuthCreds,
-    BufferJSON,
-    proto
-  } = await import("@whiskeysockets/baileys");
+  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, BufferJSON, proto } = await import("@whiskeysockets/baileys");
 
-  // --- Adaptador Auth PostgreSQL (Scope Local) ---
-  async function usePostgreSQLAuthState(pool, sessionId) {
+  // Auth Adapter (Postgres)
+  async function usePostgreSQLAuthState(pool, id) {
     const readData = async (key) => {
       try {
-        const res = await pool.query(
-          "SELECT data FROM baileys_auth WHERE session_id = $1 AND key_id = $2",
-          [sessionId, key]
-        );
-        if (res.rows.length > 0) {
-          return JSON.parse(JSON.stringify(res.rows[0].data), BufferJSON.reviver);
-        }
-        return null;
+        const res = await pool.query("SELECT data FROM baileys_auth WHERE session_id = $1 AND key_id = $2", [id, key]);
+        return res.rows.length > 0 ? JSON.parse(JSON.stringify(res.rows[0].data), BufferJSON.reviver) : null;
       } catch (e) { return null; }
     };
-
     const writeData = async (key, data) => {
       try {
         const jsonData = JSON.stringify(data, BufferJSON.replacer);
-        const sql = `
-          INSERT INTO baileys_auth (session_id, key_id, data, updated_at)
-          VALUES ($1, $2, $3::jsonb, NOW())
-          ON CONFLICT (session_id, key_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
-        `;
-        await pool.query(sql, [sessionId, key, jsonData]);
+        const sql = `INSERT INTO baileys_auth (session_id, key_id, data, updated_at) VALUES ($1, $2, $3::jsonb, NOW()) ON CONFLICT (session_id, key_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`;
+        await pool.query(sql, [id, key, jsonData]);
       } catch (e) {}
     };
-
-    const removeData = async (key) => {
-      try {
-        await pool.query("DELETE FROM baileys_auth WHERE session_id = $1 AND key_id = $2", [sessionId, key]);
-      } catch (e) {}
-    };
-
+    const removeData = async (key) => { try { await pool.query("DELETE FROM baileys_auth WHERE session_id = $1 AND key_id = $2", [id, key]); } catch (e) {} };
     const creds = (await readData("creds")) || initAuthCreds();
-
     return {
-      state: {
-        creds,
-        keys: {
+      state: { creds, keys: {
           get: async (type, ids) => {
             const data = {};
             await Promise.all(ids.map(async (id) => {
@@ -442,105 +268,76 @@ async function startWhatsApp(locationId) {
           },
           set: async (data) => {
             const tasks = [];
-            for (const category in data) {
-              for (const id in data[category]) {
-                const value = data[category][id];
-                const key = `${category}-${id}`;
-                if (value) tasks.push(writeData(key, value));
-                else tasks.push(removeData(key));
-              }
-            }
+            for (const cat in data) { for (const id in data[cat]) { const val = data[cat][id]; const key = `${cat}-${id}`; if (val) tasks.push(writeData(key, val)); else tasks.push(removeData(key)); } }
             await Promise.all(tasks);
-          },
-        },
-      },
-      saveCreds: async () => await writeData("creds", creds),
+          }
+      }}, saveCreds: async () => await writeData("creds", creds)
     };
   }
-  // ------------------------------------------------
 
-  const { state, saveCreds } = await usePostgreSQLAuthState(pool, locationId);
+  const { state, saveCreds } = await usePostgreSQLAuthState(pool, sessionId);
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
     version,
     logger: pino({ level: "silent" }),
-    auth: {
-      creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
-    },
-    browser: ["ClicAndApp", "Chrome", "10.0"],
+    auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) },
+    browser: ["ClicAndApp Shared", "Chrome", "10.0"],
     connectTimeoutMs: 60000,
   });
 
   currentSession.sock = sock;
-
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      console.log(`📌 QR Generado para ${locationId}`);
-      currentSession.qr = qr;
-      currentSession.isConnected = false;
-    }
-
-    if (connection === "open") {
-      console.log(`✅ ${locationId} CONECTADO`);
-      currentSession.isConnected = true;
-      currentSession.qr = null;
-    }
-
+    if (qr) { currentSession.qr = qr; currentSession.isConnected = false; console.log(`📌 QR para ${sessionId}`); }
+    if (connection === "open") { currentSession.isConnected = true; currentSession.qr = null; console.log(`✅ ${sessionId} CONECTADO`); }
     if (connection === "close") {
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      console.log(`❌ ${locationId} Desconectado. Code: ${statusCode}`);
-      
-      currentSession.isConnected = false;
-      currentSession.qr = null;
-      currentSession.sock = null;
-
-      // Reconexión automática (excepto logout 401/403)
-      if (statusCode !== 401 && statusCode !== 403) {
-        setTimeout(() => startWhatsApp(locationId), 3000);
-      } else {
-        console.log(`⚠️ Sesión ${locationId} cerrada permanentemente.`);
-        sessions.delete(locationId);
-      }
+      const code = lastDisconnect?.error?.output?.statusCode;
+      currentSession.isConnected = false; currentSession.sock = null;
+      if (code !== 401 && code !== 403) setTimeout(() => startWhatsApp(sessionId), 3000);
+      else sessions.delete(sessionId);
     }
   });
 
-  // Manejo de Mensajes Entrantes
+  // 📩 MANEJO DE MENSAJES ENTRANTES (ROUTING INTELIGENTE)
   sock.ev.on("messages.upsert", async (msg) => {
     const m = msg.messages[0];
     if (!m?.message || m.key.fromMe) return;
-
     const text = m.message.conversation || m.message.extendedTextMessage?.text;
     if (!text) return;
 
     const from = m.key.remoteJid;
-    const waName = m.pushName || "WhatsApp Lead";
+    const waName = m.pushName || "Usuario";
     const phoneRaw = extractPhoneFromJid(from);
     const phone = normalizePhone(phoneRaw);
 
-    console.log(`📩 [${locationId}] ${waName} (${phone}): ${text}`);
+    // 1. ¿Quién debe recibir este mensaje?
+    // Buscamos en la DB la última location que habló con este número
+    const route = await getRoutingForPhone(phone);
+    
+    // Si encontramos routing, usamos esa location. 
+    // Si NO encontramos, podríamos asignarlo a una 'Default Location' (Opcional)
+    const targetLocationId = route?.locationId;
+
+    if (!targetLocationId) {
+        console.log(`⚠️ Mensaje de ${phone} ignorado: No hay routing previo (nadie le escribió antes).`);
+        // AQUÍ PODRÍAS DEFINIR UNA LOCATION "BANDEJA DE ENTRADA GENERAL" SI QUISIERAS
+        return; 
+    }
+
+    console.log(`📩 Recibido de ${phone} -> Enrutando a Location: ${targetLocationId}`);
 
     try {
-      // Verificar si ya tenemos un contacto guardado en routing
-      const route = await getRoutingForPhone(phone);
-      // Si el mensaje entra por esta sesión, priorizamos esta location
-      const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
-
-      const contact = await findOrCreateGHLContact(locationId, phone, waName, existingContactId);
-
+      const contact = await findOrCreateGHLContact(targetLocationId, phone, waName, route.contactId);
       if (contact?.id) {
-        // Actualizar routing y enviar mensaje a GHL
-        await saveRouting(phone, locationId, contact.id);
-        await sendMessageToGHLConversation(locationId, contact.id, text);
+        // Refrescamos el routing (timestamp update)
+        await saveRouting(phone, targetLocationId, contact.id);
+        // Enviamos a la location correcta en GHL
+        await sendMessageToGHLConversation(targetLocationId, contact.id, text);
       }
-    } catch (error) {
-      console.error("❌ Error procesando mensaje entrante:", error);
-    }
+    } catch (error) { console.error("❌ Error procesando inbound:", error); }
   });
 }
 
@@ -548,164 +345,123 @@ async function startWhatsApp(locationId) {
 // ENDPOINTS HTTP
 // -----------------------------
 
-// 1. Iniciar conexión (Front solicita QR)
+// 1. Start Connection
 app.post("/start-whatsapp", async (req, res) => {
-  console.log(req.query, "AQUIIIIIIIIIIIIIIIIIIII")
-  const locationId = req.query.locationId;
-  if (!locationId) return res.status(400).json({ error: "Falta locationId" });
-
-  try {
-    await startWhatsApp(locationId);
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error interno al iniciar" });
+  const { locationId } = req.query;
+  
+  if (USE_SHARED_NUMBER) {
+      // Si es compartido, solo permitimos iniciar la sesión MAESTRA
+      // Puedes proteger esto con una clave o solo permitirlo si locationId es 'admin'
+      console.log(`🔄 Solicitud de conexión desde ${locationId}, iniciando Master Session...`);
+      await startWhatsApp(MASTER_SESSION_ID);
+      return res.json({ success: true, mode: "SHARED", masterSession: MASTER_SESSION_ID });
   }
+
+  // Modo clásico (Multi-tenant)
+  if (!locationId) return res.status(400).json({ error: "Falta locationId" });
+  await startWhatsApp(locationId);
+  res.json({ success: true });
 });
 
-// 2. Obtener QR (Polling del Front)
+// 2. Get QR
 app.get("/qr", (req, res) => {
-  const locationId = req.query.locationId;
-  const session = sessions.get(locationId);
-  if (!session || !session.qr) {
-    return res.status(404).json({ error: "QR no disponible" });
-  }
+  const { locationId } = req.query;
+  
+  // Si es compartido, siempre devolvemos el QR de la Master Session
+  const targetSession = USE_SHARED_NUMBER ? MASTER_SESSION_ID : locationId;
+  
+  const session = sessions.get(targetSession);
+  if (!session || !session.qr) return res.status(404).json({ error: "QR no disponible" });
   res.json({ qr: session.qr });
 });
 
-// 3. Estado de conexión
+// 3. Status
 app.get("/status", (req, res) => {
-  const locationId = req.query.locationId;
-  if (!locationId) return res.json({ connected: false });
+  const { locationId } = req.query;
+  const targetSession = USE_SHARED_NUMBER ? MASTER_SESSION_ID : locationId;
 
-  const session = sessions.get(locationId);
-  if (session && session.isConnected) {
-    return res.json({ connected: true });
-  }
+  const session = sessions.get(targetSession);
+  if (session && session.isConnected) return res.json({ connected: true });
   res.json({ connected: false });
 });
 
-// 4. Webhook GHL (Mensajes Salientes / Outbound)
+// 4. Webhook GHL (Salientes)
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
-
-    if (!locationId || !phone || !message) {
-      return res.status(200).json({ ignored: true });
-    }
+    if (!locationId || !phone || !message) return res.json({ ignored: true });
 
     if (type === "Outbound" || type === "SMS") {
+      // Guardamos routing para saber que ESTA location le escribió a este número
+      // (Importante para que la respuesta del cliente vuelva a esta location)
+      await saveRouting(phone, locationId, null); 
+
+      // Enviamos (La función internamente decide si usa Master o individual)
       await sendWhatsAppMessage(phone, message, locationId);
       return res.json({ ok: true });
     }
     res.json({ ignored: true });
-  } catch (err) {
-    console.error("❌ Error en webhook GHL:", err);
-    res.status(500).json({ error: "Error procesando webhook" });
-  }
+  } catch (err) { console.error("❌ Error Webhook:", err); res.status(500).json({ error: "Error" }); }
 });
 
-// 5. Webhook APP Marketplace (Evento INSTALL)
+// 5. App Webhook (Install)
 app.post("/ghl/app-webhook", async (req, res) => {
   try {
     const event = req.body;
-    console.log("🔔 Evento Webhook Recibido:", event);
-    
-    const { type, locationId, companyId } = event;
+    if (event.type === "INSTALL") {
+      const { locationId, companyId } = event;
+      console.log(`🔔 Install en ${locationId}`);
 
-    if (type === "INSTALL") {
-      console.log(`🚀 Procesando Instalación para Location: ${locationId}`);
-      
-      // 1. Obtener token Agencia
-      const agencyAccessToken = await ensureAgencyToken();
+      const agencyToken = await ensureAgencyToken();
       const agencyTokens = await getTokens(AGENCY_ROW_ID);
 
-      // 2. Obtener token Location
       let locTokenRes;
       try {
-        const locBody = new URLSearchParams({ companyId, locationId });
-        locTokenRes = await axios.post(
-          "https://services.leadconnectorhq.com/oauth/locationToken",
-          locBody.toString(),
-          {
-            headers: {
-              Authorization: `Bearer ${agencyAccessToken}`,
-              Version: GHL_API_VERSION,
-              "Content-Type": "application/x-www-form-urlencoded",
-              Accept: "application/json"
-            }
-          }
+        locTokenRes = await axios.post("https://services.leadconnectorhq.com/oauth/locationToken", 
+           new URLSearchParams({ companyId, locationId }).toString(), 
+           { headers: { Authorization: `Bearer ${agencyToken}`, Version: GHL_API_VERSION, "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } }
         );
-      } catch (e) {
-        console.error("❌ Error obteniendo Location Token:", e.response?.data || e.message);
-        return res.status(500).json({ error: "Falló la obtención de tokens" });
-      }
+      } catch(e) { return res.status(500).json({ error: "Token Fail" }); }
 
-      // 3. Guardar Tokens en BD
-      await saveTokens(locationId, {
-        ...agencyTokens,
-        locationAccess: locTokenRes.data,
-      });
-      console.log("💾 Tokens guardados en BD");
+      await saveTokens(locationId, { ...agencyTokens, locationAccess: locTokenRes.data });
 
-      // 4. Crear Custom Menu (CORREGIDO)
+      // Crear menú con la URL apuntando al backend
+      // NOTA: En modo compartido, el usuario NO necesita escanear QR individualmente.
+      // Pero le damos el link para que vea el estado "Conectado".
       try {
          await callGHLWithAgency({
-          method: "post",
-          url: "https://services.leadconnectorhq.com/custom-menus/",
+          method: "post", url: "https://services.leadconnectorhq.com/custom-menus/",
           data: {
             title: "WhatsApp - Clic&App",
             url: `${CUSTOM_MENU_URL_WA}?location_id=${locationId}`, 
             icon: { name: "whatsapp", fontFamily: "fab" },
-            
-            // --- CAMPOS CORREGIDOS/AGREGADOS ---
-            showOnCompany: false,
-            showOnLocation: true,
-            showToAllLocations: false, // <--- OBLIGATORIO AHORA
-            locations: [locationId],
-            
-            openMode: "iframe",
-            userRole: "all",
-            
-            allowCamera: false,     // <--- OBLIGATORIO AHORA
-            allowMicrophone: false  // <--- OBLIGATORIO AHORA
-            // -----------------------------------
+            showOnCompany: false, showOnLocation: true, showToAllLocations: false, locations: [locationId],
+            openMode: "iframe", userRole: "all", allowCamera: false, allowMicrophone: false
           },
         });
-        console.log("✅ Custom Menu creado exitosamente");
-      } catch(e) { 
-        const errorData = e.response?.data || e.message;
-        console.warn("⚠️ No se pudo crear el menú (Puede que ya exista):", JSON.stringify(errorData));
-      }
+      } catch(e) {}
 
       return res.json({ ok: true });
     }
-    
     res.json({ ignored: true });
-  } catch (e) {
-    console.error("❌ Error crítico en app-webhook:", e);
-    res.status(500).json({ error: "Internal Error" });
-  }
+  } catch (e) { res.status(500).json({ error: "Error" }); }
 });
-// -----------------------------
-// INICIO: Restauración de Sesiones y Server
-// -----------------------------
+
 async function restoreSessions() {
-  console.log("🔄 Restaurando sesiones previas...");
+  console.log("🔄 Restaurando...");
   try {
     const res = await pool.query("SELECT DISTINCT session_id FROM baileys_auth");
     for (const row of res.rows) {
-      const locId = row.session_id;
-      console.log(`♻️ Restaurando sesión para: ${locId}`);
-      // No usamos await para iniciar en paralelo
-      startWhatsApp(locId).catch(e => console.error(`❌ Error restaurando ${locId}:`, e));
+      startWhatsApp(row.session_id).catch(console.error);
     }
-  } catch (e) {
-    console.error("❌ Error crítico restaurando sesiones:", e);
-  }
+    // En modo compartido, aseguramos que la master session arranque aunque no esté en DB aún
+    if (USE_SHARED_NUMBER) {
+        setTimeout(() => startWhatsApp(MASTER_SESSION_ID), 2000);
+    }
+  } catch (e) { console.error(e); }
 }
 
 app.listen(PORT, async () => {
-  console.log(`API escuchando en puerto ${PORT}`);
+  console.log(`API escuchando en puerto ${PORT} (SHARED_NUMBER: ${USE_SHARED_NUMBER})`);
   await restoreSessions();
 });
