@@ -9,7 +9,6 @@ const { webcrypto } = require("crypto");
 const fs = require("fs");
 const { Pool } = require("pg");
 const axios = require("axios");
-const { Console } = require("console");
 
 // Parche crypto para Baileys en Node
 if (!globalThis.crypto) {
@@ -21,7 +20,8 @@ if (!globalThis.crypto) {
 // -----------------------------
 const PORT = process.env.PORT || 5000;
 const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
-const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "https://wa.clicandapp.com";
+const CUSTOM_MENU_URL_WA =
+  process.env.CUSTOM_MENU_URL_WA || "https://wa.clicandapp.com";
 const AGENCY_ROW_ID = "__AGENCY__";
 
 let isConnected = false;
@@ -38,7 +38,10 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
-  ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
+  ssl:
+    process.env.PGSSLMODE === "require"
+      ? { rejectUnauthorized: false }
+      : false,
 });
 
 // Helpers BD tokens
@@ -68,23 +71,28 @@ async function getTokens(locationId) {
 async function ensureAgencyToken() {
   let tokens = await getTokens(AGENCY_ROW_ID);
   if (!tokens) throw new Error("No hay tokens de agencia guardados en BD");
-  console.log(" todos los tokens: ", tokens);
+  console.log("🔐 Tokens agencia en BD:", {
+    hasAccessToken: !!tokens.access_token,
+    companyId: tokens.companyId,
+  });
 
   const companyId = tokens.companyId;
 
   try {
-    await axios.get(`https://services.leadconnectorhq.com/companies/${companyId}`, {
-      headers: {
-        Authorization: `Bearer ${tokens.access_token}`,
-        Accept: "application/json",
-        Version: GHL_API_VERSION,
-      },
-      params: { limit: 1 },
-      timeout: 15000,
-    });
+    await axios.get(
+      `https://services.leadconnectorhq.com/companies/${companyId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+          Accept: "application/json",
+          Version: GHL_API_VERSION,
+        },
+        params: { limit: 1 },
+        timeout: 15000,
+      }
+    );
 
     return tokens.access_token;
-
   } catch (err) {
     const status = err.response?.status;
 
@@ -125,14 +133,18 @@ async function ensureAgencyToken() {
       }
     }
 
-    console.error("❌ Error verificando token de agencia:", status, err.response?.data || err.message);
+    console.error(
+      "❌ Error verificando token de agencia:",
+      status,
+      err.response?.data || err.message
+    );
     throw err;
   }
 }
 
-
 // Asegurar token de LOCATION
-async function ensureLocationToken(locationId, contactId) {
+// 👇 ya NO depende de contactId, solo del locationId
+async function ensureLocationToken(locationId) {
   let tokens = await getTokens(locationId);
 
   console.log("TOKEEENS", {
@@ -142,29 +154,31 @@ async function ensureLocationToken(locationId, contactId) {
     userType: tokens?.locationAccess?.userType,
   });
 
-  if (!tokens) throw new Error(`No hay tokens guardados para la location ${locationId}`);
+  if (!tokens)
+    throw new Error(`No hay tokens guardados para la location ${locationId}`);
 
   let locationToken = tokens.locationAccess;
-  if (!locationToken) throw new Error(`No hay locationAccess para ${locationId}`);
-  console.log("Hasta aca llego, paso el locationtoken", locationToken, "Y el contactid es",contactId)
+  if (!locationToken)
+    throw new Error(`No hay locationAccess para ${locationId}`);
+
   try {
-    // Test rápido del token
-    await axios.get(`https://services.leadconnectorhq.com/contacts/${contactId}`, {
+    // Test rápido del token: un GET simple a /contacts
+    await axios.get("https://services.leadconnectorhq.com/contacts", {
       headers: {
         Authorization: `Bearer ${locationToken.access_token}`,
         Accept: "application/json",
         Version: GHL_API_VERSION,
+        "Location-Id": locationToken.locationId,
       },
       params: { limit: 1 },
       timeout: 15000,
     });
-    console.log("Se mando los accessToken y reallocationid", locationToken.access_token, locationToken.locationId)
+
     // devolvemos tanto el access_token como el locationId real
     return {
       accessToken: locationToken.access_token,
       realLocationId: locationToken.locationId,
     };
-
   } catch (err) {
     if (err.response?.status === 401) {
       console.log(
@@ -198,13 +212,14 @@ async function ensureLocationToken(locationId, contactId) {
           locationAccess: newToken,
         });
 
-        console.log(`✅ Token refrescado correctamente para location ${locationId}`);
+        console.log(
+          `✅ Token refrescado correctamente para location ${locationId}`
+        );
 
         return {
           accessToken: newToken.access_token,
           realLocationId: newToken.locationId, // GHL lo manda en el token nuevo
         };
-
       } catch (e) {
         console.error(
           `❌ Error refrescando token para location ${locationId}:`,
@@ -217,8 +232,6 @@ async function ensureLocationToken(locationId, contactId) {
     throw err;
   }
 }
-
-
 
 // Wrappers axios
 async function callGHLWithAgency(config) {
@@ -237,20 +250,22 @@ async function callGHLWithAgency(config) {
   });
 }
 
-async function callGHLWithLocation(locationId, config, contactId) {
-  const { accessToken, realLocationId } = await ensureLocationToken(locationId, contactId);
+// Nota: tercer parámetro contactId se ignora aquí, pero lo dejo en la firma
+// para no romper tus llamadas actuales.
+async function callGHLWithLocation(locationId, config /*, contactId */) {
+  const { accessToken, realLocationId } = await ensureLocationToken(locationId);
 
   const headers = {
     Accept: "application/json",
     Version: GHL_API_VERSION,
     ...(config.headers || {}),
     Authorization: `Bearer ${accessToken}`,
-    "Location-Id": realLocationId, 
+    "Location-Id": realLocationId,
   };
 
   console.log("HEADERS:", {
     ...headers,
-    Authorization: `Bearer ${accessToken}`
+    Authorization: "Bearer ***", // ocultamos token en logs
   });
 
   return axios({
@@ -258,7 +273,6 @@ async function callGHLWithLocation(locationId, config, contactId) {
     headers,
   });
 }
-
 
 // -----------------------------
 // Helpers generales
@@ -305,34 +319,45 @@ function getRoutingForPhone(phone) {
 // -----------------------------
 // GHL helpers (multi-location)
 // -----------------------------
-async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead", contactId) {
+async function findOrCreateGHLContact(
+  locationId,
+  phone,
+  waName = "WhatsApp Lead",
+  contactId
+) {
   const normalizedPhone = normalizePhone(phone);
-  // 1) lookup
-  try {
-    const lookupRes = await callGHLWithLocation(locationId, {
-      method: "GET",
-      url: `https://services.leadconnectorhq.com/contacts/${contactId}`,
-      //params: {
-      //  contactId,
-      //  phone: normalizedPhone,
-      //},
-      timeout: 15000,
-    }, contactId);
-    console.log("contacto que se encongro guau:", lookupRes)
-    if (lookupRes.data && lookupRes.data.contact) {
-      console.log("🔍 Contacto encontrado (lookup):", lookupRes.data.contact.id);
-      return lookupRes.data.contact;
+
+  // 1) Si tenemos contactId desde el workflow, primero intentamos GET /contacts/{id}
+  if (contactId) {
+    try {
+      const lookupRes = await callGHLWithLocation(locationId, {
+        method: "GET",
+        url: `https://services.leadconnectorhq.com/contacts/${contactId}`,
+        timeout: 15000,
+      });
+
+      console.log("✅ Contacto encontrado por contactId:", contactId);
+      const contact = lookupRes.data.contact || lookupRes.data;
+      if (contact?.id) return contact;
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 404) {
+        console.log(
+          `ℹ️ Contacto con id ${contactId} no existe, se creará uno nuevo`
+        );
+      } else {
+        console.error(
+          "Error buscando contacto por id:",
+          status,
+          err.response?.data || err.message
+        );
+      }
+      // sigue al paso 2 (crear)
     }
-  } catch (err) {
-    if (err.response?.status !== 404) {
-      console.error(
-        "Error buscando contacto:",
-        err.response?.status,
-        err.response?.data || err.message
-      );
-    } else {
-      console.log("ℹ️ Contacto no encontrado por lookup, se creará uno nuevo");
-    }
+  } else {
+    console.log(
+      "ℹ️ No hay contactId en routing, se intentará crear contacto nuevo"
+    );
   }
 
   // 2) crear
@@ -357,8 +382,12 @@ async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead
     const body = err.response?.data;
     console.error("Error creando contacto:", statusCode, body || err.message);
 
+    // patrón clásico de GHL: 400 pero con meta.contactId si ya existía
     if (statusCode === 400 && body?.meta?.contactId) {
-      console.log("ℹ️ Contacto ya existía (desde error 400):", body.meta.contactId);
+      console.log(
+        "ℹ️ Contacto ya existía (desde error 400):",
+        body.meta.contactId
+      );
       return { id: body.meta.contactId, phone: normalizedPhone };
     }
 
@@ -368,18 +397,22 @@ async function findOrCreateGHLContact(locationId, phone, waName = "WhatsApp Lead
 
 async function sendMessageToGHLConversation(locationId, contactId, text) {
   try {
-    const res = await callGHLWithLocation(locationId, {
-      method: "POST",
-      url: "https://services.leadconnectorhq.com/conversations/messages/inbound",
-      data: {
-        type: "SMS",
-        contactId,
-        locationId,
-        message: text,
-        direction: "inbound",
+    const res = await callGHLWithLocation(
+      locationId,
+      {
+        method: "POST",
+        url: "https://services.leadconnectorhq.com/conversations/messages/inbound",
+        data: {
+          type: "SMS",
+          contactId,
+          locationId,
+          message: text,
+          direction: "inbound",
+        },
+        timeout: 15000,
       },
-      timeout: 15000,
-    }, contactId);
+      contactId
+    );
 
     console.log("📨 Mensaje INBOUND creado en GHL:", res.data);
   } catch (err) {
@@ -543,11 +576,16 @@ async function startWhatsApp() {
     }
 
     const locationId = route.locationId;
-    const contactId = route.contactId
-    console.log("contacto id se guardo en el route: ", contactId)
+    const contactId = route.contactId;
+    console.log("contactId desde routing:", contactId);
 
-    const contact = await findOrCreateGHLContact(locationId, phone, waName, contactId);
-    console.log("Aca llego el contacto: ", contact)
+    const contact = await findOrCreateGHLContact(
+      locationId,
+      phone,
+      waName,
+      contactId
+    );
+    console.log("Contacto usado para la conversación:", contact);
     if (!contact?.id) return;
 
     saveRouting(phone, locationId, contact.id);
@@ -568,7 +606,7 @@ if (process.env.AUTO_START_WHATSAPP === "true") {
 app.post("/ghl/app-webhook", async (req, res) => {
   try {
     const event = req.body;
-    console.log("🔔 App Webhook recibido:");
+    console.log("🔔 App Webhook recibido:", event);
 
     const { type, locationId, companyId } = event;
 
@@ -595,9 +633,11 @@ app.post("/ghl/app-webhook", async (req, res) => {
 
     // Volver a leer tokens de agencia (pueden haberse refrescado)
     const agencyTokens = await getTokens(AGENCY_ROW_ID);
-   
+
     if (!agencyTokens || !agencyTokens.access_token) {
-      console.error("❌ No hay tokens de agencia guardados en BD (fila __AGENCY__).");
+      console.error(
+        "❌ No hay tokens de agencia guardados en BD (fila __AGENCY__)."
+      );
       return res.status(200).json({ ok: false, reason: "no_agency_token" });
     }
 
@@ -607,7 +647,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
         companyId,
         locationId,
       });
-      
+
       const locTokenRes = await axios.post(
         "https://services.leadconnectorhq.com/oauth/locationToken",
         locBody.toString(),
@@ -677,10 +717,12 @@ app.post("/ghl/app-webhook", async (req, res) => {
         e.response?.status,
         e.response?.data || e.message
       );
-      return res.status(200).json({ ok: false, error: "location_token_failed" });
+      return res
+        .status(200)
+        .json({ ok: false, error: "location_token_failed" });
     }
   } catch (e) {
-    console.error("❌ Error general en /ghl/app-webhook:");
+    console.error("❌ Error general en /ghl/app-webhook:", e);
     return res.status(500).json({ error: `Error interno en app webhook` });
   }
 });
@@ -690,14 +732,7 @@ app.post("/ghl/webhook", async (req, res) => {
   try {
     console.log("📩 Webhook GHL recibido:", req.body);
 
-    const {
-      userId,
-      contactId,
-      locationId,
-      phone,
-      message,
-      type,
-    } = req.body;
+    const { userId, contactId, locationId, phone, message, type } = req.body;
 
     if (!contactId || !phone || !message || !locationId) {
       console.warn("⚠️ Webhook incompleto");
