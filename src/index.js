@@ -250,7 +250,7 @@ async function callGHLWithLocation(locationId, config) {
 
   console.log("HEADERS:", {
     ...headers,
-    Authorization: "Bearer ***"
+    Authorization: `Bearer ${accessToken}`
   });
 
   return axios({
@@ -543,9 +543,9 @@ async function startWhatsApp() {
     }
 
     const locationId = route.locationId;
-    const contactid = route.contactId
+    const contactId = route.contactId
 
-    const contact = await findOrCreateGHLContact(locationId, phone, waName, contactid);
+    const contact = await findOrCreateGHLContact(locationId, phone, waName, contactId);
     if (!contact?.id) return;
 
     saveRouting(phone, locationId, contact.id);
