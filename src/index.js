@@ -547,6 +547,7 @@ async function startWhatsApp() {
     console.log("contacto id se guardo en el route: ", contactId)
 
     const contact = await findOrCreateGHLContact(locationId, phone, waName, contactId);
+    console.log("Aca llego el contacto: ", contact)
     if (!contact?.id) return;
 
     saveRouting(phone, locationId, contact.id);
