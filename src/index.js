@@ -158,7 +158,7 @@ async function ensureLocationToken(locationId) {
       params: { limit: 1 },
       timeout: 15000,
     });
-
+    console.log("Se mando los accessToken y reallocationid", locationToken.access_token, locationToken.locationId)
     // devolvemos tanto el access_token como el locationId real
     return {
       accessToken: locationToken.access_token,
