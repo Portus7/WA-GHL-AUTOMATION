@@ -83,7 +83,6 @@ async function ensureAgencyToken() {
       timeout: 15000,
     });
 
-    // si llega aquí, el token es válido
     return tokens.access_token;
 
   } catch (err) {
@@ -131,16 +130,24 @@ async function ensureAgencyToken() {
   }
 }
 
+
 // Asegurar token de LOCATION
 async function ensureLocationToken(locationId) {
   let tokens = await getTokens(locationId);
-  console.log("TOKEEENS", tokens)
+  console.log("TOKEEENS", {
+    locationIdParam: locationId,
+    hasLocationAccess: !!tokens?.locationAccess,
+    tokenLocationId: tokens?.locationAccess?.locationId,
+    userType: tokens?.locationAccess?.userType,
+  });
+
   if (!tokens) throw new Error(`No hay tokens guardados para la location ${locationId}`);
 
   let locationToken = tokens.locationAccess;
   if (!locationToken) throw new Error(`No hay locationAccess para ${locationId}`);
 
   try {
+    // test rápido de que el access_token funciona
     await axios.get("https://services.leadconnectorhq.com/contacts", {
       headers: {
         Authorization: `Bearer ${locationToken.access_token}`,
@@ -151,7 +158,9 @@ async function ensureLocationToken(locationId) {
       timeout: 15000,
     });
 
-    return locationToken.access_token;
+    // devolvemos el objeto entero
+    return locationToken;
+
   } catch (err) {
     if (err.response?.status === 401) {
       console.log(
@@ -186,7 +195,8 @@ async function ensureLocationToken(locationId) {
         });
 
         console.log(`✅ Token refrescado correctamente para location ${locationId}`);
-        return newToken.access_token;
+        return newToken;
+
       } catch (e) {
         console.error(
           `❌ Error refrescando token para location ${locationId}:`,
@@ -199,6 +209,7 @@ async function ensureLocationToken(locationId) {
     throw err;
   }
 }
+
 
 // Wrappers axios
 async function callGHLWithAgency(config) {
@@ -225,6 +236,7 @@ async function callGHLWithLocation(locationId, config) {
     Version: GHL_API_VERSION,
     ...(config.headers || {}),
     Authorization: `Bearer ${accessToken}`,
+    LocationId: locationToken.locationId,
   };
   console.log("HEADERS!!!!: ", headers)
   return axios({
