@@ -606,7 +606,6 @@ app.post("/ghl/webhook", async (req, res) => {
 });
 
 // 5. Webhook APP Marketplace (Evento INSTALL)
-// 5. Webhook APP Marketplace (Evento INSTALL)
 app.post("/ghl/app-webhook", async (req, res) => {
   try {
     const event = req.body;
@@ -622,7 +621,6 @@ app.post("/ghl/app-webhook", async (req, res) => {
       const agencyTokens = await getTokens(AGENCY_ROW_ID);
 
       // 2. Obtener token Location
-      // Nota: Usamos try/catch aquí por si falla la obtención del token específico
       let locTokenRes;
       try {
         const locBody = new URLSearchParams({ companyId, locationId });
@@ -650,29 +648,34 @@ app.post("/ghl/app-webhook", async (req, res) => {
       });
       console.log("💾 Tokens guardados en BD");
 
-      // 4. Crear Custom Menu
+      // 4. Crear Custom Menu (CORREGIDO)
       try {
          await callGHLWithAgency({
           method: "post",
           url: "https://services.leadconnectorhq.com/custom-menus/",
           data: {
             title: "WhatsApp - Clic&App",
-            // CORRECCIÓN AQUÍ: usamos 'location_id' para que coincida con el frontend
             url: `${CUSTOM_MENU_URL_WA}?location_id=${locationId}`, 
             icon: { name: "whatsapp", fontFamily: "fab" },
+            
+            // --- CAMPOS CORREGIDOS/AGREGADOS ---
             showOnCompany: false,
             showOnLocation: true,
+            showToAllLocations: false, // <--- OBLIGATORIO AHORA
             locations: [locationId],
+            
             openMode: "iframe",
             userRole: "all",
+            
+            allowCamera: false,     // <--- OBLIGATORIO AHORA
+            allowMicrophone: false  // <--- OBLIGATORIO AHORA
+            // -----------------------------------
           },
         });
         console.log("✅ Custom Menu creado exitosamente");
       } catch(e) { 
-        // Aquí capturamos el detalle del error 422
         const errorData = e.response?.data || e.message;
-        console.warn("⚠️ No se pudo crear el menú (Probablemente ya existe):", JSON.stringify(errorData));
-        // No hacemos throw, dejamos que el proceso termine exitosamente
+        console.warn("⚠️ No se pudo crear el menú (Puede que ya exista):", JSON.stringify(errorData));
       }
 
       return res.json({ ok: true });
