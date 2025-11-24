@@ -6,7 +6,6 @@ const pino = require("pino");
 const { webcrypto } = require("crypto");
 const { Pool } = require("pg");
 const axios = require("axios");
-const { Console } = require("console");
 
 if (!globalThis.crypto) { globalThis.crypto = webcrypto; }
 
@@ -18,6 +17,10 @@ const AGENCY_ROW_ID = "__AGENCY__";
 const sessions = new Map(); 
 const botMessageIds = new Set();
 
+// 🧠 DICCIONARIO DE TRADUCCIÓN (LID -> JID REAL)
+// Aquí guardaremos: "345...@lid" es en realidad "595...@s.whatsapp.net"
+const lidToJid = new Map();
+
 const pool = new Pool({
   host: process.env.PGHOST,
   port: process.env.PGPORT,
@@ -27,7 +30,9 @@ const pool = new Pool({
   ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
 });
 
-// --- HELPERS ---
+// -----------------------------
+// HELPERS
+// -----------------------------
 
 async function deleteSessionData(locationId, slot) {
   const sessionId = `${locationId}_slot${slot}`;
@@ -146,10 +151,12 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
-// --- GHL CONTACTS ---
+// --- GHL CONTACTS MEJORADO ---
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
-  console.log(locationId, phone, waName, contactId)
-  const p = "+" + normalizePhone(phone); 
+  const rawPhone = phone.replace(/\D/g, ''); 
+  const phoneWithPlus = `+${rawPhone}`;
+
+  // 1. Búsqueda por ID
   if (contactId) {
     try {
       const lookupRes = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
@@ -157,40 +164,44 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
       if (contact?.id) return contact;
     } catch (err) {}
   }
+
+  // 2. Búsqueda Inteligente (Query)
+  try {
+      const searchRes = await callGHLWithLocation(locationId, {
+          method: "GET",
+          url: "https://services.leadconnectorhq.com/contacts/",
+          params: { locationId: locationId, query: rawPhone, limit: 1 }
+      });
+      if (searchRes.data && searchRes.data.contacts && searchRes.data.contacts.length > 0) {
+          return searchRes.data.contacts[0];
+      }
+  } catch(e) {}
+
+  // 3. Crear
   try {
     const createdRes = await callGHLWithLocation(locationId, {
       method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
-      data: { locationId, phone: p, firstName: waName, source: "WhatsApp Baileys" }
+      data: { locationId, phone: phoneWithPlus, firstName: waName, source: "WhatsApp Baileys" }
     });
     return createdRes.data.contact || createdRes.data;
   } catch (err) {
     const body = err.response?.data;
-    if (err.response?.status === 400 && body?.meta?.contactId) return { id: body.meta.contactId, phone: p };
+    if (err.response?.status === 400 && body?.meta?.contactId) return { id: body.meta.contactId, phone: phoneWithPlus };
     console.error("❌ Error creando contacto:", err.message);
     return null;
   }
 }
 
-// 🔥 FIX DE BURBUJAS: Usar endpoints distintos según la dirección
 async function logMessageToGHL(locationId, contactId, text, direction) {
   try {
-    // Si es inbound (cliente), USAR EL ENDPOINT ESPECÍFICO INBOUND
-    // Si es outbound (yo), usar el endpoint genérico
-    
-    let url = "https://services.leadconnectorhq.com/conversations/messages"; // Default (Outbound)
+    let url = "https://services.leadconnectorhq.com/conversations/messages"; 
     if (direction === "inbound") {
         url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
     }
 
     await callGHLWithLocation(locationId, {
       method: "POST", url: url,
-      data: { 
-          type: "SMS", 
-          contactId, 
-          locationId, 
-          message: text, 
-          direction: direction 
-      }
+      data: { type: "SMS", contactId, locationId, message: text, direction: direction }
     });
     console.log(`✅ GHL Sync [${direction}]: ${text.substring(0, 20)}...`);
   } catch (err) { 
@@ -309,76 +320,76 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
-// 📩 UPSERT: Mensajes Entrantes Y Salientes
+  // 🔥 LISTENER DE CONTACTOS: LLENAR DICCIONARIO LID -> JID
+  sock.ev.on("contacts.upsert", (contacts) => {
+      for (const contact of contacts) {
+          if (contact.lid && contact.id) {
+              lidToJid.set(contact.lid, contact.id);
+          }
+      }
+  });
+
+  // 📩 UPSERT: Mensajes Entrantes Y Salientes
   sock.ev.on("messages.upsert", async (msg) => {
     try {
-        console.log(msg)
         const m = msg.messages[0];
         if (!m?.message) return;
+        if (botMessageIds.has(m.key.id)) return; // Ignorar eco
+
+        let from = m.key.remoteJid;
         
-        // 1. Ignorar Ecos del Bot (si tenemos el ID en caché)
-        if (botMessageIds.has(m.key.id)) return;
-
-        // --- 🔥 FIX: NORMALIZACIÓN DE JID (LID -> Standard) ---
-        let remoteJid = m.key.remoteJid;
-
-        // Si viene de un LID (Dispositivo vinculado), lo tratamos como si fuera el número normal
-        // Esto permite capturar los mensajes enviados desde el celular
-        if (remoteJid.includes("@lid")) {
-            remoteJid = remoteJid.replace("@lid", "@s.whatsapp.net");
+        // 🔥 TRADUCCIÓN LID -> JID REAL (La clave de todo)
+        if (from.includes("@lid")) {
+            if (lidToJid.has(from)) {
+                const translated = lidToJid.get(from);
+                console.log(`🔄 LID Traducido: ${from} -> ${translated}`);
+                from = translated;
+            } else {
+                // Si no tenemos traducción, intentamos limpiar a fuerza bruta o ignorar
+                // A veces el LID no es útil sin traducción.
+                console.warn(`⚠️ LID desconocido sin traducción: ${from}. Intentando ignorar.`);
+                return; 
+            }
         }
 
-        // --- FILTROS ---
-        // Ignorar estados, canales, grupos y cosas raras
-        if (remoteJid === "status@broadcast" || remoteJid.includes("@newsletter")) return;
-        if (remoteJid.includes("@g.us")) return; // Ignorar grupos (opcional)
-        if (!remoteJid.includes("@s.whatsapp.net")) return;
+        if (from === "status@broadcast" || from.includes("@newsletter")) return;
+        if (!from.includes("@s.whatsapp.net")) return;
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
 
-        // Extraemos el teléfono del JID YA NORMALIZADO
-        const clientPhone = normalizePhone(remoteJid.split("@")[0]);
-        
-        // Datos del bot (Slot actual)
+        const clientPhone = normalizePhone(from.split("@")[0]);
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
         const isFromMe = m.key.fromMe;
 
-        // -------------------------------------------------------
-        // LÓGICA DE GHL (Contactos y Logging)
-        // -------------------------------------------------------
+        console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
 
-        // 1. Routing
+        // Routing
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
-        
-        // Buscamos/Creamos contacto en GHL
         const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
 
-        if (!contact?.id) return;
+        if (!contact?.id) {
+            console.log("❌ No se encontró contacto GHL válido.");
+            return;
+        }
 
-        // Guardamos routing para mantener la conversación pegada a este número
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
 
         let messageForGHL = "";
-        let direction = "inbound"; // Default (gris/izquierda)
+        let direction = "inbound";
 
         if (isFromMe) {
-            // ✅ MENSAJE ENVIADO DESDE TU CELULAR
-            // Lo marcamos como 'outbound' para que salga Azul/Derecha en GHL
-            // Le ponemos la firma para que el Webhook de GHL sepa que NO debe reenviarlo
+            // MENSAJE DESDE CELULAR -> AZUL (Derecha)
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
             direction = "outbound"; 
-            console.log(`📱 Sync Celular -> GHL (+${clientPhone}): "${text.substring(0,10)}..."`);
         } else {
-            // ✅ MENSAJE RECIBIDO DEL CLIENTE
+            // MENSAJE DEL CLIENTE -> GRIS (Izquierda)
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 
-            console.log(`📩 Inbound Cliente -> GHL (+${clientPhone}): "${text.substring(0,10)}..."`);
         }
 
-        // Subir a GHL
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction);
 
     } catch (error) { console.error("Upsert Error:", error.message); }
@@ -414,13 +425,12 @@ app.get("/status", async (req, res) => {
   res.json({ connected: false, priority: extra.priority, tags: extra.tags });
 });
 
-// --- WEBHOOK OUTBOUND CON FILTRO LOOP ---
+// --- WEBHOOK OUTBOUND (FILTRO LOOP) ---
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
     if (!locationId || !phone || !message) return res.json({ ignored: true });
 
-    // 🛑 FILTRO ANTI-BUCLE
     if (message.includes("[Enviado desde otro dispositivo]")) return res.json({ ignored: true });
 
     if (type === "Outbound" || type === "SMS") {
@@ -435,7 +445,6 @@ app.post("/ghl/webhook", async (req, res) => {
             session: sessions.get(`${locationId}_slot${conf.slot_id}`)
         })).filter(c => c.session && c.session.isConnected);
 
-        // Fallback
         if (availableCandidates.length === 0) {
              for (const [sid, s] of sessions.entries()) {
                 if (sid.startsWith(`${locationId}_slot`) && s.isConnected) 
@@ -475,7 +484,6 @@ app.post("/ghl/webhook", async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: "Error" }); }
 });
 
-// ... Config / Remove / Install ...
 app.post("/config-slot", async (req, res) => {
   const { locationId, slot, phoneNumber, priority, addTag, removeTag } = req.body;
   if (!locationId) return res.status(400).json({ error: "Faltan datos" });
