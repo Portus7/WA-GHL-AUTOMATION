@@ -16,7 +16,7 @@ const AGENCY_ROW_ID = "__AGENCY__";
 
 // 🧠 GESTOR DE SESIONES
 const sessions = new Map(); 
-// 🧠 CACHÉ ANTI-ECO (IDs de mensajes enviados por el bot para ignorarlos en el upsert)
+// 🧠 CACHÉ ANTI-ECO (Evita que el bot se responda a sí mismo)
 const botMessageIds = new Set();
 
 // -----------------------------
@@ -57,6 +57,7 @@ async function syncSlotInfo(locationId, slotId, phoneNumber) {
 }
 
 async function getLocationSlotsConfig(locationId) {
+    // Ordenamos por prioridad ASC (1, 2, 3...)
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
     try {
         const res = await pool.query(sql, [locationId]);
@@ -147,7 +148,7 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
-// --- GHL CONTACTS ---
+// --- GHL CONTACTS & LOGS ---
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   const p = "+" + normalizePhone(phone); 
   if (contactId) {
@@ -171,19 +172,36 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   }
 }
 
-async function logMessageToGHL(locationId, contactId, text) {
+// 🔥 FIX: Función para subir el mensaje a GHL (Blue Bubble vs Grey Bubble)
+async function logMessageToGHL(locationId, contactId, text, direction) {
   try {
+    // direction: 'inbound' (Gris - Cliente) | 'outbound' (Azul - Yo)
+    // Endpoint genérico de conversations
+    const endpoint = "https://services.leadconnectorhq.com/conversations/messages";
+    
     await callGHLWithLocation(locationId, {
-      method: "POST", url: "https://services.leadconnectorhq.com/conversations/messages/inbound",
+      method: "POST", url: endpoint,
       data: { 
           type: "SMS", 
           contactId, 
           locationId, 
           message: text, 
-          direction: "inbound" 
+          direction: direction 
       }
     });
-  } catch (err) { console.error("GHL Log Error:", err.message); }
+    console.log(`✅ Sync GHL [${direction}]: ${text.substring(0, 20)}...`);
+  } catch (err) { 
+      console.error("GHL Log Error:", err.response?.data || err.message); 
+      // Fallback a endpoint Inbound si el normal falla (a veces pasa por permisos)
+      if (direction === 'outbound') {
+          try {
+             await callGHLWithLocation(locationId, {
+                method: "POST", url: "https://services.leadconnectorhq.com/conversations/messages/inbound",
+                data: { type: "SMS", contactId, locationId, message: `[Saliente Fallido] ${text}`, direction: "inbound" }
+             });
+          } catch(e){}
+      }
+  }
 }
 
 // -----------------------------
@@ -274,9 +292,7 @@ async function startWhatsApp(locationId, slotId) {
 
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
-    
     if (qr) { currentSession.qr = qr; currentSession.isConnected = false; console.log(`📌 QR: ${sessionId}`); }
-    
     if (connection === "open") { 
         currentSession.isConnected = true; 
         currentSession.qr = null; 
@@ -286,7 +302,6 @@ async function startWhatsApp(locationId, slotId) {
         console.log(`✅ CONECTADO: ${sessionId} (${myPhone})`); 
         syncSlotInfo(locationId, slotId, myPhone).catch(console.error);
     }
-    
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
       currentSession.isConnected = false; currentSession.sock = null;
@@ -295,19 +310,18 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
-  // 📩 UPSERT: Mensajes Entrantes Y Salientes (desde Celular)
+  // 📩 UPSERT: Mensajes Entrantes Y Salientes
   sock.ev.on("messages.upsert", async (msg) => {
     try {
         const m = msg.messages[0];
         if (!m?.message) return;
 
-        // 🛑 ANTI-ECO: Si el mensaje está en caché, es del bot (GHL)
+        // 🛑 ANTI-ECO: Si el ID está en cache, es del Bot -> IGNORAR
         if (botMessageIds.has(m.key.id)) {
-            return; // Lo ignoramos para no duplicar
+            return; 
         }
 
         const from = m.key.remoteJid;
-        // Ignorar estados y newsletters
         if (from === "status@broadcast" || from.includes("@newsletter")) return;
         if (!from.includes("@s.whatsapp.net")) return;
 
@@ -318,10 +332,9 @@ async function startWhatsApp(locationId, slotId) {
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
         
-        // Detectar si es mensaje enviado DESDE EL CELULAR FÍSICO (o Web)
+        // ¿Quién envió el mensaje?
         const isFromMe = m.key.fromMe;
 
-        // Logica Contacto
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
@@ -331,26 +344,28 @@ async function startWhatsApp(locationId, slotId) {
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
 
         let messageForGHL = "";
-        
+        let direction = "inbound"; // Default para cliente
+
         if (isFromMe) {
-            // ES UN MENSAJE SALIENTE MANUAL (Celular/Web)
-            // Agregamos el tag para diferenciarlo
+            // ✅ Mensaje enviado DESDE EL CELULAR
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
+            direction = "outbound"; // 🔥 Esto hará que salga AZUL en GHL
             console.log(`📱 Sync Celular -> GHL (+${clientPhone})`);
         } else {
-            // ES UN MENSAJE ENTRANTE DEL CLIENTE
+            // ✅ Mensaje del Cliente
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             console.log(`📩 Inbound Cliente -> GHL (+${clientPhone})`);
         }
 
-        await logMessageToGHL(locationId, contact.id, messageForGHL);
+        // Enviamos a GHL con la dirección correcta
+        await logMessageToGHL(locationId, contact.id, messageForGHL, direction);
 
     } catch (error) { console.error("Upsert Error:", error.message); }
   });
 }
 
 // -----------------------------
-// ENDPOINTS
+// ENDPOINTS HTTP
 // -----------------------------
 
 app.post("/start-whatsapp", async (req, res) => {
@@ -378,6 +393,7 @@ app.get("/status", async (req, res) => {
   res.json({ connected: false, priority: extra.priority, tags: extra.tags });
 });
 
+// --- WEBHOOK OUTBOUND SIMPLIFICADO (PRIORIDAD 1 O NADA) ---
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
@@ -385,9 +401,12 @@ app.post("/ghl/webhook", async (req, res) => {
 
     if (type === "Outbound" || type === "SMS") {
         const clientPhone = normalizePhone(phone);
+        
+        // 1. Obtener candidatos desde DB (vienen ordenados por prioridad ASC: 1, 2, 3...)
         let dbConfigs = await getLocationSlotsConfig(locationId);
         
-        let candidates = dbConfigs.map(conf => ({
+        // Filtrar solo los conectados
+        let availableCandidates = dbConfigs.map(conf => ({
             slot: conf.slot_id,
             priority: conf.priority,
             tags: conf.tags || [],
@@ -395,91 +414,59 @@ app.post("/ghl/webhook", async (req, res) => {
             session: sessions.get(`${locationId}_slot${conf.slot_id}`)
         })).filter(c => c.session && c.session.isConnected);
 
-        if (candidates.length === 0) {
-             // Fallback Memoria
-             for (const [sid, s] of sessions.entries()) {
-                if (sid.startsWith(`${locationId}_slot`) && s.isConnected) 
-                    candidates.push({ slot: parseInt(sid.split("_slot")[1]), priority: 99, tags: [], myNumber: s.myNumber, session: s });
-             }
+        if (availableCandidates.length === 0) {
+            console.error(`❌ [FATAL] No hay sesiones conectadas para ${locationId}.`);
+            return res.status(200).json({ error: "No connected devices" });
         }
 
-        if (candidates.length === 0) return res.json({ error: "No connected devices" });
-
-        // ORDENAR CANDIDATOS PARA CASCADA (Fallback)
-        // 1. Routing, 2. Tags, 3. Prioridad
-        let attempts = [];
-        const route = await getRoutingForPhone(clientPhone);
-        if (route?.channelNumber) {
-            const sticky = candidates.find(c => c.myNumber === route.channelNumber);
-            if (sticky) attempts.push(sticky);
-        }
+        // 2. SELECCIÓN SIMPLE DE PRIORIDAD
+        // Como dbConfigs ya venía ordenado por priority ASC, el primer elemento del array
+        // 'availableCandidates' es automáticamente el de mayor prioridad (1 o el menor disponible).
+        // Ya no hacemos loops ni cascadas raras. Tomamos al líder.
+        let selectedCandidate = availableCandidates[0];
         
-        const tagged = candidates.filter(c => c.tags.includes("#priority"));
-        attempts.push(...tagged);
+        console.log(`🚀 Seleccionado Slot ${selectedCandidate.slot} (Prio: ${selectedCandidate.priority}) para envío.`);
+
+        const sessionToUse = selectedCandidate.session;
         
-        candidates.sort((a, b) => a.priority - b.priority);
-        attempts.push(...candidates);
-
-        // Eliminar duplicados en la lista de intentos
-        attempts = [...new Set(attempts)];
-
-        // --- INTENTO DE ENVÍO EN CASCADA ---
-        let success = false;
-        let finalNumber = null;
-
+        // JID sin +
         const jid = clientPhone.replace(/\D/g, '') + "@s.whatsapp.net";
 
-        for (const cand of attempts) {
-            // No enviarse a uno mismo
-            if (clientPhone.includes(cand.myNumber)) continue;
-
-            console.log(`🚀 Probando Slot ${cand.slot} (+${cand.myNumber})...`);
-            try {
-                await waitForSocketOpen(cand.session.sock);
-                const sent = await cand.session.sock.sendMessage(jid, { text: message });
-                
-                // AGREGAR ID AL CACHÉ ANTI-ECO
-                if (sent?.key?.id) {
-                    botMessageIds.add(sent.key.id);
-                    setTimeout(() => botMessageIds.delete(sent.key.id), 10000);
-                }
-
-                success = true;
-                finalNumber = cand.myNumber;
-                console.log("✅ Enviado.");
-                break; // Éxito, salir del bucle
-            } catch (e) {
-                console.warn(`⚠️ Falló Slot ${cand.slot}: ${e.message}. Intentando siguiente...`);
+        // 3. ENVÍO
+        try {
+            await waitForSocketOpen(sessionToUse.sock);
+            const sent = await sessionToUse.sock.sendMessage(jid, { text: message });
+            
+            // 🔥 GUARDAR ID PARA NO PROCESARLO EN UPSERT (Evita Eco)
+            if (sent?.key?.id) {
+                botMessageIds.add(sent.key.id);
+                setTimeout(() => botMessageIds.delete(sent.key.id), 15000); // Limpiar a los 15s
             }
-        }
 
-        if (success) {
-            await saveRouting(clientPhone, locationId, null, finalNumber);
+            console.log(`✅ Mensaje enviado.`);
+            await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
             return res.json({ ok: true });
-        } else {
-            console.error("❌ Todos los slots fallaron.");
+
+        } catch (e) {
+            console.error(`❌ Error al enviar: ${e.message}`);
             return res.status(500).json({ error: "Send failed" });
         }
     }
     res.json({ ignored: true });
-  } catch (err) { console.error(err); res.status(500).json({ error: "Error" }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: "Internal Error" }); }
 });
 
+// ... Config Slot / Remove Slot / Install (Iguales que antes) ...
 app.post("/config-slot", async (req, res) => {
-  // ... (Mismo código de configuración anterior) ...
-  // Para brevedad, usa el mismo bloque que ya tenías funcionando
-  // Solo asegúrate de incluir el endpoint completo aquí
   const { locationId, slot, phoneNumber, priority, addTag, removeTag } = req.body;
+  if (!locationId) return res.status(400).json({ error: "Faltan datos" });
   try {
-    // Lógica completa de config...
-    // (Copia y pega tu bloque funcional aquí)
     let targetSlot = slot;
     if(!targetSlot && phoneNumber) {
         const norm = normalizePhone(phoneNumber);
         const r = await pool.query("SELECT slot_id FROM location_slots WHERE location_id=$1 AND phone_number=$2", [locationId, norm]);
         if(r.rows.length) targetSlot = r.rows[0].slot_id;
     }
-    // Exchange Logic
     if(priority !== undefined) {
         const p = parseInt(priority);
         const all = await pool.query("SELECT slot_id, priority FROM location_slots WHERE location_id=$1", [locationId]);
@@ -501,13 +488,14 @@ app.post("/remove-slot", async (req, res) => {
 });
 
 app.post("/ghl/app-webhook", async (req, res) => {
-    // ... (Mismo código install/uninstall) ...
     try {
         const evt = req.body;
         if (evt.type === "INSTALL") {
-             // Lógica Install
              const at = await ensureAgencyToken();
-             // ...
+             const ats = await getTokens(AGENCY_ROW_ID);
+             const lr = await axios.post("https://services.leadconnectorhq.com/oauth/locationToken", new URLSearchParams({ companyId: evt.companyId, locationId: evt.locationId }).toString(), { headers: { Authorization: `Bearer ${at}`, Version: GHL_API_VERSION, "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } });
+             await saveTokens(evt.locationId, { ...ats, locationAccess: lr.data });
+             await callGHLWithAgency({ method: "post", url: "https://services.leadconnectorhq.com/custom-menus/", data: { title: "WhatsApp - Clic&App", url: `${CUSTOM_MENU_URL_WA}?location_id=${evt.locationId}`, showOnCompany: false, showOnLocation: true, showToAllLocations: false, locations: [evt.locationId], openMode: "iframe", userRole: "all", allowCamera: false, allowMicrophone: false } }).catch(() => {});
              return res.json({ ok: true });
         }
         if (evt.type === "UNINSTALL") {
