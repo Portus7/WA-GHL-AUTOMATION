@@ -309,48 +309,75 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
+// 📩 UPSERT: Mensajes Entrantes Y Salientes
   sock.ev.on("messages.upsert", async (msg) => {
     try {
-      const m = msg.messages[0];
-      console.log(m, "contenido del mensajes ")
-      if (!m?.message) return;
-      if (botMessageIds.has(m.key.id)) return; // Ignorar eco
-      
-      const from = m.key.remoteJid;
-      console.log(from, "FROM", !from.includes("@lid"))
-      if (from === "status@broadcast" || from.includes("@newsletter")) return;
-      if (!from.includes("@s.whatsapp.net") && !from.includes("@lid")) return;
-      console.log("ENTRO ACA")
+        const m = msg.messages[0];
+        if (!m?.message) return;
+        
+        // 1. Ignorar Ecos del Bot (si tenemos el ID en caché)
+        if (botMessageIds.has(m.key.id)) return;
+
+        // --- 🔥 FIX: NORMALIZACIÓN DE JID (LID -> Standard) ---
+        let remoteJid = m.key.remoteJid;
+
+        // Si viene de un LID (Dispositivo vinculado), lo tratamos como si fuera el número normal
+        // Esto permite capturar los mensajes enviados desde el celular
+        if (remoteJid.includes("@lid")) {
+            remoteJid = remoteJid.replace("@lid", "@s.whatsapp.net");
+        }
+
+        // --- FILTROS ---
+        // Ignorar estados, canales, grupos y cosas raras
+        if (remoteJid === "status@broadcast" || remoteJid.includes("@newsletter")) return;
+        if (remoteJid.includes("@g.us")) return; // Ignorar grupos (opcional)
+        if (!remoteJid.includes("@s.whatsapp.net")) return;
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
 
-        const clientPhone = normalizePhone(from.split("@")[0]);
+        // Extraemos el teléfono del JID YA NORMALIZADO
+        const clientPhone = normalizePhone(remoteJid.split("@")[0]);
+        
+        // Datos del bot (Slot actual)
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
         const isFromMe = m.key.fromMe;
 
+        // -------------------------------------------------------
+        // LÓGICA DE GHL (Contactos y Logging)
+        // -------------------------------------------------------
+
+        // 1. Routing
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
+        
+        // Buscamos/Creamos contacto en GHL
         const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
 
         if (!contact?.id) return;
 
+        // Guardamos routing para mantener la conversación pegada a este número
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
 
         let messageForGHL = "";
-        let direction = "inbound"; // Default (gris)
+        let direction = "inbound"; // Default (gris/izquierda)
 
         if (isFromMe) {
-            // MENSAJE DESDE CELULAR -> AZUL (Derecha)
+            // ✅ MENSAJE ENVIADO DESDE TU CELULAR
+            // Lo marcamos como 'outbound' para que salga Azul/Derecha en GHL
+            // Le ponemos la firma para que el Webhook de GHL sepa que NO debe reenviarlo
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
             direction = "outbound"; 
-          } else {
-            // MENSAJE DEL CLIENTE -> GRIS (Izquierda)
+            console.log(`📱 Sync Celular -> GHL (+${clientPhone}): "${text.substring(0,10)}..."`);
+        } else {
+            // ✅ MENSAJE RECIBIDO DEL CLIENTE
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 
+            console.log(`📩 Inbound Cliente -> GHL (+${clientPhone}): "${text.substring(0,10)}..."`);
         }
 
+        // Subir a GHL
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction);
 
     } catch (error) { console.error("Upsert Error:", error.message); }
