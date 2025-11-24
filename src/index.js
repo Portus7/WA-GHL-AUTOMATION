@@ -147,7 +147,14 @@ function normalizePhone(phone) {
 
 async function saveRouting(clientPhone, locationId, contactId, channelNumber) {
   const normClient = normalizePhone(clientPhone);
-  const normChannel = normalizePhone(channelNumber); 
+  const normChannel = normalizePhone(channelNumber);
+
+  console.log(`💾 [DEBUG DB] Intentando guardar Routing:
+      - Cliente: ${normClient}
+      - Location: ${locationId}
+      - Contact ID: ${contactId}
+      - Canal (Slot): ${normChannel}`);
+
   const sql = `
     INSERT INTO phone_routing (phone, location_id, contact_id, channel_number, updated_at)
     VALUES ($1, $2, $3, $4, NOW())
@@ -155,10 +162,19 @@ async function saveRouting(clientPhone, locationId, contactId, channelNumber) {
     SET location_id = EXCLUDED.location_id,
         contact_id = COALESCE(EXCLUDED.contact_id, phone_routing.contact_id),
         channel_number = EXCLUDED.channel_number,
-        updated_at = NOW();
+        updated_at = NOW()
+    RETURNING *;
   `;
-  try { await pool.query(sql, [normClient, locationId, contactId, normChannel]); } 
-  catch (e) { console.error("Routing Error:", e.message); }
+
+  try {
+    const res = await pool.query(sql, [normClient, locationId, contactId, normChannel]);
+    console.log("✅ [DEBUG DB] Routing guardado exitosamente. Fila:", res.rows[0]);
+  } catch (e) {
+    console.error("❌ [CRITICAL DB ERROR] Falló saveRouting:");
+    console.error("   -> Mensaje:", e.message);
+    console.error("   -> Detalle:", e.detail); // Info específica de Postgres
+    console.error("   -> Hint:", e.hint);
+  }
 }
 
 async function getRoutingForPhone(clientPhone) {
@@ -179,22 +195,39 @@ async function getRoutingForPhone(clientPhone) {
 
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   const p = "+" + normalizePhone(phone); 
+  console.log(`🔎 [GHL] Buscando/Creando contacto: ${p} en ${locationId}`);
+
   if (contactId) {
     try {
       const lookupRes = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
       const contact = lookupRes.data.contact || lookupRes.data;
-      if (contact?.id) return contact;
-    } catch (err) { }
+      if (contact?.id) {
+          console.log("✅ [GHL] Contacto existente encontrado por ID:", contact.id);
+          return contact;
+      }
+    } catch (err) { console.warn(`⚠️ [GHL] No se encontró por ID ${contactId}, intentando crear...`); }
   }
+
   try {
     const createdRes = await callGHLWithLocation(locationId, {
       method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
       data: { locationId, phone: p, firstName: waName, source: "WhatsApp Baileys" }
     });
-    return createdRes.data.contact || createdRes.data;
+    const created = createdRes.data.contact || createdRes.data;
+    console.log("👤 [GHL] Contacto creado/recuperado exitosamente:", created.id);
+    return created;
   } catch (err) {
     const body = err.response?.data;
-    if (err.response?.status === 400 && body?.meta?.contactId) return { id: body.meta.contactId, phone: p };
+    const statusCode = err.response?.status;
+    
+    if (statusCode === 400 && body?.meta?.contactId) {
+        console.log("ℹ️ [GHL] Contacto ya existía (Error 400), usando ID:", body.meta.contactId);
+        return { id: body.meta.contactId, phone: p };
+    }
+    
+    console.error("❌ [GHL ERROR] Falló creación de contacto:");
+    console.error("   -> Status:", statusCode);
+    console.error("   -> Data:", JSON.stringify(body));
     return null;
   }
 }
@@ -324,65 +357,66 @@ async function startWhatsApp(locationId, slotId) {
   });
 
 // 📩 INBOUND (Mensajes Entrantes)
-  sock.ev.on("messages.upsert", async (msg) => {
+sock.ev.on("messages.upsert", async (msg) => {
     try {
         const m = msg.messages[0];
         if (!m?.message || m.key.fromMe) return;
 
         const from = m.key.remoteJid;
+        console.log(`📥 [DEBUG RAW] Mensaje recibido de JID: ${from}`);
 
-        // --- 🛑 FILTROS DE BASURA (CRÍTICO) ---
-        // 1. Ignorar Estados (Stories)
-        if (from === "status@broadcast") return;
-        
-        // 2. Ignorar Grupos (Si solo quieres chats 1 a 1)
-        if (from.includes("@g.us")) return;
-
-        // 3. Ignorar Canales/Newsletters
+        // --- FILTROS ---
+        if (from === "status@broadcast") return; // Ignorar estados
+        if (from.includes("@g.us")) {
+            console.log(`🚫 [DEBUG FILTER] Ignorando grupo: ${from}`);
+            return;
+        }
         if (from.includes("@newsletter")) return;
-        
-        // 4. Ignorar mensajes de sistema (protocolo)
-        if (from.includes("@s.whatsapp.net") === false) return;
-        // ---------------------------------------
+        if (!from.includes("@s.whatsapp.net")) {
+             console.log(`🚫 [DEBUG FILTER] JID no válido: ${from}`);
+             return;
+        }
+        // ---------------
 
-        // Extraer texto (soportando texto simple y extendido)
-        const text = m.message.conversation || 
-                     m.message.extendedTextMessage?.text || 
-                     m.message.imageMessage?.caption || 
-                     m.message.videoMessage?.caption;
+        const text = m.message.conversation || m.message.extendedTextMessage?.text;
+        if (!text) {
+            console.log("⚠️ [DEBUG] Mensaje sin texto (foto/sticker), saltando...");
+            return; 
+        }
 
-        if (!text) return; // Si es solo una foto sin texto o sticker, lo ignoramos por ahora
-
-        const waName = m.pushName || "Usuario WhatsApp";
+        const waName = m.pushName || "Usuario";
         const clientPhone = normalizePhone(from.split("@")[0]);
         
-        // Detectar mi propio número (Canal Receptor) de forma segura
-        // Baileys a veces devuelve "ID:AGENTE@s.whatsapp.net", limpiamos todo
+        // Obtener MI número
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
 
-        console.log(`📩 [${locationId} | Slot ${slotId}] Mensaje real de +${clientPhone}: "${text.substring(0, 20)}..."`);
+        console.log(`🎯 [DEBUG LOGIC] Procesando mensaje válido:
+           - Cliente: ${clientPhone}
+           - Mi Canal: ${myChannelNumber}
+           - Texto: ${text.substring(0, 15)}...`);
 
-        // 1. Routing: Guardamos que este cliente habló con ESTE location por ESTE canal
+        // 1. Routing DB
         const route = await getRoutingForPhone(clientPhone);
-        
-        // Si ya existe routing con otra location, lo respetamos? 
-        // En tu caso Multi-Slot para UNA location, el locationId siempre es el mismo,
-        // lo que cambia es el channelNumber (tu número).
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
 
+        // 2. GHL Contact
         const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId);
 
-        if (contact?.id) {
-            await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
-
-            // 2. Modificar mensaje para GHL: Agregar Source para que sepas a qué numero escribieron
-            const messageWithSource = `${text}\n\nSource: +${myChannelNumber}`;
-            
-            await sendMessageToGHLConversation(locationId, contact.id, messageWithSource);
+        if (!contact?.id) {
+            console.error("❌ [CRITICAL] No se pudo obtener un ID de contacto de GHL. Abortando.");
+            return;
         }
+
+        // 3. Guardar Routing (AQUÍ ES DONDE QUIERES VER EL LOG)
+        await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
+
+        // 4. Enviar a GHL
+        const messageWithSource = `${text}\n\nSource: +${myChannelNumber}`;
+        await sendMessageToGHLConversation(locationId, contact.id, messageWithSource);
+
     } catch (error) { 
-        console.error("❌ Error procesando inbound:", error.message); 
+        console.error("❌ [CRASH] Error fatal en messages.upsert:", error); 
     }
   });
 }
