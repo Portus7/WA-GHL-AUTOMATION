@@ -33,6 +33,35 @@ const pool = new Pool({
 // -----------------------------
 // HELPERS
 // -----------------------------
+async function forceRefreshToken(locationId) {
+  console.log(`🔄 Refrescando token forzado para: ${locationId}`);
+  const tokens = await getTokens(locationId);
+  if (!tokens) throw new Error(`No hay tokens para ${locationId}`);
+
+  try {
+    const body = new URLSearchParams({
+      client_id: process.env.GHL_CLIENT_ID,
+      client_secret: process.env.GHL_CLIENT_SECRET,
+      grant_type: "refresh_token",
+      refresh_token: tokens.locationAccess.refresh_token,
+    });
+
+    const refreshRes = await axios.post(
+      "https://services.leadconnectorhq.com/oauth/token",
+      body.toString(),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } }
+    );
+
+    const newToken = refreshRes.data;
+    await saveTokens(locationId, { ...tokens, locationAccess: newToken });
+    console.log(`✅ Token refrescado exitosamente para ${locationId}`);
+    return newToken.access_token;
+  } catch (e) {
+    console.error(`❌ Error fatal refrescando token: ${e.message}`);
+    throw e;
+  }
+}
+
 
 async function deleteSessionData(locationId, slot) {
   const sessionId = `${locationId}_slot${slot}`;
@@ -106,26 +135,54 @@ async function ensureAgencyToken() {
   }
 }
 
-async function ensureLocationToken(locationId, contactId) {
-  let tokens = await getTokens(locationId);
-  if (!tokens) throw new Error(`No hay tokens para ${locationId}`);
-  let locationToken = tokens.locationAccess;
+async function ensureLocationToken(locationId) {
+  const tokens = await getTokens(locationId);
+  if (!tokens?.locationAccess) throw new Error(`No hay tokens para ${locationId}`);
+  return { 
+      accessToken: tokens.locationAccess.access_token, 
+      realLocationId: tokens.locationAccess.locationId 
+  };
+}
+
+// 3. WRAPPER INTELIGENTE (Con Reintento Automático en 401)
+async function callGHLWithLocation(locationId, config) {
+  // Intento 1: Usar token actual
+  let { accessToken, realLocationId } = await ensureLocationToken(locationId);
+  
   try {
-    if (contactId) {
-      await axios.get(`https://services.leadconnectorhq.com/contacts/${contactId}`, {
-        headers: { Authorization: `Bearer ${locationToken.access_token}`, Accept: "application/json", Version: GHL_API_VERSION, "Location-Id": locationToken.locationId },
-        timeout: 10000
+    return await axios({
+      ...config,
+      headers: {
+        Accept: "application/json",
+        Version: GHL_API_VERSION,
+        Authorization: `Bearer ${accessToken}`,
+        "Location-Id": realLocationId,
+        ...(config.headers || {}),
+      },
+    });
+  } catch (error) {
+    // Si falla por Token Inválido (401), refrescamos y reintentamos UNA vez
+    if (error.response?.status === 401) {
+      console.warn(`⚠️ Token expirado (401) en petición GHL. Refrescando y reintentando...`);
+      
+      // A. Forzar refresco
+      const newAccessToken = await forceRefreshToken(locationId);
+      
+      // B. Reintentar petición con nuevo token
+      return await axios({
+        ...config,
+        headers: {
+          Accept: "application/json",
+          Version: GHL_API_VERSION,
+          Authorization: `Bearer ${newAccessToken}`, // Token nuevo
+          "Location-Id": realLocationId,
+          ...(config.headers || {}),
+        },
       });
     }
-    return { accessToken: locationToken.access_token, realLocationId: locationToken.locationId };
-  } catch (err) {
-    if (err.response?.status === 401) {
-      const body = new URLSearchParams({ client_id: process.env.GHL_CLIENT_ID, client_secret: process.env.GHL_CLIENT_SECRET, grant_type: "refresh_token", refresh_token: locationToken.refresh_token });
-      const refreshRes = await axios.post("https://services.leadconnectorhq.com/oauth/token", body.toString(), { headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } });
-      await saveTokens(locationId, { ...tokens, locationAccess: refreshRes.data });
-      return { accessToken: refreshRes.data.access_token, realLocationId: refreshRes.data.locationId };
-    }
-    throw err;
+    
+    // Si no es 401, o falla el reintento, lanzamos el error normal
+    throw error;
   }
 }
 
