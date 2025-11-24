@@ -611,17 +611,29 @@ async function waitForSocketOpen(sock) {
     });
 }
 
+// 4. Webhook Outbound ROBUSTO
 app.post("/ghl/webhook", async (req, res) => {
-  console.log("📨 [WEBHOOK DEBUG] Petición entrante desde GHL:", JSON.stringify(req.body));
   try {
     const { locationId, phone, message, type } = req.body;
-    if (!locationId || !phone || !message) return res.json({ ignored: true });
+    
+    // Validación básica
+    if (!locationId || !phone || !message) {
+        console.log("⚠️ Webhook ignorado: Faltan datos básicos.");
+        return res.json({ ignored: true });
+    }
 
+    // Solo procesar SMS/Outbound
     if (type === "Outbound" || type === "SMS") {
         const clientPhone = normalizePhone(phone);
-        const dbConfigs = await getLocationSlotsConfig(locationId);
+        console.log(`🔄 Procesando Outbound para ${clientPhone} en ${locationId}`);
+
+        // --- PASO 1: OBTENER CANDIDATOS (HÍBRIDO DB + MEMORIA) ---
         
-        const availableCandidates = dbConfigs.map(conf => {
+        // A. Intentamos obtener configuración de DB
+        let dbConfigs = await getLocationSlotsConfig(locationId);
+        
+        // B. Construimos la lista de candidatos basados en la DB
+        let availableCandidates = dbConfigs.map(conf => {
             const sess = sessions.get(`${locationId}_slot${conf.slot_id}`);
             return {
                 slot: conf.slot_id,
@@ -632,39 +644,90 @@ app.post("/ghl/webhook", async (req, res) => {
             };
         }).filter(c => c.session && c.session.isConnected);
 
-        if (availableCandidates.length === 0) return res.json({ error: "No connected devices" });
+        console.log(`📊 Candidatos según DB: ${availableCandidates.length}`);
 
+        // C. FALLBACK DE EMERGENCIA (Si la DB falla o está vacía, buscar en memoria)
+        if (availableCandidates.length === 0) {
+            console.warn("⚠️ No se hallaron candidatos en DB. Buscando en Memoria RAM...");
+            
+            for (const [sessId, sess] of sessions.entries()) {
+                // Verificamos si la sesión en memoria pertenece a esta location
+                if (sessId.startsWith(`${locationId}_slot`) && sess.isConnected) {
+                    const slotNum = parseInt(sessId.split("_slot")[1]);
+                    availableCandidates.push({
+                        slot: slotNum,
+                        priority: 99, // Prioridad baja por defecto
+                        tags: [],
+                        myNumber: sess.myNumber,
+                        session: sess
+                    });
+                }
+            }
+            console.log(`📊 Candidatos recuperados de Memoria: ${availableCandidates.length}`);
+        }
+
+        // Si después de todo sigue vacío, nos rendimos
+        if (availableCandidates.length === 0) {
+            console.error(`❌ [FATAL] No hay sesiones conectadas para ${locationId} ni en DB ni en Memoria.`);
+            return res.status(200).json({ error: "No connected devices" }); // Devuelvo 200 para que GHL no reintente infinitamente
+        }
+
+        // --- PASO 2: SELECCIÓN DE SLOT ---
         let selectedCandidate = null;
-        
-        // 1. Routing
+        let selectionReason = "";
+
+        // A) Routing Histórico
         const route = await getRoutingForPhone(clientPhone);
-        if (route?.channelNumber) selectedCandidate = availableCandidates.find(c => c.myNumber === route.channelNumber);
+        if (route?.channelNumber) {
+            selectedCandidate = availableCandidates.find(c => c.myNumber === route.channelNumber);
+            if(selectedCandidate) selectionReason = "Routing Histórico";
+        }
         
-        // 2. Tags
-        if (!selectedCandidate) selectedCandidate = availableCandidates.find(c => c.tags.includes("#priority"));
+        // B) Tags
+        if (!selectedCandidate) {
+            selectedCandidate = availableCandidates.find(c => c.tags.includes("#priority"));
+            if(selectedCandidate) selectionReason = "Tag #priority";
+        }
         
-        // 3. Priority
-        if (!selectedCandidate) selectedCandidate = availableCandidates[0];
+        // C) Prioridad Numérica (Ordenamos el array por si acaso venimos del fallback)
+        if (!selectedCandidate) {
+            availableCandidates.sort((a, b) => a.priority - b.priority);
+            selectedCandidate = availableCandidates[0];
+            selectionReason = `Prioridad Numérica (${selectedCandidate.priority})`;
+        }
 
         const sessionToUse = selectedCandidate.session;
         const jid = clientPhone + "@s.whatsapp.net";
 
-        // 🔥 INTENTO ROBUSTO DE ENVÍO 🔥
+        console.log(`🚀 Intentando enviar usando Slot ${selectedCandidate.slot} (+${selectedCandidate.myNumber}). Razón: ${selectionReason}`);
+
+        // --- PASO 3: ENVÍO CON REINTENTO ---
         try {
-            await waitForSocketOpen(sessionToUse.sock); // Esperar a que esté listo
+            await waitForSocketOpen(sessionToUse.sock); 
             await sessionToUse.sock.sendMessage(jid, { text: message });
+            console.log("✅ Mensaje enviado a la red de WhatsApp.");
         } catch (e) {
             console.warn(`⚠️ Primer intento falló (${e.message}). Reintentando en 1s...`);
             await new Promise(r => setTimeout(r, 1000));
-            await sessionToUse.sock.sendMessage(jid, { text: message }); 
+            try {
+                await sessionToUse.sock.sendMessage(jid, { text: message });
+                console.log("✅ Mensaje enviado en reintento.");
+            } catch (finalErr) {
+                console.error(`❌ Error final enviando: ${finalErr.message}`);
+                return res.status(500).json({ error: "Failed to send" });
+            }
         }
 
+        // Guardar routing
         await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
+
         return res.json({ ok: true });
     }
+    
     res.json({ ignored: true });
+
   } catch (err) { 
-      console.error(err); 
+      console.error("❌ Error no controlado en Webhook:", err); 
       res.status(500).json({ error: "Error interno" }); 
   }
 });
