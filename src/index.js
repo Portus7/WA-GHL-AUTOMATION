@@ -16,7 +16,6 @@ const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "https://wa.clicand
 const AGENCY_ROW_ID = "__AGENCY__";
 
 // 🧠 GESTOR DE SESIONES (MEMORIA)
-// Clave: "locationId_slotId" (ej: loc123_1)
 const sessions = new Map(); 
 
 // -----------------------------
@@ -65,19 +64,13 @@ async function deleteSessionData(locationId, slot) {
 
 // Actualiza el número conectado y asegura que el slot exista en DB
 async function syncSlotInfo(locationId, slotId, phoneNumber) {
-  // Aseguramos que la tabla location_slots tenga este dispositivo
   const check = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
   const res = await pool.query(check, [locationId, slotId]);
 
   if (res.rows.length === 0) {
-    // Si es nuevo, insertamos con prioridad default igual al ID del slot (1=1, 2=2)
-    const insert = `
-      INSERT INTO location_slots (location_id, slot_id, phone_number, priority)
-      VALUES ($1, $2, $3, $4)
-    `;
+    const insert = `INSERT INTO location_slots (location_id, slot_id, phone_number, priority) VALUES ($1, $2, $3, $4)`;
     await pool.query(insert, [locationId, slotId, phoneNumber, slotId]);
   } else {
-    // Si existe, actualizamos solo el número
     const update = "UPDATE location_slots SET phone_number = $1, updated_at = NOW() WHERE location_id = $2 AND slot_id = $3";
     await pool.query(update, [phoneNumber, locationId, slotId]);
   }
@@ -85,7 +78,6 @@ async function syncSlotInfo(locationId, slotId, phoneNumber) {
 
 // Obtener configuración completa de todos los slots de una location
 async function getLocationSlotsConfig(locationId) {
-    // Ordenamos por prioridad ASCENDENTE (1, 2, 3...)
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
     try {
         const res = await pool.query(sql, [locationId]);
@@ -97,8 +89,7 @@ async function getLocationSlotsConfig(locationId) {
 // HELPERS: BD Tokens & Auth GHL
 // -----------------------------
 async function saveTokens(locationId, tokenData) {
-  const sql = `INSERT INTO auth_db (locationid, raw_token) VALUES ($1, $2::jsonb)
-    ON CONFLICT (locationid) DO UPDATE SET raw_token = EXCLUDED.raw_token`;
+  const sql = `INSERT INTO auth_db (locationid, raw_token) VALUES ($1, $2::jsonb) ON CONFLICT (locationid) DO UPDATE SET raw_token = EXCLUDED.raw_token`;
   await pool.query(sql, [locationId, JSON.stringify(tokenData)]);
 }
 
@@ -167,7 +158,7 @@ async function callGHLWithLocation(locationId, config, contactId) {
 }
 
 // -----------------------------
-// ROUTING INTELIGENTE (Multicanal)
+// ROUTING INTELIGENTE
 // -----------------------------
 function normalizePhone(phone) {
   if (!phone) return "";
@@ -252,7 +243,6 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 
 async function startWhatsApp(locationId, slotId) {
   const sessionId = `${locationId}_slot${slotId}`; 
-  
   const existing = sessions.get(sessionId);
   if (existing && existing.sock) return existing;
 
@@ -303,12 +293,19 @@ async function startWhatsApp(locationId, slotId) {
   const { state, saveCreds } = await usePostgreSQLAuthState(pool, sessionId);
   const { version } = await fetchLatestBaileysVersion();
 
+  // 🔧 MEJORA ANTI-TIMEOUT: Configuración robusta del socket
   const sock = makeWASocket({
     version,
-    logger: pino({ level: "silent" }),
+    logger: pino({ level: "silent" }), // logs limpios
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })) },
     browser: [`ClicAndApp Slot ${slotId}`, "Chrome", "10.0"],
-    connectTimeoutMs: 60000,
+    
+    // Evita timeouts agresivos
+    connectTimeoutMs: 60000, 
+    defaultQueryTimeoutMs: 60000, // Importante para evitar el error de USync
+    keepAliveIntervalMs: 10000,
+    emitOwnEvents: false,
+    retryRequestDelayMs: 250,
   });
 
   currentSession.sock = sock;
@@ -333,8 +330,6 @@ async function startWhatsApp(locationId, slotId) {
         currentSession.myNumber = myPhone;
         
         console.log(`✅ ${sessionId} CONECTADO: +${myPhone}`); 
-
-        // Sincronizamos con la DB para habilitar la jerarquía
         syncSlotInfo(locationId, slotId, myPhone).catch(console.error);
     }
     
@@ -350,7 +345,6 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
-  // 📩 INBOUND (Mensajes Entrantes)
   sock.ev.on("messages.upsert", async (msg) => {
     const m = msg.messages[0];
     if (!m?.message || m.key.fromMe) return;
@@ -360,26 +354,19 @@ async function startWhatsApp(locationId, slotId) {
     const from = m.key.remoteJid;
     const waName = m.pushName || "Usuario";
     const clientPhone = normalizePhone(from.split("@")[0]);
-    
-    // Detectar mi propio número (Canal Receptor)
     const myJid = sock.user?.id;
     const myChannelNumber = myJid ? normalizePhone(myJid.split(":")[0]) : "Desconocido";
 
-    console.log(`📩 [${locationId} | Slot ${slotId}] Recibido de +${clientPhone} al canal +${myChannelNumber}`);
+    console.log(`📩 [${locationId} | Slot ${slotId}] Recibido de +${clientPhone}`);
 
     try {
-        // 1. Routing: Guardamos que este cliente habló con ESTE location por ESTE canal
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
-
         const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId);
 
         if (contact?.id) {
             await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
-
-            // 2. Modificar mensaje para GHL: Agregar Source
             const messageWithSource = `${text}\n\nSource: +${myChannelNumber}`;
-            
             await sendMessageToGHLConversation(locationId, contact.id, messageWithSource);
         }
     } catch (error) { console.error("❌ Error inbound:", error); }
@@ -390,18 +377,15 @@ async function startWhatsApp(locationId, slotId) {
 // ENDPOINTS HTTP
 // -----------------------------
 
-// 1. Start Connection (Por Slot)
 app.post("/start-whatsapp", async (req, res) => {
   const { locationId, slot } = req.query;
   if (!locationId || !slot) return res.status(400).json({ error: "Faltan params" });
-  
   try {
     await startWhatsApp(locationId, slot);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: "Error starting" }); }
 });
 
-// 2. QR (Por Slot)
 app.get("/qr", (req, res) => {
   const { locationId, slot } = req.query;
   const sessionId = `${locationId}_slot${slot}`;
@@ -410,33 +394,31 @@ app.get("/qr", (req, res) => {
   res.json({ qr: session.qr });
 });
 
-// 3. Status (Por Slot)
+// 3. Status (Mejorado para incluir tags y prioridad)
 app.get("/status", async (req, res) => {
   const { locationId, slot } = req.query;
   const sessionId = `${locationId}_slot${slot}`;
   const session = sessions.get(sessionId);
   
-  // Buscar info extra en DB (Prioridad/Tags)
+  // Buscar info extra en DB
   let extraInfo = {};
   try {
       const dbInfo = await pool.query("SELECT priority, tags FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
-      if (dbInfo.rows.length > 0) {
-          extraInfo = dbInfo.rows[0];
-      }
+      if (dbInfo.rows.length > 0) extraInfo = dbInfo.rows[0];
   } catch(e) {}
 
   if (session && session.isConnected) {
       return res.json({ 
           connected: true, 
           myNumber: session.myNumber,
-          priority: extraInfo.priority, // Enviamos a front
-          tags: extraInfo.tags          // Enviamos a front
+          priority: extraInfo.priority || 99,
+          tags: extraInfo.tags || [] 
       });
   }
-  res.json({ connected: false });
+  res.json({ connected: false, priority: extraInfo.priority, tags: extraInfo.tags });
 });
 
-// 4. Webhook GHL (Outbound con Jerarquía)
+// 4. Webhook Outbound con REINTENTO
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
@@ -444,11 +426,8 @@ app.post("/ghl/webhook", async (req, res) => {
 
     if (type === "Outbound" || type === "SMS") {
         const clientPhone = normalizePhone(phone);
-
-        // --- PASO 1: OBTENER CANDIDATOS ---
-        const dbConfigs = await getLocationSlotsConfig(locationId); // Ordenado por priority ASC
+        const dbConfigs = await getLocationSlotsConfig(locationId);
         
-        // Filtramos solo los conectados
         const availableCandidates = dbConfigs.map(conf => {
             const sess = sessions.get(`${locationId}_slot${conf.slot_id}`);
             return {
@@ -465,46 +444,44 @@ app.post("/ghl/webhook", async (req, res) => {
             return res.json({ error: "No connected devices" });
         }
 
-        // --- PASO 2: APLICAR JERARQUÍA ---
         let selectedCandidate = null;
         let selectionReason = "";
 
-        // A) CHECK ROUTING (Sticky Session)
+        // A) Routing
         const route = await getRoutingForPhone(clientPhone);
         if (route?.channelNumber) {
-            const stickyCandidate = availableCandidates.find(c => c.myNumber === route.channelNumber);
-            if (stickyCandidate) {
-                selectedCandidate = stickyCandidate;
-                selectionReason = "Routing Histórico";
-            }
+            selectedCandidate = availableCandidates.find(c => c.myNumber === route.channelNumber);
+            if(selectedCandidate) selectionReason = "Routing Histórico";
         }
-
-        // B) CHECK TAGS #priority (Gana sobre routing si no hay o si se quiere forzar)
+        // B) Tags
         if (!selectedCandidate) {
-            const priorityTagged = availableCandidates.find(c => c.tags.includes("#priority"));
-            if (priorityTagged) {
-                selectedCandidate = priorityTagged;
-                selectionReason = "Tag #priority";
-            }
+            selectedCandidate = availableCandidates.find(c => c.tags.includes("#priority"));
+            if(selectedCandidate) selectionReason = "Tag #priority";
         }
-
-        // C) CHECK PRIORIDAD NUMÉRICA (Fallback)
+        // C) Prioridad
         if (!selectedCandidate) {
-            selectedCandidate = availableCandidates[0]; // El primero (priority más bajo)
+            selectedCandidate = availableCandidates[0];
             selectionReason = `Prioridad Numérica (${selectedCandidate.priority})`;
         }
 
-        // --- PASO 3: ENVIAR ---
         const sessionToUse = selectedCandidate.session;
-        console.log(`🚀 Enviando por Slot ${selectedCandidate.slot} (+${selectedCandidate.myNumber}). Razón: ${selectionReason}`);
-
         const jid = clientPhone + "@s.whatsapp.net";
-        await sessionToUse.sock.sendMessage(jid, { text: message });
 
-        // Guardar routing para mantener conversación
+        // 🔧 MEJORA ANTI-TIMEOUT: Reintento
+        try {
+            console.log(`🚀 Intentando enviar con Slot ${selectedCandidate.slot}...`);
+            await sessionToUse.sock.sendMessage(jid, { text: message });
+        } catch (sendErr) {
+            console.warn(`⚠️ Error enviando (Intento 1): ${sendErr.message}. Reintentando...`);
+            // Esperar 1 seg y reintentar
+            await new Promise(r => setTimeout(r, 1000));
+            await sessionToUse.sock.sendMessage(jid, { text: message }); // Si falla aquí, va al catch general
+        }
+
+        console.log(`📤 Enviado a +${clientPhone} vía Slot ${selectedCandidate.slot}`);
         await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
 
-        return res.json({ ok: true, usedSlot: selectedCandidate.slot, reason: selectionReason });
+        return res.json({ ok: true });
     }
     res.json({ ignored: true });
   } catch (err) { 
@@ -513,7 +490,6 @@ app.post("/ghl/webhook", async (req, res) => {
   }
 });
 
-// 5. Configurar Slot (Tags/Priority)
 app.post("/config-slot", async (req, res) => {
   const { locationId, slot, phoneNumber, priority, addTag, removeTag } = req.body;
   if (!locationId || (!slot && !phoneNumber)) return res.status(400).json({ error: "Faltan datos" });
@@ -539,27 +515,27 @@ app.post("/config-slot", async (req, res) => {
     await pool.query(update, [JSON.stringify(currentTags), currentPriority, locationId, targetSlot]);
 
     res.json({ success: true, slot: targetSlot, tags: currentTags, priority: currentPriority });
-
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 6. Eliminar Slot
 app.post("/remove-slot", async (req, res) => {
     const { locationId, slot } = req.query;
     if (!locationId || !slot) return res.status(400).json({ error: "Faltan datos" });
-
     try {
         await deleteSessionData(locationId, slot);
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 7. Install Webhook
+// 5. App Webhook (INSTALL / UNINSTALL)
 app.post("/ghl/app-webhook", async (req, res) => {
     try {
         const event = req.body;
-        if (event.type === "INSTALL") {
-          const { locationId, companyId } = event;
+        const { type, locationId, companyId } = event;
+
+        // --- EVENTO INSTALL ---
+        if (type === "INSTALL") {
+          console.log(`🔔 INSTALL: ${locationId}`);
           const agencyToken = await ensureAgencyToken();
           const agencyTokens = await getTokens(AGENCY_ROW_ID);
           
@@ -581,14 +557,43 @@ app.post("/ghl/app-webhook", async (req, res) => {
                 showOnCompany: false, showOnLocation: true, showToAllLocations: false, locations: [locationId],
                 openMode: "iframe", userRole: "all", allowCamera: false, allowMicrophone: false
               },
-            }).catch(() => {});
+            }).catch(e => console.warn("Menu warning:", e.message));
           return res.json({ ok: true });
         }
+
+        // --- EVENTO UNINSTALL ---
+        if (type === "UNINSTALL") {
+            console.log(`🗑️ UNINSTALL: ${locationId}`);
+            
+            // 1. Buscar todos los slots activos de esta location
+            const activeSlots = await pool.query("SELECT slot_id FROM location_slots WHERE location_id = $1", [locationId]);
+            
+            // 2. Desconectar y limpiar cada slot
+            for(const row of activeSlots.rows) {
+                await deleteSessionData(locationId, row.slot_id);
+            }
+
+            // 3. Borrar tokens de GHL
+            await pool.query("DELETE FROM auth_db WHERE locationid = $1", [locationId]);
+            
+            // Nota: No podemos mostrar formulario al usuario aquí porque es un evento de backend.
+            console.log("✅ Datos de ubicación eliminados post-uninstall.");
+            return res.json({ ok: true });
+        }
+
         res.json({ ignored: true });
-    } catch (e) { res.status(500).json({ error: "Error" }); }
+    } catch (e) { 
+        console.error("Webhook Error:", e);
+        res.status(500).json({ error: "Error" }); 
+    }
 });
 
-// Restaurar Sesiones
+// Endpoint Config para Frontend
+app.get("/config", async (req, res) => {
+    // Por ahora hardcoded, pero podrías guardarlo en DB si quieres variar por cliente
+    res.json({ max_slots: 3 });
+});
+
 async function restoreSessions() {
   console.log("🔄 Restaurando sesiones...");
   try {
