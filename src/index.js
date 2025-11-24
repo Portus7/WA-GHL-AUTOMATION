@@ -309,6 +309,7 @@ async function startWhatsApp(locationId, slotId) {
 
   sock.ev.on("messages.upsert", async (msg) => {
     try {
+      console.log("ENTRO ACA")
         const m = msg.messages[0];
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; // Ignorar eco
@@ -341,7 +342,6 @@ async function startWhatsApp(locationId, slotId) {
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
             direction = "outbound"; 
           } else {
-            console.log("ENTRO ACA")
             // MENSAJE DEL CLIENTE -> GRIS (Izquierda)
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 
