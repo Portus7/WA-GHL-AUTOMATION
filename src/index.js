@@ -338,10 +338,10 @@ async function startWhatsApp(locationId, slotId) {
 
         if (isFromMe) {
             // MENSAJE DESDE CELULAR -> AZUL (Derecha)
-            console.log("ENTRO ACA")
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
             direction = "outbound"; 
-        } else {
+          } else {
+            console.log("ENTRO ACA")
             // MENSAJE DEL CLIENTE -> GRIS (Izquierda)
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 
