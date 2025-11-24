@@ -311,7 +311,7 @@ async function startWhatsApp(locationId, slotId) {
   sock.ev.on("messages.upsert", async (msg) => {
     try {
       const m = msg.messages[0];
-      Console.log(m, "contenido del mensajes")
+      console.log(m, "contenido del mensajes")
       if (!m?.message) return;
       if (botMessageIds.has(m.key.id)) return; // Ignorar eco
       console.log("ENTRO ACA")
