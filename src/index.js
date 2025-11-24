@@ -3,9 +3,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const express = require("express");
 const pino = require("pino");
-const qrcodeTerminal = require("qrcode-terminal");
 const { webcrypto } = require("crypto");
-const fs = require("fs");
 const { Pool } = require("pg");
 const axios = require("axios");
 
@@ -16,9 +14,6 @@ const PORT = process.env.PORT || 5000;
 const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
 const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "https://wa.clicandapp.com";
 const AGENCY_ROW_ID = "__AGENCY__";
-
-// CONFIG: Cuántos números permitimos por sub-agencia
-const MAX_SLOTS = 3;
 
 // 🧠 GESTOR DE SESIONES (MEMORIA)
 // Clave: "locationId_slotId" (ej: loc123_1)
@@ -37,7 +32,69 @@ const pool = new Pool({
 });
 
 // -----------------------------
-// HELPERS: BD Tokens & Auth
+// HELPERS: Gestión de Sesiones y Configuración
+// -----------------------------
+
+// Borra sesión de Memoria y DB
+async function deleteSessionData(locationId, slot) {
+  const sessionId = `${locationId}_slot${slot}`;
+  const session = sessions.get(sessionId);
+
+  // 1. Cerrar socket si existe
+  if (session && session.sock) {
+    try { 
+        await session.sock.logout(); 
+        session.sock.end(undefined); 
+    } catch (e) {}
+  }
+
+  // 2. Eliminar de Memoria
+  sessions.delete(sessionId);
+
+  // 3. Eliminar de Base de Datos (baileys_auth)
+  try {
+    await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
+  } catch (e) { console.error("Error eliminando sesión de DB:", e); }
+  
+  // 4. Eliminar Configuración del Slot (Tags/Prioridad)
+  try {
+    await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
+    console.log(`🗑️ Datos de Slot eliminados: ${sessionId}`);
+  } catch (e) { console.error("Error eliminando config slot:", e); }
+}
+
+// Actualiza el número conectado y asegura que el slot exista en DB
+async function syncSlotInfo(locationId, slotId, phoneNumber) {
+  // Aseguramos que la tabla location_slots tenga este dispositivo
+  const check = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
+  const res = await pool.query(check, [locationId, slotId]);
+
+  if (res.rows.length === 0) {
+    // Si es nuevo, insertamos con prioridad default igual al ID del slot (1=1, 2=2)
+    const insert = `
+      INSERT INTO location_slots (location_id, slot_id, phone_number, priority)
+      VALUES ($1, $2, $3, $4)
+    `;
+    await pool.query(insert, [locationId, slotId, phoneNumber, slotId]);
+  } else {
+    // Si existe, actualizamos solo el número
+    const update = "UPDATE location_slots SET phone_number = $1, updated_at = NOW() WHERE location_id = $2 AND slot_id = $3";
+    await pool.query(update, [phoneNumber, locationId, slotId]);
+  }
+}
+
+// Obtener configuración completa de todos los slots de una location
+async function getLocationSlotsConfig(locationId) {
+    // Ordenamos por prioridad ASCENDENTE (1, 2, 3...)
+    const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
+    try {
+        const res = await pool.query(sql, [locationId]);
+        return res.rows; 
+    } catch (e) { return []; }
+}
+
+// -----------------------------
+// HELPERS: BD Tokens & Auth GHL
 // -----------------------------
 async function saveTokens(locationId, tokenData) {
   const sql = `INSERT INTO auth_db (locationid, raw_token) VALUES ($1, $2::jsonb)
@@ -115,18 +172,16 @@ async function callGHLWithLocation(locationId, config, contactId) {
 function normalizePhone(phone) {
   if (!phone) return "";
   const cleaned = phone.replace(/[^\d+]/g, "");
-  // Asegurar formato internacional sin + para comparaciones internas o con + para DB
   return cleaned; 
 }
 
-function formatJid(phone) {
-  return normalizePhone(phone) + "@s.whatsapp.net";
+function extractPhoneFromJid(jid) {
+  return jid.split("@")[0].split(":")[0];
 }
 
-// Guardamos: Cliente, Location y POR QUÉ canal (número propio) se hablaron
 async function saveRouting(clientPhone, locationId, contactId, channelNumber) {
   const normClient = normalizePhone(clientPhone);
-  const normChannel = normalizePhone(channelNumber); // El numero de whatsapp de la agencia
+  const normChannel = normalizePhone(channelNumber); 
 
   const sql = `
     INSERT INTO phone_routing (phone, location_id, contact_id, channel_number, updated_at)
@@ -150,7 +205,7 @@ async function getRoutingForPhone(clientPhone) {
         return { 
             locationId: res.rows[0].location_id, 
             contactId: res.rows[0].contact_id,
-            channelNumber: res.rows[0].channel_number // El último número de agencia usado
+            channelNumber: res.rows[0].channel_number 
         };
     }
     return null;
@@ -196,7 +251,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 async function startWhatsApp(locationId, slotId) {
-  const sessionId = `${locationId}_slot${slotId}`; // ID Único: loc123_slot1
+  const sessionId = `${locationId}_slot${slotId}`; 
   
   const existing = sessions.get(sessionId);
   if (existing && existing.sock) return existing;
@@ -272,12 +327,15 @@ async function startWhatsApp(locationId, slotId) {
     if (connection === "open") { 
         currentSession.isConnected = true; 
         currentSession.qr = null; 
-        // Extraer número propio conectado
+        
         const myJid = sock.user?.id;
         const myPhone = myJid ? normalizePhone(myJid.split(":")[0]) : "Desconocido";
         currentSession.myNumber = myPhone;
         
         console.log(`✅ ${sessionId} CONECTADO: +${myPhone}`); 
+
+        // Sincronizamos con la DB para habilitar la jerarquía
+        syncSlotInfo(locationId, slotId, myPhone).catch(console.error);
     }
     
     if (connection === "close") {
@@ -353,18 +411,32 @@ app.get("/qr", (req, res) => {
 });
 
 // 3. Status (Por Slot)
-app.get("/status", (req, res) => {
+app.get("/status", async (req, res) => {
   const { locationId, slot } = req.query;
   const sessionId = `${locationId}_slot${slot}`;
   const session = sessions.get(sessionId);
   
+  // Buscar info extra en DB (Prioridad/Tags)
+  let extraInfo = {};
+  try {
+      const dbInfo = await pool.query("SELECT priority, tags FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
+      if (dbInfo.rows.length > 0) {
+          extraInfo = dbInfo.rows[0];
+      }
+  } catch(e) {}
+
   if (session && session.isConnected) {
-      return res.json({ connected: true, myNumber: session.myNumber });
+      return res.json({ 
+          connected: true, 
+          myNumber: session.myNumber,
+          priority: extraInfo.priority, // Enviamos a front
+          tags: extraInfo.tags          // Enviamos a front
+      });
   }
   res.json({ connected: false });
 });
 
-// 4. Webhook GHL (Outbound Routing Inteligente)
+// 4. Webhook GHL (Outbound con Jerarquía)
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
@@ -373,102 +445,158 @@ app.post("/ghl/webhook", async (req, res) => {
     if (type === "Outbound" || type === "SMS") {
         const clientPhone = normalizePhone(phone);
 
-        // 1. Buscamos en DB: ¿Por qué número me habló este cliente la última vez?
+        // --- PASO 1: OBTENER CANDIDATOS ---
+        const dbConfigs = await getLocationSlotsConfig(locationId); // Ordenado por priority ASC
+        
+        // Filtramos solo los conectados
+        const availableCandidates = dbConfigs.map(conf => {
+            const sess = sessions.get(`${locationId}_slot${conf.slot_id}`);
+            return {
+                slot: conf.slot_id,
+                priority: conf.priority,
+                tags: conf.tags || [],
+                myNumber: conf.phone_number, 
+                session: sess
+            };
+        }).filter(c => c.session && c.session.isConnected);
+
+        if (availableCandidates.length === 0) {
+            console.error(`❌ [${locationId}] No hay WhatsApps conectados.`);
+            return res.json({ error: "No connected devices" });
+        }
+
+        // --- PASO 2: APLICAR JERARQUÍA ---
+        let selectedCandidate = null;
+        let selectionReason = "";
+
+        // A) CHECK ROUTING (Sticky Session)
         const route = await getRoutingForPhone(clientPhone);
-        let targetChannel = route?.channelNumber; // Ej: 595952112
-
-        // 2. Buscar qué Slot tiene ese número conectado
-        let sessionToUse = null;
-        let foundSlot = 0;
-
-        // Si tenemos un canal previo, buscamos qué slot lo tiene
-        if (targetChannel) {
-            for (let i = 1; i <= MAX_SLOTS; i++) {
-                const sId = `${locationId}_slot${i}`;
-                const sess = sessions.get(sId);
-                if (sess && sess.isConnected && sess.myNumber === targetChannel) {
-                    sessionToUse = sess;
-                    foundSlot = i;
-                    break;
-                }
+        if (route?.channelNumber) {
+            const stickyCandidate = availableCandidates.find(c => c.myNumber === route.channelNumber);
+            if (stickyCandidate) {
+                selectedCandidate = stickyCandidate;
+                selectionReason = "Routing Histórico";
             }
         }
 
-        // 3. Fallback: Si no hay historia o el slot está desconectado, usar el Slot 1 (o cualquiera conectado)
-        if (!sessionToUse) {
-            console.log(`⚠️ No se encontró canal previo (${targetChannel}) para ${clientPhone}, buscando default...`);
-            for (let i = 1; i <= MAX_SLOTS; i++) {
-                const sId = `${locationId}_slot${i}`;
-                const sess = sessions.get(sId);
-                if (sess && sess.isConnected) {
-                    sessionToUse = sess;
-                    foundSlot = i;
-                    targetChannel = sess.myNumber; // Actualizamos para guardar en routing
-                    break;
-                }
+        // B) CHECK TAGS #priority (Gana sobre routing si no hay o si se quiere forzar)
+        if (!selectedCandidate) {
+            const priorityTagged = availableCandidates.find(c => c.tags.includes("#priority"));
+            if (priorityTagged) {
+                selectedCandidate = priorityTagged;
+                selectionReason = "Tag #priority";
             }
         }
 
-        if (!sessionToUse) {
-            console.error(`❌ No hay ningún WhatsApp conectado para ${locationId}`);
-            return res.json({ error: "No WhatsApp connected" });
+        // C) CHECK PRIORIDAD NUMÉRICA (Fallback)
+        if (!selectedCandidate) {
+            selectedCandidate = availableCandidates[0]; // El primero (priority más bajo)
+            selectionReason = `Prioridad Numérica (${selectedCandidate.priority})`;
         }
 
-        // 4. Enviar
+        // --- PASO 3: ENVIAR ---
+        const sessionToUse = selectedCandidate.session;
+        console.log(`🚀 Enviando por Slot ${selectedCandidate.slot} (+${selectedCandidate.myNumber}). Razón: ${selectionReason}`);
+
         const jid = clientPhone + "@s.whatsapp.net";
         await sessionToUse.sock.sendMessage(jid, { text: message });
-        console.log(`📤 Outbound [${locationId}] a +${clientPhone} vía Slot ${foundSlot} (+${sessionToUse.myNumber})`);
 
-        // 5. Actualizar Routing (Para mantener la conversación en este canal)
-        await saveRouting(clientPhone, locationId, null, sessionToUse.myNumber);
+        // Guardar routing para mantener conversación
+        await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
 
-        return res.json({ ok: true });
+        return res.json({ ok: true, usedSlot: selectedCandidate.slot, reason: selectionReason });
     }
     res.json({ ignored: true });
-  } catch (err) { console.error(err); res.status(500).json({ error: "Error" }); }
+  } catch (err) { 
+      console.error(err); 
+      res.status(500).json({ error: "Error interno" }); 
+  }
 });
 
-// 5. Install Webhook (Menu Creator)
+// 5. Configurar Slot (Tags/Priority)
+app.post("/config-slot", async (req, res) => {
+  const { locationId, slot, phoneNumber, priority, addTag, removeTag } = req.body;
+  if (!locationId || (!slot && !phoneNumber)) return res.status(400).json({ error: "Faltan datos" });
+
+  try {
+    let targetSlot = slot;
+    if (!targetSlot && phoneNumber) {
+        const normPhone = normalizePhone(phoneNumber);
+        const find = await pool.query("SELECT slot_id FROM location_slots WHERE location_id = $1 AND phone_number = $2", [locationId, normPhone]);
+        if (find.rows.length === 0) return res.status(404).json({ error: "Número no encontrado" });
+        targetSlot = find.rows[0].slot_id;
+    }
+
+    const check = await pool.query("SELECT tags, priority FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, targetSlot]);
+    let currentTags = check.rows[0]?.tags || [];
+    let currentPriority = check.rows[0]?.priority || 99;
+
+    if (addTag && !currentTags.includes(addTag)) currentTags.push(addTag);
+    if (removeTag) currentTags = currentTags.filter(t => t !== removeTag);
+    if (priority !== undefined) currentPriority = parseInt(priority);
+
+    const update = `UPDATE location_slots SET tags = $1::jsonb, priority = $2, updated_at = NOW() WHERE location_id = $3 AND slot_id = $4`;
+    await pool.query(update, [JSON.stringify(currentTags), currentPriority, locationId, targetSlot]);
+
+    res.json({ success: true, slot: targetSlot, tags: currentTags, priority: currentPriority });
+
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 6. Eliminar Slot
+app.post("/remove-slot", async (req, res) => {
+    const { locationId, slot } = req.query;
+    if (!locationId || !slot) return res.status(400).json({ error: "Faltan datos" });
+
+    try {
+        await deleteSessionData(locationId, slot);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 7. Install Webhook
 app.post("/ghl/app-webhook", async (req, res) => {
-    // ... (Mismo código de instalación de siempre)
-    // Solo asegúrate de que la URL del menú siga siendo la misma
-    // Tu frontend manejará los slots, el backend solo necesita locationId
     try {
         const event = req.body;
         if (event.type === "INSTALL") {
           const { locationId, companyId } = event;
-          // ... (Tokens Logic) ...
-          // ...
-          // Menu creation:
+          const agencyToken = await ensureAgencyToken();
+          const agencyTokens = await getTokens(AGENCY_ROW_ID);
+          
+          let locTokenRes;
+          try {
+            locTokenRes = await axios.post("https://services.leadconnectorhq.com/oauth/locationToken", 
+               new URLSearchParams({ companyId, locationId }).toString(), 
+               { headers: { Authorization: `Bearer ${agencyToken}`, Version: GHL_API_VERSION, "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } }
+            );
+          } catch(e) { return res.status(500).json({ error: "Token Fail" }); }
+
+          await saveTokens(locationId, { ...agencyTokens, locationAccess: locTokenRes.data });
+
            await callGHLWithAgency({
               method: "post", url: "https://services.leadconnectorhq.com/custom-menus/",
               data: {
                 title: "WhatsApp - Clic&App",
                 url: `${CUSTOM_MENU_URL_WA}?location_id=${locationId}`, 
-                // ... resto de config
                 showOnCompany: false, showOnLocation: true, showToAllLocations: false, locations: [locationId],
                 openMode: "iframe", userRole: "all", allowCamera: false, allowMicrophone: false
               },
-            });
+            }).catch(() => {});
           return res.json({ ok: true });
         }
         res.json({ ignored: true });
     } catch (e) { res.status(500).json({ error: "Error" }); }
 });
 
-// Restaurar Sesiones (Loop por slots)
+// Restaurar Sesiones
 async function restoreSessions() {
   console.log("🔄 Restaurando sesiones...");
   try {
     const res = await pool.query("SELECT DISTINCT session_id FROM baileys_auth");
     for (const row of res.rows) {
-      // session_id ahora es "loc123_slot1"
-      // Necesitamos parsearlo para llamar a startWhatsApp
       const parts = row.session_id.split("_slot");
       if (parts.length === 2) {
-          const locId = parts[0];
-          const slotId = parts[1];
-          startWhatsApp(locId, slotId).catch(console.error);
+          startWhatsApp(parts[0], parts[1]).catch(console.error);
       }
     }
   } catch (e) { console.error(e); }
