@@ -191,9 +191,62 @@ async function callGHLWithAgency(config) {
   return axios({ ...config, headers: { Accept: "application/json", Version: GHL_API_VERSION, Authorization: `Bearer ${accessToken}`, ...(config.headers || {}) } });
 }
 
-async function callGHLWithLocation(locationId, config, contactId) {
-  const { accessToken, realLocationId } = await ensureLocationToken(locationId, contactId);
-  return axios({ ...config, headers: { Accept: "application/json", Version: GHL_API_VERSION, Authorization: `Bearer ${accessToken}`, "Location-Id": realLocationId, ...(config.headers || {}) } });
+// WRAPPER INTELIGENTE (Con Reintento Automático en 401)
+async function callGHLWithLocation(locationId, config) {
+  // Intento 1: Usar token actual
+  let tokenData;
+  try {
+      tokenData = await ensureLocationToken(locationId);
+  } catch (e) {
+      // Si falla leer el token inicial, intentamos refrescar forzadamente antes de rendirnos
+      console.warn(`⚠️ No se pudo leer token inicial, intentando refresco preventivo...`);
+      const newToken = await forceRefreshToken(locationId);
+      tokenData = { accessToken: newToken, realLocationId: locationId }; // Asumimos locationId si no podemos leerlo, o mejor recuperarlo de DB post-refresh
+      // Para seguridad, volvemos a leer:
+      tokenData = await ensureLocationToken(locationId);
+  }
+
+  try {
+    return await axios({
+      ...config,
+      headers: {
+        Accept: "application/json",
+        Version: GHL_API_VERSION,
+        Authorization: `Bearer ${tokenData.accessToken}`,
+        "Location-Id": tokenData.realLocationId,
+        ...(config.headers || {}),
+      },
+    });
+  } catch (error) {
+    // Si falla por Token Inválido (401), refrescamos y reintentamos UNA vez
+    if (error.response?.status === 401) {
+      console.warn(`⚠️ [AXIOS] Token expirado (401) detectado. Iniciando refresco...`);
+      
+      try {
+          // A. Forzar refresco
+          const newAccessToken = await forceRefreshToken(locationId);
+          
+          console.log(`🔄 [AXIOS] Reintentando petición con nuevo token...`);
+          
+          // B. Reintentar petición con nuevo token
+          return await axios({
+            ...config,
+            headers: {
+              Accept: "application/json",
+              Version: GHL_API_VERSION,
+              Authorization: `Bearer ${newAccessToken}`,
+              "Location-Id": tokenData.realLocationId,
+              ...(config.headers || {}),
+            },
+          });
+      } catch (refreshError) {
+          console.error(`❌ [AXIOS] Falló el refresco de token o el reintento: ${refreshError.message}`);
+          throw refreshError; // Lanzamos el error original o el de refresco
+      }
+    }
+    
+    throw error;
+  }
 }
 
 // --- ROUTING ---
@@ -254,35 +307,54 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   const p = "+" + normalizePhone(phone); 
   console.log(`🔎 [GHL] Buscando/Creando contacto: ${p} en ${locationId}`);
 
+  // 1. Si tenemos ID, intentamos buscarlo primero
   if (contactId) {
     try {
-      const lookupRes = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
+      const lookupRes = await callGHLWithLocation(locationId, { 
+          method: "GET", 
+          url: `https://services.leadconnectorhq.com/contacts/${contactId}` 
+      });
       const contact = lookupRes.data.contact || lookupRes.data;
       if (contact?.id) {
-          console.log("✅ [GHL] Contacto existente encontrado por ID:", contact.id);
+          console.log("✅ [GHL] Contacto existente validado por ID:", contact.id);
           return contact;
       }
-    } catch (err) { console.warn(`⚠️ [GHL] No se encontró por ID ${contactId}, intentando crear...`); }
+    } catch (err) { 
+        // Solo ignoramos si es 404 (No encontrado). Si es 401, el wrapper ya debería haberlo manejado,
+        // pero si llega aquí es que falló incluso el reintento.
+        if (err.response?.status !== 404) {
+            console.warn(`⚠️ Error buscando por ID ${contactId}: ${err.message}`);
+        }
+    }
   }
 
+  // 2. Si no tenemos ID o falló la búsqueda, intentamos CREAR (o buscar por teléfono)
   try {
     const createdRes = await callGHLWithLocation(locationId, {
-      method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
-      data: { locationId, phone: p, firstName: waName, source: "WhatsApp Baileys" }
+      method: "POST", 
+      url: "https://services.leadconnectorhq.com/contacts/",
+      data: { 
+          locationId, 
+          phone: p, 
+          firstName: waName, 
+          source: "WhatsApp Baileys" 
+      }
     });
     const created = createdRes.data.contact || createdRes.data;
-    console.log("👤 [GHL] Contacto creado/recuperado exitosamente:", created.id);
+    console.log("👤 [GHL] Contacto gestionado exitosamente:", created.id);
     return created;
   } catch (err) {
     const body = err.response?.data;
     const statusCode = err.response?.status;
     
+    // Manejo específico de GHL: "El contacto ya existe" viene como error 400
     if (statusCode === 400 && body?.meta?.contactId) {
-        console.log("ℹ️ [GHL] Contacto ya existía (Error 400), usando ID:", body.meta.contactId);
+        console.log("ℹ️ [GHL] Contacto ya existía (Error 400), usando ID recuperado:", body.meta.contactId);
         return { id: body.meta.contactId, phone: p };
     }
     
-    console.error("❌ [GHL ERROR] Falló creación de contacto:");
+    // Si es 401 aquí, es que el refresco de token falló definitivamente
+    console.error("❌ [GHL ERROR] Falló creación/búsqueda de contacto:");
     console.error("   -> Status:", statusCode);
     console.error("   -> Data:", JSON.stringify(body));
     return null;
@@ -540,6 +612,7 @@ async function waitForSocketOpen(sock) {
 }
 
 app.post("/ghl/webhook", async (req, res) => {
+  console.log("📨 [WEBHOOK DEBUG] Petición entrante desde GHL:", JSON.stringify(req.body));
   try {
     const { locationId, phone, message, type } = req.body;
     if (!locationId || !phone || !message) return res.json({ ignored: true });
