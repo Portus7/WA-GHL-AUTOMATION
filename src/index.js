@@ -6,6 +6,7 @@ const pino = require("pino");
 const { webcrypto } = require("crypto");
 const { Pool } = require("pg");
 const axios = require("axios");
+const { Console } = require("console");
 
 if (!globalThis.crypto) { globalThis.crypto = webcrypto; }
 
@@ -145,76 +146,38 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
-// --- 🔥 GHL CONTACTS MEJORADO (BÚSQUEDA INTELIGENTE) ---
+// --- GHL CONTACTS ---
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
-  const rawPhone = phone.replace(/\D/g, ''); 
-  const phoneWithPlus = `+${rawPhone}`;
-
-  // 1. Búsqueda rápida por ID (Routing)
+  console.log(locationId, phone, waName, contactId)
+  const p = "+" + normalizePhone(phone); 
   if (contactId) {
     try {
-      const lookupRes = await callGHLWithLocation(locationId, { 
-          method: "GET", 
-          url: `https://services.leadconnectorhq.com/contacts/${contactId}` 
-      });
+      const lookupRes = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
       const contact = lookupRes.data.contact || lookupRes.data;
       if (contact?.id) return contact;
     } catch (err) {}
   }
-
-  // 2. Búsqueda por QUERY (Encuentra +34 123... buscando 34123...)
-  // Esta es la clave para evitar duplicados
-  try {
-      const searchRes = await callGHLWithLocation(locationId, {
-          method: "GET",
-          url: "https://services.leadconnectorhq.com/contacts/",
-          params: {
-              locationId: locationId,
-              query: rawPhone, // Buscamos solo por números
-              limit: 1
-          }
-      });
-      
-      // Si la búsqueda general devuelve algo, verificamos que el teléfono coincida
-      if (searchRes.data && searchRes.data.contacts && searchRes.data.contacts.length > 0) {
-          const found = searchRes.data.contacts[0];
-          // Doble check por si la query trajo algo por nombre parecido
-          const foundPhone = found.phone ? found.phone.replace(/\D/g, '') : "";
-          if (foundPhone.includes(rawPhone) || rawPhone.includes(foundPhone)) {
-              console.log(`✅ Contacto encontrado por búsqueda inteligente: ${found.id} (${found.contactName})`);
-              return found;
-          }
-      }
-  } catch(e) { console.warn("Error en búsqueda inteligente:", e.message); }
-
-  // 3. Si nada funcionó, creamos el contacto
   try {
     const createdRes = await callGHLWithLocation(locationId, {
       method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
-      data: { 
-          locationId, 
-          phone: phoneWithPlus, 
-          firstName: waName, 
-          source: "WhatsApp Baileys" 
-      }
+      data: { locationId, phone: p, firstName: waName, source: "WhatsApp Baileys" }
     });
-    console.log("👤 Contacto NUEVO creado.");
     return createdRes.data.contact || createdRes.data;
   } catch (err) {
     const body = err.response?.data;
-    // Si GHL dice que ya existe (error 400), usamos ese ID
-    if (err.response?.status === 400 && body?.meta?.contactId) {
-        console.log("ℹ️ Contacto existía (recuperado del error 400):", body.meta.contactId);
-        return { id: body.meta.contactId, phone: phoneWithPlus };
-    }
+    if (err.response?.status === 400 && body?.meta?.contactId) return { id: body.meta.contactId, phone: p };
     console.error("❌ Error creando contacto:", err.message);
     return null;
   }
 }
 
+// 🔥 FIX DE BURBUJAS: Usar endpoints distintos según la dirección
 async function logMessageToGHL(locationId, contactId, text, direction) {
   try {
-    let url = "https://services.leadconnectorhq.com/conversations/messages"; 
+    // Si es inbound (cliente), USAR EL ENDPOINT ESPECÍFICO INBOUND
+    // Si es outbound (yo), usar el endpoint genérico
+    
+    let url = "https://services.leadconnectorhq.com/conversations/messages"; // Default (Outbound)
     if (direction === "inbound") {
         url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
     }
@@ -348,13 +311,16 @@ async function startWhatsApp(locationId, slotId) {
 
   sock.ev.on("messages.upsert", async (msg) => {
     try {
-        const m = msg.messages[0];
-        if (!m?.message) return;
-        if (botMessageIds.has(m.key.id)) return; // Ignorar eco
-
-        const from = m.key.remoteJid;
-        if (from === "status@broadcast" || from.includes("@newsletter")) return;
-        if (!from.includes("@s.whatsapp.net")) return;
+      const m = msg.messages[0];
+      console.log(m, "contenido del mensajes ")
+      if (!m?.message) return;
+      if (botMessageIds.has(m.key.id)) return; // Ignorar eco
+      
+      const from = m.key.remoteJid;
+      console.log(from, "FROM", !from.includes("@lid"))
+      if (from === "status@broadcast" || from.includes("@newsletter")) return;
+      if (!from.includes("@s.whatsapp.net") && !from.includes("@lid")) return;
+      console.log("ENTRO ACA")
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
@@ -366,8 +332,6 @@ async function startWhatsApp(locationId, slotId) {
 
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
-        
-        // 🔥 Llama a la función de BÚSQUEDA MEJORADA
         const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
 
         if (!contact?.id) return;
@@ -375,12 +339,14 @@ async function startWhatsApp(locationId, slotId) {
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
 
         let messageForGHL = "";
-        let direction = "inbound";
+        let direction = "inbound"; // Default (gris)
 
         if (isFromMe) {
+            // MENSAJE DESDE CELULAR -> AZUL (Derecha)
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
             direction = "outbound"; 
-        } else {
+          } else {
+            // MENSAJE DEL CLIENTE -> GRIS (Izquierda)
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 
         }
@@ -420,12 +386,13 @@ app.get("/status", async (req, res) => {
   res.json({ connected: false, priority: extra.priority, tags: extra.tags });
 });
 
-// --- WEBHOOK OUTBOUND (FILTRO LOOP) ---
+// --- WEBHOOK OUTBOUND CON FILTRO LOOP ---
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
     if (!locationId || !phone || !message) return res.json({ ignored: true });
 
+    // 🛑 FILTRO ANTI-BUCLE
     if (message.includes("[Enviado desde otro dispositivo]")) return res.json({ ignored: true });
 
     if (type === "Outbound" || type === "SMS") {
@@ -440,6 +407,7 @@ app.post("/ghl/webhook", async (req, res) => {
             session: sessions.get(`${locationId}_slot${conf.slot_id}`)
         })).filter(c => c.session && c.session.isConnected);
 
+        // Fallback
         if (availableCandidates.length === 0) {
              for (const [sid, s] of sessions.entries()) {
                 if (sid.startsWith(`${locationId}_slot`) && s.isConnected) 
@@ -479,6 +447,7 @@ app.post("/ghl/webhook", async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: "Error" }); }
 });
 
+// ... Config / Remove / Install ...
 app.post("/config-slot", async (req, res) => {
   const { locationId, slot, phoneNumber, priority, addTag, removeTag } = req.body;
   if (!locationId) return res.status(400).json({ error: "Faltan datos" });
