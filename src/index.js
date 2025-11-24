@@ -146,30 +146,69 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
-// --- GHL CONTACTS ---
+// --- GHL CONTACTS MEJORADO ---
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
-  const p = "+" + normalizePhone(phone); 
+  // Normalizamos: quitamos todo lo que no sea número
+  const rawPhone = phone.replace(/\D/g, ''); 
+  const phoneWithPlus = `+${rawPhone}`;
+
+  // 1. Si tenemos un ID de contacto previo (Routing), lo usamos directo
   if (contactId) {
     try {
-      const lookupRes = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
+      const lookupRes = await callGHLWithLocation(locationId, { 
+          method: "GET", 
+          url: `https://services.leadconnectorhq.com/contacts/${contactId}` 
+      });
       const contact = lookupRes.data.contact || lookupRes.data;
       if (contact?.id) return contact;
-    } catch (err) {}
+    } catch (err) {
+        // Si falla (404), seguimos para buscar por teléfono
+    }
   }
+
+  // 2. Buscar por teléfono (Search Endpoint) antes de crear
+  // GHL tiene un endpoint de búsqueda que es más flexible
+  try {
+      const searchRes = await callGHLWithLocation(locationId, {
+          method: "GET",
+          url: "https://services.leadconnectorhq.com/contacts/search/duplicate",
+          params: {
+              locationId: locationId,
+              number: phoneWithPlus // Probamos con +595...
+          }
+      });
+      
+      // Si encontramos algo, retornamos ese contacto
+      if (searchRes.data && searchRes.data.contact && searchRes.data.contact.id) {
+          console.log(`✅ Contacto encontrado por búsqueda: ${searchRes.data.contact.id}`);
+          return searchRes.data.contact;
+      }
+  } catch(e) {
+      // Si falla la búsqueda, no pasa nada, intentamos crear
+  }
+
+  // 3. Intentar Crear (POST)
   try {
     const createdRes = await callGHLWithLocation(locationId, {
       method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
-      data: { locationId, phone: p, firstName: waName, source: "WhatsApp Baileys" }
+      data: { 
+          locationId, 
+          phone: phoneWithPlus, 
+          firstName: waName, 
+          source: "WhatsApp Baileys" 
+      }
     });
     return createdRes.data.contact || createdRes.data;
   } catch (err) {
     const body = err.response?.data;
-    if (err.response?.status === 400 && body?.meta?.contactId) return { id: body.meta.contactId, phone: p };
+    // Si da error 400 porque ya existe, usamos el ID que nos devuelve el error
+    if (err.response?.status === 400 && body?.meta?.contactId) {
+        return { id: body.meta.contactId, phone: phoneWithPlus };
+    }
     console.error("❌ Error creando contacto:", err.message);
     return null;
   }
 }
-
 // 🔥 FIX DE BURBUJAS: Usar endpoints distintos según la dirección
 async function logMessageToGHL(locationId, contactId, text, direction) {
   try {
