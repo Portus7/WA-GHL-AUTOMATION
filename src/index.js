@@ -322,13 +322,14 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
-  // 📩 UPSERT (Inbound + Sync Celular)
+
+// 📩 UPSERT: Mensajes Entrantes Y Salientes
   sock.ev.on("messages.upsert", async (msg) => {
     try {
         const m = msg.messages[0];
         if (!m?.message) return;
-        
-        // 1. Ignorar Ecos del Bot (mensajes que el bot envió por API)
+
+        // 🛑 ANTI-ECO 1: Si el ID está en caché (lo envió este bot), ignorar.
         if (botMessageIds.has(m.key.id)) return;
 
         const from = m.key.remoteJid;
@@ -339,34 +340,44 @@ async function startWhatsApp(locationId, slotId) {
         if (!text) return; 
 
         const clientPhone = normalizePhone(from.split("@")[0]);
+        
+        // Detectar mi número (Canal)
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
+        
+        // ¿Quién envió el mensaje REALMENTE?
         const isFromMe = m.key.fromMe;
 
         // Routing
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         
-        // Para mensajes fromMe, GHL debe encontrar el contacto destinatario, no el mio.
+        // Buscamos/Creamos el contacto (El cliente)
         const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
 
         if (!contact?.id) return;
 
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
 
-        // Lógica de Mensajes
+        let messageForGHL = "";
+        let direction = "inbound";
+
         if (isFromMe) {
-            // ✅ MENSAJE ENVIADO DESDE EL CELULAR
+            // CASO 1: Mensaje enviado desde TU celular físico
+            // Debe salir AZUL (Outbound) en GHL
+            messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
+            direction = "outbound"; 
             console.log(`📱 Sync Celular -> GHL (+${clientPhone})`);
-            // IMPORTANTE: Le ponemos la firma para que el Webhook la reconozca y NO la reenvíe
-            const messageForGHL = `${text}\n\n[Mandado desde otro dispositivo]\nSource: +${myChannelNumber}`;
-            await logMessageToGHL(locationId, contact.id, messageForGHL, "outbound");
         } else {
-            // ✅ MENSAJE DEL CLIENTE
+            // CASO 2: Mensaje que el CLIENTE te envió
+            // Debe salir GRIS (Inbound) en GHL
+            // IMPORTANTE: Agregamos una marca invisible o salto de línea para diferenciar si es necesario
+            messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
+            direction = "inbound";
             console.log(`📩 Inbound Cliente -> GHL (+${clientPhone})`);
-            const messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
-            await logMessageToGHL(locationId, contact.id, messageForGHL, "inbound");
         }
+
+        await logMessageToGHL(locationId, contact.id, messageForGHL, direction);
 
     } catch (error) { console.error("Upsert Error:", error.message); }
   });
@@ -401,22 +412,25 @@ app.get("/status", async (req, res) => {
   res.json({ connected: false, priority: extra.priority, tags: extra.tags });
 });
 
-// --- WEBHOOK CON ROMPE-BUCLES ---
+// --- WEBHOOK OUTBOUND CON FILTRO ANTI-BUCLE ---
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
     if (!locationId || !phone || !message) return res.json({ ignored: true });
 
-    // 🛑 FILTRO CRÍTICO: DETIENE EL BUCLE
-    if (message.includes("[Mandado desde otro dispositivo]")) {
-        console.log("🛑 Ignorando rebote de GHL (Mensaje sincronizado).");
+    // 🛑 FILTRO CRÍTICO: DETIENE EL BUCLE DE REBOTE
+    // Si el mensaje contiene "Source: +", significa que es un mensaje que NOSOTROS subimos
+    // y GHL nos lo está devolviendo. NO debemos enviarlo a WhatsApp de nuevo.
+    if (message.includes("Source: +") || message.includes("[Enviado desde otro dispositivo]")) {
+        console.log("🛑 Ignorando rebote de GHL (Mensaje de sincronización interna).");
         return res.json({ ignored: true });
     }
 
     if (type === "Outbound" || type === "SMS") {
         const clientPhone = normalizePhone(phone);
-        let dbConfigs = await getLocationSlotsConfig(locationId);
         
+        // --- Lógica de Selección de Slot (Igual que antes) ---
+        let dbConfigs = await getLocationSlotsConfig(locationId);
         let availableCandidates = dbConfigs.map(conf => ({
             slot: conf.slot_id,
             priority: conf.priority,
@@ -425,8 +439,8 @@ app.post("/ghl/webhook", async (req, res) => {
             session: sessions.get(`${locationId}_slot${conf.slot_id}`)
         })).filter(c => c.session && c.session.isConnected);
 
+        // Fallback Memoria
         if (availableCandidates.length === 0) {
-             // Fallback Memoria
              for (const [sid, s] of sessions.entries()) {
                 if (sid.startsWith(`${locationId}_slot`) && s.isConnected) 
                     availableCandidates.push({ slot: parseInt(sid.split("_slot")[1]), priority: 99, myNumber: s.myNumber, session: s });
@@ -436,8 +450,7 @@ app.post("/ghl/webhook", async (req, res) => {
 
         if (availableCandidates.length === 0) return res.status(200).json({ error: "No connected devices" });
 
-        // Selección: PRIORIDAD 1 (Rey) o el primero disponible.
-        // Al estar ordenado por priority ASC, el [0] es el mejor.
+        // Selección: Prioridad 1 o el primero disponible
         let selectedCandidate = availableCandidates[0];
         
         const sessionToUse = selectedCandidate.session;
@@ -454,7 +467,7 @@ app.post("/ghl/webhook", async (req, res) => {
                 setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
             }
 
-            console.log(`✅ Enviado.`);
+            console.log(`✅ Mensaje enviado.`);
             await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
             return res.json({ ok: true });
 
