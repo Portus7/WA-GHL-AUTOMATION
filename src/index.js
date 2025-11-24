@@ -318,7 +318,7 @@ async function startWhatsApp(locationId, slotId) {
 
         const from = m.key.remoteJid;
         if (from === "status@broadcast" || from.includes("@newsletter")) return;
-        if (!from.includes("@s.whatsapp.net")) return;
+        if (!from.includes("@s.whatsapp.net") || !from.includes("@lid")) return;
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
