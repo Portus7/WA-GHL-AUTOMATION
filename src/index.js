@@ -6,6 +6,7 @@ const pino = require("pino");
 const { webcrypto } = require("crypto");
 const { Pool } = require("pg");
 const axios = require("axios");
+const { Console } = require("console");
 
 if (!globalThis.crypto) { globalThis.crypto = webcrypto; }
 
@@ -309,10 +310,11 @@ async function startWhatsApp(locationId, slotId) {
 
   sock.ev.on("messages.upsert", async (msg) => {
     try {
+      const m = msg.messages[0];
+      Console.log(m, "contenido del mensajes")
+      if (!m?.message) return;
+      if (botMessageIds.has(m.key.id)) return; // Ignorar eco
       console.log("ENTRO ACA")
-        const m = msg.messages[0];
-        if (!m?.message) return;
-        if (botMessageIds.has(m.key.id)) return; // Ignorar eco
 
         const from = m.key.remoteJid;
         if (from === "status@broadcast" || from.includes("@newsletter")) return;
