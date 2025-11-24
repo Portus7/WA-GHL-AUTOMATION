@@ -323,31 +323,67 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
+// 📩 INBOUND (Mensajes Entrantes)
   sock.ev.on("messages.upsert", async (msg) => {
-    const m = msg.messages[0];
-    if (!m?.message || m.key.fromMe) return;
-    const text = m.message.conversation || m.message.extendedTextMessage?.text;
-    if (!text) return;
-
-    const from = m.key.remoteJid;
-    const waName = m.pushName || "Usuario";
-    const clientPhone = normalizePhone(from.split("@")[0]);
-    const myJid = sock.user?.id;
-    const myChannelNumber = myJid ? normalizePhone(myJid.split(":")[0]) : "Desconocido";
-
-    console.log(`📩 [Slot ${slotId}] Recibido de +${clientPhone}`);
-
     try {
+        const m = msg.messages[0];
+        if (!m?.message || m.key.fromMe) return;
+
+        const from = m.key.remoteJid;
+
+        // --- 🛑 FILTROS DE BASURA (CRÍTICO) ---
+        // 1. Ignorar Estados (Stories)
+        if (from === "status@broadcast") return;
+        
+        // 2. Ignorar Grupos (Si solo quieres chats 1 a 1)
+        if (from.includes("@g.us")) return;
+
+        // 3. Ignorar Canales/Newsletters
+        if (from.includes("@newsletter")) return;
+        
+        // 4. Ignorar mensajes de sistema (protocolo)
+        if (from.includes("@s.whatsapp.net") === false) return;
+        // ---------------------------------------
+
+        // Extraer texto (soportando texto simple y extendido)
+        const text = m.message.conversation || 
+                     m.message.extendedTextMessage?.text || 
+                     m.message.imageMessage?.caption || 
+                     m.message.videoMessage?.caption;
+
+        if (!text) return; // Si es solo una foto sin texto o sticker, lo ignoramos por ahora
+
+        const waName = m.pushName || "Usuario WhatsApp";
+        const clientPhone = normalizePhone(from.split("@")[0]);
+        
+        // Detectar mi propio número (Canal Receptor) de forma segura
+        // Baileys a veces devuelve "ID:AGENTE@s.whatsapp.net", limpiamos todo
+        const myJid = sock.user?.id || "";
+        const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
+
+        console.log(`📩 [${locationId} | Slot ${slotId}] Mensaje real de +${clientPhone}: "${text.substring(0, 20)}..."`);
+
+        // 1. Routing: Guardamos que este cliente habló con ESTE location por ESTE canal
         const route = await getRoutingForPhone(clientPhone);
+        
+        // Si ya existe routing con otra location, lo respetamos? 
+        // En tu caso Multi-Slot para UNA location, el locationId siempre es el mismo,
+        // lo que cambia es el channelNumber (tu número).
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
+
         const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId);
 
         if (contact?.id) {
             await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
+
+            // 2. Modificar mensaje para GHL: Agregar Source para que sepas a qué numero escribieron
             const messageWithSource = `${text}\n\nSource: +${myChannelNumber}`;
+            
             await sendMessageToGHLConversation(locationId, contact.id, messageWithSource);
         }
-    } catch (error) { console.error("❌ Error inbound:", error); }
+    } catch (error) { 
+        console.error("❌ Error procesando inbound:", error.message); 
+    }
   });
 }
 
