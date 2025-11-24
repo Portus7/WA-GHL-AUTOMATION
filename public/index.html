@@ -64,12 +64,12 @@
 
   const container = document.getElementById("slots-container");
   const loading = document.getElementById("loading");
-  const intervals = {}; 
+  
+  // Guardamos qué slots se están conectando activamente para no interrumpirlos
+  const activeConnections = new Set(); 
 
-  // --- INICIO ---
   async function init() {
     try {
-      // Pedir configuración al backend 
       let maxSlots = 3; 
       try {
           const confRes = await fetch(`/config?locationId=${locationId}`);
@@ -81,13 +81,15 @@
 
       loading.style.display = "none";
       renderSlots(maxSlots);
+      
+      // 🔥 GLOBAL POLLING: Revisa cambios externos cada 5s
+      setInterval(syncAllSlots, 5000);
 
     } catch (e) {
       loading.textContent = "Error cargando la interfaz.";
     }
   }
 
-  // --- RENDERIZADO ---
   function renderSlots(total) {
     container.innerHTML = "";
     for (let i = 1; i <= total; i++) {
@@ -124,13 +126,21 @@
         </div>
       `;
       container.insertAdjacentHTML('beforeend', html);
-      
-      // Iniciar chequeo individual
       checkStatus(i); 
     }
   }
 
-  // --- LÓGICA ---
+  // 🔥 Revisa TODOS los slots para actualizar UI si hubo cambios externos
+  function syncAllSlots() {
+      const slots = document.querySelectorAll('.slot-card');
+      slots.forEach((_, index) => {
+          const slotNum = index + 1;
+          // Solo checar si no estamos en medio de un proceso de escaneo activo
+          if (!activeConnections.has(slotNum)) {
+              checkStatus(slotNum);
+          }
+      });
+  }
 
   async function checkStatus(slot) {
     try {
@@ -148,7 +158,6 @@
     const qrArea = document.getElementById(`qr-area-${slot}`);
     const metaDiv = document.getElementById(`meta-${slot}`);
 
-    // Mostrar metadatos siempre que haya info
     if (priority !== undefined || (tags && tags.length > 0)) {
         metaDiv.style.display = "block";
         document.getElementById(`prio-val-${slot}`).textContent = priority ?? "Auto";
@@ -157,25 +166,30 @@
         metaDiv.style.display = "none";
     }
 
+    // Solo actualizar si hay un cambio real de estado visual para evitar parpadeos
     if (isConnected) {
-      badge.className = "badge badge-on";
-      badge.textContent = "ACTIVO";
-      viewCon.style.display = "block";
-      viewDisc.style.display = "none";
+      if(badge.textContent !== "ACTIVO") {
+          badge.className = "badge badge-on";
+          badge.textContent = "ACTIVO";
+          viewCon.style.display = "block";
+          viewDisc.style.display = "none";
+          qrArea.classList.remove("active");
+          activeConnections.delete(slot); // Liberar bloqueo
+      }
       phoneText.textContent = "+" + phone;
-      qrArea.classList.remove("active");
-      
-      // Parar polling si ya conectó
-      if (intervals[slot]) { clearInterval(intervals[slot]); delete intervals[slot]; }
     } else {
-      badge.className = "badge badge-off";
-      badge.textContent = "INACTIVO";
-      viewCon.style.display = "none";
-      viewDisc.style.display = "block";
+      // Si estamos desconectados
+      if(badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
+          badge.className = "badge badge-off";
+          badge.textContent = "INACTIVO";
+          viewCon.style.display = "none";
+          viewDisc.style.display = "block";
+      }
     }
   }
 
   async function startConnect(slot) {
+    activeConnections.add(slot); // Bloquear updates globales mientras escanea
     const btn = document.getElementById(`btn-${slot}`);
     const qrArea = document.getElementById(`qr-area-${slot}`);
     const msg = document.getElementById(`msg-${slot}`);
@@ -192,13 +206,14 @@
 
       msg.textContent = "Escanea este código con WhatsApp:";
       
-      if (intervals[slot]) clearInterval(intervals[slot]);
-      
-      intervals[slot] = setInterval(async () => {
+      // Polling local rápido para QR
+      const localInterval = setInterval(async () => {
         const statRes = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
         const statData = await statRes.json();
         
         if (statData.connected) {
+          clearInterval(localInterval);
+          activeConnections.delete(slot); // Liberar
           updateUI(slot, true, statData.myNumber, statData.priority, statData.tags);
           return;
         }
@@ -211,10 +226,11 @@
              btn.textContent = "Esperando escaneo...";
           }
         }
-      }, 3000);
+      }, 2000);
 
     } catch (e) {
-      msg.textContent = "Error al conectar. Recarga la página.";
+      activeConnections.delete(slot);
+      msg.textContent = "Error al conectar. Recarga.";
       msg.style.color = "red";
       btn.disabled = false;
     }
@@ -222,22 +238,21 @@
 
   async function disconnect(slot) {
       if(!confirm("¿Estás seguro de desconectar este número?")) return;
-      
       const btn = document.querySelector(`#connected-view-${slot} button`);
       btn.disabled = true;
       btn.textContent = "Desconectando...";
 
       try {
           await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-          
-          // ⚡ Refresco inmediato de la UI sin recargar la página entera
-          // Restablecemos la UI a estado desconectado manualmente
+          // Forzar update visual inmediato
+          const badge = document.getElementById(`badge-${slot}`);
+          badge.textContent = "INACTIVO"; // Esto forzará al updateUI a redibujar
           updateUI(slot, false, null, undefined, undefined);
           
-          // Limpiamos info residual
-          document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
+          // Resetear visuales
           document.getElementById(`btn-${slot}`).disabled = false;
           document.getElementById(`btn-${slot}`).textContent = "Vincular WhatsApp";
+          document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
 
       } catch(e) {
           alert("Error al desconectar");
