@@ -14,14 +14,9 @@ const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
 const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "https://wa.clicandapp.com";
 const AGENCY_ROW_ID = "__AGENCY__";
 
-// 🧠 GESTOR DE SESIONES
 const sessions = new Map(); 
-// Cache simple para evitar ecos inmediatos del bot
-const botMessageIds = new Set(); 
+const botMessageIds = new Set();
 
-// -----------------------------
-// PostgreSQL
-// -----------------------------
 const pool = new Pool({
   host: process.env.PGHOST,
   port: process.env.PGPORT,
@@ -31,9 +26,7 @@ const pool = new Pool({
   ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
 });
 
-// -----------------------------
-// HELPERS
-// -----------------------------
+// --- HELPERS ---
 
 async function deleteSessionData(locationId, slot) {
   const sessionId = `${locationId}_slot${slot}`;
@@ -176,17 +169,19 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   }
 }
 
-// Función para subir mensaje a GHL (Usada para Inbound y para Sync de Celular)
+// 🔥 FIX DE BURBUJAS: Usar endpoints distintos según la dirección
 async function logMessageToGHL(locationId, contactId, text, direction) {
   try {
-    // direction: 'inbound' (Cliente) | 'outbound' (Yo/Celular)
-    const endpoint = "https://services.leadconnectorhq.com/conversations/messages";
+    // Si es inbound (cliente), USAR EL ENDPOINT ESPECÍFICO INBOUND
+    // Si es outbound (yo), usar el endpoint genérico
     
-    // Nota: Para Outbound, usamos el endpoint genérico. Para Inbound, usamos el específico si el genérico falla,
-    // pero generalmente el genérico funciona para ambos si se especifica 'direction'.
-    
+    let url = "https://services.leadconnectorhq.com/conversations/messages"; // Default (Outbound)
+    if (direction === "inbound") {
+        url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
+    }
+
     await callGHLWithLocation(locationId, {
-      method: "POST", url: endpoint,
+      method: "POST", url: url,
       data: { 
           type: "SMS", 
           contactId, 
@@ -198,15 +193,6 @@ async function logMessageToGHL(locationId, contactId, text, direction) {
     console.log(`✅ GHL Sync [${direction}]: ${text.substring(0, 20)}...`);
   } catch (err) { 
       console.error(`❌ GHL Log Error (${direction}):`, err.response?.data || err.message);
-      // Retry como inbound si falló outbound (a veces GHL bloquea creación manual de outbound)
-      if (direction === 'outbound') {
-          try {
-             await callGHLWithLocation(locationId, {
-                method: "POST", url: "https://services.leadconnectorhq.com/conversations/messages/inbound",
-                data: { type: "SMS", contactId, locationId, message: `[Saliente Sincronizado]\n${text}`, direction: "inbound" }
-             });
-          } catch(e){}
-      }
   }
 }
 
@@ -298,7 +284,6 @@ async function startWhatsApp(locationId, slotId) {
 
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
-    
     if (qr) { sessionData.qr = qr; sessionData.isConnected = false; console.log(`📌 QR: ${sessionId}`); }
     
     if (connection === "open") { 
@@ -322,15 +307,11 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
-
-// 📩 UPSERT: Mensajes Entrantes Y Salientes
   sock.ev.on("messages.upsert", async (msg) => {
     try {
         const m = msg.messages[0];
         if (!m?.message) return;
-
-        // 🛑 ANTI-ECO 1: Si el ID está en caché (lo envió este bot), ignorar.
-        if (botMessageIds.has(m.key.id)) return;
+        if (botMessageIds.has(m.key.id)) return; // Ignorar eco
 
         const from = m.key.remoteJid;
         if (from === "status@broadcast" || from.includes("@newsletter")) return;
@@ -340,19 +321,12 @@ async function startWhatsApp(locationId, slotId) {
         if (!text) return; 
 
         const clientPhone = normalizePhone(from.split("@")[0]);
-        
-        // Detectar mi número (Canal)
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
-        
-        // ¿Quién envió el mensaje REALMENTE?
         const isFromMe = m.key.fromMe;
 
-        // Routing
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
-        
-        // Buscamos/Creamos el contacto (El cliente)
         const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
 
         if (!contact?.id) return;
@@ -360,21 +334,16 @@ async function startWhatsApp(locationId, slotId) {
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
 
         let messageForGHL = "";
-        let direction = "inbound";
+        let direction = "inbound"; // Default (gris)
 
         if (isFromMe) {
-            // CASO 1: Mensaje enviado desde TU celular físico
-            // Debe salir AZUL (Outbound) en GHL
+            // MENSAJE DESDE CELULAR -> AZUL (Derecha)
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
             direction = "outbound"; 
-            console.log(`📱 Sync Celular -> GHL (+${clientPhone})`);
         } else {
-            // CASO 2: Mensaje que el CLIENTE te envió
-            // Debe salir GRIS (Inbound) en GHL
-            // IMPORTANTE: Agregamos una marca invisible o salto de línea para diferenciar si es necesario
+            // MENSAJE DEL CLIENTE -> GRIS (Izquierda)
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
-            direction = "inbound";
-            console.log(`📩 Inbound Cliente -> GHL (+${clientPhone})`);
+            direction = "inbound"; 
         }
 
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction);
@@ -412,25 +381,19 @@ app.get("/status", async (req, res) => {
   res.json({ connected: false, priority: extra.priority, tags: extra.tags });
 });
 
-// --- WEBHOOK OUTBOUND CON FILTRO ANTI-BUCLE ---
+// --- WEBHOOK OUTBOUND CON FILTRO LOOP ---
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
     if (!locationId || !phone || !message) return res.json({ ignored: true });
 
-    // 🛑 FILTRO CRÍTICO: DETIENE EL BUCLE DE REBOTE
-    // Si el mensaje contiene "Source: +", significa que es un mensaje que NOSOTROS subimos
-    // y GHL nos lo está devolviendo. NO debemos enviarlo a WhatsApp de nuevo.
-    if (message.includes("Source: +") || message.includes("[Enviado desde otro dispositivo]")) {
-        console.log("🛑 Ignorando rebote de GHL (Mensaje de sincronización interna).");
-        return res.json({ ignored: true });
-    }
+    // 🛑 FILTRO ANTI-BUCLE
+    if (message.includes("[Enviado desde otro dispositivo]")) return res.json({ ignored: true });
 
     if (type === "Outbound" || type === "SMS") {
         const clientPhone = normalizePhone(phone);
-        
-        // --- Lógica de Selección de Slot (Igual que antes) ---
         let dbConfigs = await getLocationSlotsConfig(locationId);
+        
         let availableCandidates = dbConfigs.map(conf => ({
             slot: conf.slot_id,
             priority: conf.priority,
@@ -439,7 +402,7 @@ app.post("/ghl/webhook", async (req, res) => {
             session: sessions.get(`${locationId}_slot${conf.slot_id}`)
         })).filter(c => c.session && c.session.isConnected);
 
-        // Fallback Memoria
+        // Fallback
         if (availableCandidates.length === 0) {
              for (const [sid, s] of sessions.entries()) {
                 if (sid.startsWith(`${locationId}_slot`) && s.isConnected) 
@@ -450,9 +413,8 @@ app.post("/ghl/webhook", async (req, res) => {
 
         if (availableCandidates.length === 0) return res.status(200).json({ error: "No connected devices" });
 
-        // Selección: Prioridad 1 o el primero disponible
+        // PRIORIDAD 1
         let selectedCandidate = availableCandidates[0];
-        
         const sessionToUse = selectedCandidate.session;
         const jid = clientPhone.replace(/\D/g, '') + "@s.whatsapp.net";
 
@@ -467,7 +429,7 @@ app.post("/ghl/webhook", async (req, res) => {
                 setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
             }
 
-            console.log(`✅ Mensaje enviado.`);
+            console.log(`✅ Enviado.`);
             await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
             return res.json({ ok: true });
 
@@ -480,6 +442,7 @@ app.post("/ghl/webhook", async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: "Error" }); }
 });
 
+// ... Config / Remove / Install ...
 app.post("/config-slot", async (req, res) => {
   const { locationId, slot, phoneNumber, priority, addTag, removeTag } = req.body;
   if (!locationId) return res.status(400).json({ error: "Faltan datos" });
@@ -534,7 +497,6 @@ app.post("/ghl/app-webhook", async (req, res) => {
 app.get("/config", (req, res) => res.json({ max_slots: 3 }));
 
 async function restoreSessions() {
-  console.log("🔄 Restaurando...");
   try {
     const res = await pool.query("SELECT DISTINCT session_id FROM baileys_auth");
     for (const row of res.rows) {
