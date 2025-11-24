@@ -611,25 +611,21 @@ async function waitForSocketOpen(sock) {
     });
 }
 
-// 4. Webhook Outbound CORREGIDO (Fix JID + y Self-Send)
+// 4. Webhook Outbound (Lógica de Prioridad Agresiva)
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
     
-    // Validación básica
-    if (!locationId || !phone || !message) {
-        return res.json({ ignored: true });
-    }
+    if (!locationId || !phone || !message) return res.json({ ignored: true });
 
     if (type === "Outbound" || type === "SMS") {
-        // Normalizamos para búsqueda en DB (Aquí sí podemos dejar el + si tu DB lo usa)
         const clientPhone = normalizePhone(phone);
-        
-        console.log(`🔄 Procesando Outbound para ${clientPhone} en ${locationId}`);
+        console.log(`🔄 Procesando Outbound para ${clientPhone}`);
 
-        // --- PASO 1: OBTENER CANDIDATOS ---
-        let dbConfigs = await getLocationSlotsConfig(locationId);
-        
+        // --- 1. OBTENER CANDIDATOS ---
+        let dbConfigs = await getLocationSlotsConfig(locationId); 
+        // dbConfigs viene ordenado por priority ASC (1, 2, 3...)
+
         let availableCandidates = dbConfigs.map(conf => {
             const sess = sessions.get(`${locationId}_slot${conf.slot_id}`);
             return {
@@ -641,14 +637,12 @@ app.post("/ghl/webhook", async (req, res) => {
             };
         }).filter(c => c.session && c.session.isConnected);
 
-        // FALLBACK MEMORIA
+        // Fallback memoria (si DB falla)
         if (availableCandidates.length === 0) {
-            console.warn("⚠️ Buscando en Memoria RAM...");
             for (const [sessId, sess] of sessions.entries()) {
                 if (sessId.startsWith(`${locationId}_slot`) && sess.isConnected) {
-                    const slotNum = parseInt(sessId.split("_slot")[1]);
                     availableCandidates.push({
-                        slot: slotNum,
+                        slot: parseInt(sessId.split("_slot")[1]),
                         priority: 99,
                         tags: [],
                         myNumber: sess.myNumber,
@@ -656,65 +650,79 @@ app.post("/ghl/webhook", async (req, res) => {
                     });
                 }
             }
+            // Ordenamos fallback también
+            availableCandidates.sort((a, b) => a.priority - b.priority);
         }
 
         if (availableCandidates.length === 0) {
             console.error(`❌ [FATAL] No hay sesiones conectadas.`);
-            return res.status(200).json({ error: "No connected devices" });
+            return res.status(200).json({ error: "No devices" });
         }
 
-        // --- PASO 2: SELECCIÓN ---
+        // --- 2. SELECCIÓN JERÁRQUICA ---
         let selectedCandidate = null;
         let selectionReason = "";
 
-        // A) Routing
-        const route = await getRoutingForPhone(clientPhone);
-        if (route?.channelNumber) {
-            selectedCandidate = availableCandidates.find(c => c.myNumber === route.channelNumber);
-            if(selectedCandidate) selectionReason = "Routing Histórico";
-        }
-        // B) Tags
+        // A) TAGS (Poder Absoluto)
+        // Si algún número tiene el tag #priority, gana siempre.
         if (!selectedCandidate) {
-            selectedCandidate = availableCandidates.find(c => c.tags.includes("#priority"));
-            if(selectedCandidate) selectionReason = "Tag #priority";
+            const tagged = availableCandidates.find(c => c.tags.includes("#priority"));
+            if (tagged) {
+                selectedCandidate = tagged;
+                selectionReason = "Tag #priority";
+            }
         }
-        // C) Prioridad
+
+        // B) PRIORIDAD REY (Valor 1)
+        // Si existe un número con prioridad 1, GANA sobre el historial (Routing).
+        // Esto permite forzar el cambio de número simplemente cambiando la config.
         if (!selectedCandidate) {
-            availableCandidates.sort((a, b) => a.priority - b.priority);
+            const topDog = availableCandidates[0]; // Ya están ordenados ASC
+            if (topDog.priority === 1) {
+                selectedCandidate = topDog;
+                selectionReason = "Prioridad Maestra (1)";
+            }
+        }
+
+        // C) ROUTING (Historial)
+        // Si no hay Tag ni Prioridad 1, respetamos la conversación previa.
+        if (!selectedCandidate) {
+            const route = await getRoutingForPhone(clientPhone);
+            if (route?.channelNumber) {
+                const sticky = availableCandidates.find(c => c.myNumber === route.channelNumber);
+                if (sticky) {
+                    selectedCandidate = sticky;
+                    selectionReason = "Historial (Routing)";
+                }
+            }
+        }
+
+        // D) MEJOR PRIORIDAD DISPONIBLE (Fallback)
+        // Si es cliente nuevo y no hay Prioridad 1, tomamos el mejor disponible (ej: 2)
+        if (!selectedCandidate) {
             selectedCandidate = availableCandidates[0];
-            selectionReason = `Prioridad Numérica (${selectedCandidate.priority})`;
+            selectionReason = `Mejor Prioridad Disponible (${selectedCandidate.priority})`;
         }
 
+        // --- 3. ENVÍO ---
         const sessionToUse = selectedCandidate.session;
+        const jid = clientPhone.replace(/\D/g, '') + "@s.whatsapp.net"; // JID Limpio
 
-        // 🛑 CORRECCIÓN CRÍTICA DEL JID 🛑
-        // WhatsApp NO acepta el "+" en el JID. Lo quitamos a la fuerza.
-        const cleanPhone = clientPhone.replace(/\D/g, ''); // Solo dígitos
-        const jid = cleanPhone + "@s.whatsapp.net";
+        console.log(`🚀 Enviando con Slot ${selectedCandidate.slot} (Prio: ${selectedCandidate.priority}). Motivo: ${selectionReason}`);
 
-        console.log(`🚀 Intentando enviar usando Slot ${selectedCandidate.slot} (${selectedCandidate.myNumber}) -> ${jid}`);
-
-        // Advertencia de Auto-Mensaje
-        if (cleanPhone === selectedCandidate.myNumber.replace(/\D/g, '')) {
-            console.warn("⚠️ ALERTA: Estás intentando enviarte un mensaje a ti mismo. Revisa el chat 'Tú' (You) en WhatsApp.");
-        }
-
-        // --- PASO 3: ENVÍO ---
         try {
             await waitForSocketOpen(sessionToUse.sock); 
-            
-            // Enviamos y esperamos respuesta del socket
-            const sentMsg = await sessionToUse.sock.sendMessage(jid, { text: message });
-            
-            console.log("✅ Mensaje entregado al socket. ID:", sentMsg?.key?.id);
+            await sessionToUse.sock.sendMessage(jid, { text: message });
+            console.log(`✅ Mensaje entregado a WhatsApp.`);
         } catch (e) {
-            console.warn(`⚠️ Reintentando envío por timeout...`);
+            console.warn(`⚠️ Timeout inicial, reintentando...`);
             await new Promise(r => setTimeout(r, 1000));
             await sessionToUse.sock.sendMessage(jid, { text: message }); 
-            console.log("✅ Mensaje enviado en reintento.");
         }
 
+        // Actualizamos routing (para que las respuestas vuelvan aquí)
         await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
+
         return res.json({ ok: true });
     }
     
@@ -722,7 +730,7 @@ app.post("/ghl/webhook", async (req, res) => {
 
   } catch (err) { 
       console.error("❌ Error Webhook:", err.message); 
-      res.status(500).json({ error: "Error interno" }); 
+      res.status(500).json({ error: "Error" }); 
   }
 });
 
