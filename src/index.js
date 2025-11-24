@@ -316,6 +316,7 @@ async function startWhatsApp(locationId, slotId) {
       if (botMessageIds.has(m.key.id)) return; // Ignorar eco
       
       const from = m.key.remoteJid;
+      console.log(from, "FROM")
       if (from === "status@broadcast" || from.includes("@newsletter")) return;
       if (!from.includes("@s.whatsapp.net") || !from.includes("@lid")) return;
       console.log("ENTRO ACA")
