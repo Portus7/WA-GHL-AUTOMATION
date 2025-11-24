@@ -314,11 +314,11 @@ async function startWhatsApp(locationId, slotId) {
       console.log(m, "contenido del mensajes ")
       if (!m?.message) return;
       if (botMessageIds.has(m.key.id)) return; // Ignorar eco
+      
+      const from = m.key.remoteJid;
+      if (from === "status@broadcast" || from.includes("@newsletter")) return;
+      if (!from.includes("@s.whatsapp.net") || !from.includes("@lid")) return;
       console.log("ENTRO ACA")
-
-        const from = m.key.remoteJid;
-        if (from === "status@broadcast" || from.includes("@newsletter")) return;
-        if (!from.includes("@s.whatsapp.net") || !from.includes("@lid")) return;
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
