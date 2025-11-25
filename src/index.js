@@ -324,16 +324,18 @@ async function startWhatsApp(locationId, slotId) {
         // jidNormalizedUser por sí solo a veces no es suficiente.
         let remoteJid = m.key.remoteJid;
         if (remoteJid && remoteJid.endsWith('@lid')) {
+            console.log(`ℹ️ Detectado LID JID: ${remoteJid}. Intentando resolver...`);
             try {
-                const [contact] = await sock.onWhatsApp([remoteJid]);
-                if (contact?.jid) {
-                    console.log(`✅ JID resuelto de LID a standard: ${remoteJid} -> ${contact.jid}`);
-                    remoteJid = contact.jid;
+                const [result] = await sock.userDevicesFetch([remoteJid]);
+                if (result?.devices[0]?.jid) {
+                    const resolvedJid = result.devices[0].jid;
+                    console.log(`✅ JID resuelto con userDevicesFetch: ${remoteJid} -> ${resolvedJid}`);
+                    remoteJid = resolvedJid;
                 } else {
-                     console.warn(`⚠️ No se pudo resolver el LID JID: ${remoteJid}. Se intentará con jidNormalizedUser.`);
+                     console.warn(`⚠️ No se pudo resolver el LID JID con userDevicesFetch: ${remoteJid}. Respuesta:`, result);
                 }
             } catch (e) {
-                console.error(`❌ Error resolviendo LID JID ${remoteJid} con onWhatsApp:`, e);
+                console.error(`❌ Error resolviendo LID JID ${remoteJid} con userDevicesFetch:`, e);
             }
         }
         
