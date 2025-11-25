@@ -6,7 +6,6 @@ const pino = require("pino");
 const { webcrypto } = require("crypto");
 const { Pool } = require("pg");
 const axios = require("axios");
-const fs = require("fs");
 
 if (!globalThis.crypto) { globalThis.crypto = webcrypto; }
 
@@ -17,50 +16,6 @@ const AGENCY_ROW_ID = "__AGENCY__";
 
 const sessions = new Map(); 
 const botMessageIds = new Set();
-const STORE_FILE = "baileys_store.json";
-
-// ---------------------------------------------------------
-// 🔥 SOLUCIÓN MANUAL: STORE PROPIO (Sin depender de Baileys)
-// ---------------------------------------------------------
-const store = {
-    contacts: {},
-    // Función para vincularse a los eventos del socket
-    bind: (ev) => {
-        ev.on('contacts.upsert', (contacts) => {
-            for (const contact of contacts) {
-                // Guardamos por ID normal
-                if (contact.id) {
-                    store.contacts[contact.id] = {
-                        ...(store.contacts[contact.id] || {}),
-                        ...contact
-                    };
-                }
-                // Guardamos referencia cruzada por LID si existe
-                if (contact.lid) {
-                    store.contacts[contact.lid] = store.contacts[contact.id];
-                }
-            }
-        });
-    },
-    // Persistencia simple
-    writeToFile: (filename) => {
-        try { fs.writeFileSync(filename, JSON.stringify(store.contacts)); } catch(e){}
-    },
-    readFromFile: (filename) => {
-        try { 
-            if(fs.existsSync(filename)) {
-                const data = JSON.parse(fs.readFileSync(filename, 'utf-8'));
-                store.contacts = data;
-            }
-        } catch(e){}
-    }
-};
-
-// Cargar datos previos si existen
-store.readFromFile(STORE_FILE);
-// Guardar periódicamente
-setInterval(() => store.writeToFile(STORE_FILE), 10_000);
-
 
 const pool = new Pool({
   host: process.env.PGHOST,
@@ -101,9 +56,13 @@ async function syncSlotInfo(locationId, slotId, phoneNumber) {
 
 async function getLocationSlotsConfig(locationId) {
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
-    try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { return []; }
+    try {
+        const res = await pool.query(sql, [locationId]);
+        return res.rows; 
+    } catch (e) { return []; }
 }
 
+// --- TOKENS ---
 async function saveTokens(locationId, tokenData) {
   const sql = `INSERT INTO auth_db (locationid, raw_token) VALUES ($1, $2::jsonb) ON CONFLICT (locationid) DO UPDATE SET raw_token = EXCLUDED.raw_token`;
   await pool.query(sql, [locationId, JSON.stringify(tokenData)]);
@@ -182,7 +141,7 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
-// --- GHL CONTACTS MEJORADO ---
+// --- GHL CONTACTS ---
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   const rawPhone = phone.replace(/\D/g, ''); 
   const phoneWithPlus = `+${rawPhone}`;
@@ -195,7 +154,7 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
     } catch (err) {}
   }
 
-  // Búsqueda inteligente
+  // Búsqueda inteligente (Query)
   try {
       const searchRes = await callGHLWithLocation(locationId, {
           method: "GET", url: "https://services.leadconnectorhq.com/contacts/",
@@ -231,7 +190,7 @@ async function logMessageToGHL(locationId, contactId, text, direction) {
       method: "POST", url: url,
       data: { type: "SMS", contactId, locationId, message: text, direction: direction }
     });
-    console.log(`✅ Sync [${direction}]: ${text.substring(0, 15)}...`);
+    console.log(`✅ GHL Sync [${direction}]: ${text.substring(0, 15)}...`);
   } catch (err) { console.error(`❌ GHL Log Error:`, err.message); }
 }
 
@@ -253,26 +212,6 @@ async function waitForSocketOpen(sock) {
     });
 }
 
-// 🔥 HELPER TRADUCCIÓN LID
-async function getRecipientPhone(remoteJid) {
-    let targetJid = remoteJid;
-    if (remoteJid.includes("@lid")) {
-        // Buscar en nuestro Store Manual
-        const contact = store.contacts[remoteJid] || Object.values(store.contacts).find(c => c.lid === remoteJid);
-        if (contact && contact.id) {
-             targetJid = contact.id;
-        } else {
-             console.warn(`❌ LID desconocido: ${remoteJid}. Esperando sync...`);
-             await new Promise(r => setTimeout(r, 2000)); // Retry
-             const retry = store.contacts[remoteJid];
-             if(retry && retry.id) targetJid = retry.id;
-             else return null;
-        }
-    }
-    if (!targetJid.includes("@s.whatsapp.net")) return null;
-    return normalizePhone(targetJid.split("@")[0]);
-}
-
 async function startWhatsApp(locationId, slotId) {
   const sessionId = `${locationId}_slot${slotId}`; 
   const existing = sessions.get(sessionId);
@@ -283,8 +222,8 @@ async function startWhatsApp(locationId, slotId) {
 
   console.log(`▶ Iniciando: ${sessionId}`);
 
-  // 🔥 FIX IMPORT: Solo traemos lo básico, sin 'makeInMemoryStore' que fallaba
   const baileys = await import("@whiskeysockets/baileys");
+  // Sin 'makeInMemoryStore'
   const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds } = baileys;
 
   async function usePostgreSQLAuthState(pool, id) {
@@ -340,9 +279,6 @@ async function startWhatsApp(locationId, slotId) {
     retryRequestDelayMs: 500
   });
 
-  // 🔥 VINCULAMOS NUESTRO STORE MANUAL
-  store.bind(sock.ev);
-
   sessionData.sock = sock;
   sock.ev.on("creds.update", saveCreds);
 
@@ -379,19 +315,17 @@ async function startWhatsApp(locationId, slotId) {
 
         const from = m.key.remoteJid;
         
-        // 🔥 TRADUCCIÓN LID CON STORE MANUAL
-        const clientPhone = await getRecipientPhone(from);
-        if (!clientPhone) {
-             // Filtros de basura
-             if (from.includes("@lid")) console.warn("LID no traducido, ignorando:", from);
-             return;
-        }
+        // --- FILTRO LID (Sin Store) ---
+        // Si es LID, no podemos traducir, así que lo ignoramos.
+        if (from.includes("@lid")) return;
 
         if (from === "status@broadcast" || from.includes("@newsletter")) return;
+        if (!from.includes("@s.whatsapp.net")) return;
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
 
+        const clientPhone = normalizePhone(from.split("@")[0]);
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
         const isFromMe = m.key.fromMe;
@@ -400,6 +334,7 @@ async function startWhatsApp(locationId, slotId) {
 
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
+        
         const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
 
         if (!contact?.id) return;
@@ -500,7 +435,10 @@ app.post("/ghl/webhook", async (req, res) => {
             await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
             return res.json({ ok: true });
 
-        } catch (e) { return res.status(500).json({ error: "Send failed" }); }
+        } catch (e) {
+            console.error(`❌ Error al enviar: ${e.message}`);
+            return res.status(500).json({ error: "Send failed" });
+        }
     }
     res.json({ ignored: true });
   } catch (err) { console.error(err); res.status(500).json({ error: "Error" }); }
