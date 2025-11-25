@@ -1,5 +1,5 @@
 # ✅ Node 20 + Debian (estable para binarios nativos)
-FROM node:20-bookworm-slim
+FROM node:20-alpine
 
 # Paquetes de build por si algún módulo los requiere
 RUN apt-get update && apt-get install -y --no-install-recommends \
