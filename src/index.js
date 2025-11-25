@@ -341,10 +341,7 @@ async function startWhatsApp(locationId, slotId) {
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
 
-        const from = m.key.remoteJid;
-        if (from.includes("@lid")){
-          from = m.key.remoteJidAlt
-        }
+        const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
 
         clientPhone = normalizePhone(from.split("@")[0]);
         // 🔥 TRADUCCIÓN DE LID A TELÉFONO (Usando API de WhatsApp)
