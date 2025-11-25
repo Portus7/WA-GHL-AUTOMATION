@@ -141,6 +141,34 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
+// 🔥 HELPER: Resolución Activa de LID a JID
+async function getRecipientPhone(remoteJid, sock) {
+    // 1. Si ya es un número normal, lo devolvemos limpio
+    if (remoteJid.includes("@s.whatsapp.net")) {
+        return normalizePhone(remoteJid.split("@")[0]);
+    }
+
+    // 2. Si es un LID, le preguntamos a WhatsApp quién es
+    if (remoteJid.includes("@lid")) {
+        try {
+            console.log(`🔍 Consultando a WhatsApp quién es el LID: ${remoteJid}...`);
+            
+            // Hacemos una query binaria interactiva para pedir el JID real
+            const [result] = await sock.onWhatsApp(remoteJid);
+            
+            if (result && result.jid) {
+                const realNumber = normalizePhone(result.jid.split("@")[0]);
+                console.log(`✅ WhatsApp respondió: ${remoteJid} ===> ${realNumber}`);
+                return realNumber;
+            }
+        } catch (e) {
+            console.error("Error en consulta onWhatsApp:", e.message);
+        }
+    }
+    
+    return null;
+}
+
 // --- GHL CONTACTS ---
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   const rawPhone = phone.replace(/\D/g, ''); 
@@ -223,7 +251,6 @@ async function startWhatsApp(locationId, slotId) {
   console.log(`▶ Iniciando: ${sessionId}`);
 
   const baileys = await import("@whiskeysockets/baileys");
-  // Sin 'makeInMemoryStore'
   const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds } = baileys;
 
   async function usePostgreSQLAuthState(pool, id) {
@@ -315,20 +342,20 @@ async function startWhatsApp(locationId, slotId) {
 
         const from = m.key.remoteJid;
         
-        // --- FILTRO LID (Sin Store) ---
-        // Si es LID, no podemos traducir, así que lo ignoramos.
-        if (from.includes("@lid")) {
-          console.log(msg.messages[0]) 
-          return
-        };
+        // 🔥 TRADUCCIÓN DE LID A TELÉFONO (Usando API de WhatsApp)
+        const clientPhone = await getRecipientPhone(from, sock); // Pasamos 'sock'
+        
+        if (!clientPhone) {
+             // Filtros de basura silenciosa
+             if (from.includes("@lid")) console.warn("LID no traducible, ignorando.");
+             return;
+        }
 
         if (from === "status@broadcast" || from.includes("@newsletter")) return;
-        if (!from.includes("@s.whatsapp.net")) return;
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
 
-        const clientPhone = normalizePhone(from.split("@")[0]);
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
         const isFromMe = m.key.fromMe;
@@ -438,10 +465,7 @@ app.post("/ghl/webhook", async (req, res) => {
             await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
             return res.json({ ok: true });
 
-        } catch (e) {
-            console.error(`❌ Error al enviar: ${e.message}`);
-            return res.status(500).json({ error: "Send failed" });
-        }
+        } catch (e) { return res.status(500).json({ error: "Send failed" }); }
     }
     res.json({ ignored: true });
   } catch (err) { console.error(err); res.status(500).json({ error: "Error" }); }
