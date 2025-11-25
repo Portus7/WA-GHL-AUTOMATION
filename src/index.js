@@ -206,6 +206,7 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   }
 
   // 3. Si encontramos el contacto, revisamos si hay que actualizar el nombre
+  console.log(contact, contact.id, "contacto")
   if (contact && contact.id) {
       const currentName = ((contact.firstName || "") + " " + (contact.lastName || "")).toLowerCase().trim();
       const isPlaceholder = currentName === "Usuario WhatsApp" || currentName === "usuario" || currentName === "" || currentName === "null";
