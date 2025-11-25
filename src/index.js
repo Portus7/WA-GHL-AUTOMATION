@@ -324,18 +324,27 @@ async function startWhatsApp(locationId, slotId) {
         // jidNormalizedUser por sí solo a veces no es suficiente.
         let remoteJid = m.key.remoteJid;
         if (remoteJid && remoteJid.endsWith('@lid')) {
-            console.log(`ℹ️ Detectado LID JID: ${remoteJid}. Intentando resolver con getBusinessProfile...`);
+            console.log(`ℹ️ Detectado LID JID: ${remoteJid}. Intentando resolver con un query de 'profile:picture'...`);
             try {
-                const businessProfile = await sock.getBusinessProfile(remoteJid);
-                if (businessProfile?.jid) {
-                    const resolvedJid = jidNormalizedUser(businessProfile.jid);
-                    console.log(`✅ JID resuelto con getBusinessProfile: ${remoteJid} -> ${resolvedJid}`);
+                const result = await sock.query({
+                    tag: 'iq',
+                    attrs: {
+                        type: 'get',
+                        xmlns: 'w:profile:picture',
+                        to: remoteJid,
+                    },
+                });
+
+                const fromJid = result.attrs?.from;
+                if (fromJid) {
+                    const resolvedJid = jidNormalizedUser(fromJid);
+                    console.log(`✅ JID resuelto con query 'profile:picture': ${remoteJid} -> ${resolvedJid}`);
                     remoteJid = resolvedJid;
                 } else {
-                     console.warn(`⚠️ No se pudo resolver el LID JID con getBusinessProfile: ${remoteJid}. Respuesta:`, businessProfile);
+                     console.warn(`⚠️ No se pudo resolver el LID JID con query 'profile:picture'. Respuesta:`, result);
                 }
             } catch (e) {
-                console.error(`❌ Error resolviendo LID JID ${remoteJid} con getBusinessProfile:`, e);
+                console.error(`❌ Error resolviendo LID JID ${remoteJid} con query 'profile:picture':`, e);
             }
         }
         
