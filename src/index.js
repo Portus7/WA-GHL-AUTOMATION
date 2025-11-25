@@ -207,13 +207,13 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
 
   // 3. Si encontramos el contacto, revisamos si hay que actualizar el nombre
   if (contact && contact.id) {
-      const currentName = ((contact.firstName || "") + " " + (contact.lastName || "")).toLowerCase().trim();
-      const isPlaceholder = currentName === "Usuario WhatsApp" || currentName === "usuario" || currentName === "" || currentName === "null";
+      //const currentName = ((contact.firstName || "") + " " + (contact.lastName || "")).toLowerCase().trim();
+      //const isPlaceholder = currentName === "Usuario WhatsApp" || currentName === "usuario" || currentName === "" || currentName === "null";
       
-      console.log(currentName, isPlaceholder, safeName, "contacto")
+      console.log(contact.firstName, safeName, "contacto")
       
       // Solo actualizamos si el nombre actual es genérico Y el nuevo nombre es bueno
-      if (isPlaceholder && safeName !== "Usuario WhatsApp") {
+      if (contact.firstName == "Usuario WhatsApp") {
            console.log(`🔄 Actualizando nombre de contacto ${contact.id}: ${safeName}`);
            try {
                await callGHLWithLocation(locationId, {
@@ -391,13 +391,14 @@ async function startWhatsApp(locationId, slotId) {
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
         const isFromMe = m.key.fromMe;
+        const waName = m.pushName || "";
 
         console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
 
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         
-        const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
+        const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId);
 
         if (!contact?.id) return;
 
