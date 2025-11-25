@@ -226,7 +226,7 @@ async function startWhatsApp(locationId, slotId) {
 
   console.log(`▶ Iniciando WhatsApp: ${sessionId}`);
 
-  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds } = await import("@whiskeysockets/baileys");
+  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, jidNormalized } = await import("@whiskeysockets/baileys");
 
   async function usePostgreSQLAuthState(pool, id) {
     const { BufferJSON, proto } = await import("@whiskeysockets/baileys");
@@ -319,14 +319,10 @@ async function startWhatsApp(locationId, slotId) {
         // 1. Ignorar Ecos del Bot (si tenemos el ID en caché)
         if (botMessageIds.has(m.key.id)) return;
 
-        // --- 🔥 FIX: NORMALIZACIÓN DE JID (LID -> Standard) ---
-        let remoteJid = m.key.remoteJid;
-
-        // Si viene de un LID (Dispositivo vinculado), lo tratamos como si fuera el número normal
-        // Esto permite capturar los mensajes enviados desde el celular
-        if (remoteJid.includes("@lid")) {
-            remoteJid = remoteJid.replace("@lid", "@s.whatsapp.net");
-        }
+        // --- 🔥 FIX CORRECTO: NORMALIZACIÓN DE JID (LID -> Standard) ---
+        // Usamos la función de Baileys para obtener el JID real del destinatario.
+        // Esto resuelve correctamente los JIDs de tipo "@lid" al formato "@s.whatsapp.net" con el número de teléfono correcto.
+        const remoteJid = jidNormalized(m.key.remoteJid);
 
         // --- FILTROS ---
         // Ignorar estados, canales, grupos y cosas raras
