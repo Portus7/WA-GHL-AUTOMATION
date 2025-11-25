@@ -342,15 +342,19 @@ async function startWhatsApp(locationId, slotId) {
         if (botMessageIds.has(m.key.id)) return; 
 
         const from = m.key.remoteJid;
-        
-        // 🔥 TRADUCCIÓN DE LID A TELÉFONO (Usando API de WhatsApp)
-        const clientPhone = await getRecipientPhone(from, sock); // Pasamos 'sock'
-        
-        if (!clientPhone) {
-             // Filtros de basura silenciosa
-             if (from.includes("@lid")) console.warn("LID no traducible, ignorando.");
-             return;
+        if (from.includes("@lid")){
+          from = m.key.remoteJidAlt
         }
+
+        clientPhone = normalizePhone(from.split("@")[0]);
+        // 🔥 TRADUCCIÓN DE LID A TELÉFONO (Usando API de WhatsApp)
+        //const clientPhone = await getRecipientPhone(from, sock); // Pasamos 'sock'
+        
+        //if (!clientPhone) {
+             // Filtros de basura silenciosa
+        //     if (from.includes("@lid")) console.warn("LID no traducible, ignorando.");
+        //     return;
+        //}
 
         if (from === "status@broadcast" || from.includes("@newsletter")) return;
 
