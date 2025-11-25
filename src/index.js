@@ -6,6 +6,7 @@ const pino = require("pino");
 const { webcrypto } = require("crypto");
 const { Pool } = require("pg");
 const axios = require("axios");
+const { jidNormalized } = require("@whiskeysockets/baileys");
 const { Console } = require("console");
 
 if (!globalThis.crypto) { globalThis.crypto = webcrypto; }
@@ -226,7 +227,7 @@ async function startWhatsApp(locationId, slotId) {
 
   console.log(`▶ Iniciando WhatsApp: ${sessionId}`);
 
-  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, jidNormalized } = await import("@whiskeysockets/baileys");
+  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds } = await import("@whiskeysockets/baileys");
 
   async function usePostgreSQLAuthState(pool, id) {
     const { BufferJSON, proto } = await import("@whiskeysockets/baileys");
