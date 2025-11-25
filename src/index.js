@@ -312,7 +312,7 @@ async function startWhatsApp(locationId, slotId) {
 // 📩 UPSERT: Mensajes Entrantes Y Salientes
   sock.ev.on("messages.upsert", async (msg) => {
     try {
-        console.log(sock, "the sock")
+        console.log(msg.messages[0], "the sock")
         const m = msg.messages[0];
         if (!m?.message) return;
         
