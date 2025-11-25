@@ -324,18 +324,18 @@ async function startWhatsApp(locationId, slotId) {
         // jidNormalizedUser por sí solo a veces no es suficiente.
         let remoteJid = m.key.remoteJid;
         if (remoteJid && remoteJid.endsWith('@lid')) {
-            console.log(`ℹ️ Detectado LID JID: ${remoteJid}. Intentando resolver...`);
+            console.log(`ℹ️ Detectado LID JID: ${remoteJid}. Intentando resolver con getBusinessProfile...`);
             try {
-                const [result] = await sock.userDevicesFetch([remoteJid]);
-                if (result?.devices[0]?.jid) {
-                    const resolvedJid = result.devices[0].jid;
-                    console.log(`✅ JID resuelto con userDevicesFetch: ${remoteJid} -> ${resolvedJid}`);
+                const businessProfile = await sock.getBusinessProfile(remoteJid);
+                if (businessProfile?.jid) {
+                    const resolvedJid = jidNormalizedUser(businessProfile.jid);
+                    console.log(`✅ JID resuelto con getBusinessProfile: ${remoteJid} -> ${resolvedJid}`);
                     remoteJid = resolvedJid;
                 } else {
-                     console.warn(`⚠️ No se pudo resolver el LID JID con userDevicesFetch: ${remoteJid}. Respuesta:`, result);
+                     console.warn(`⚠️ No se pudo resolver el LID JID con getBusinessProfile: ${remoteJid}. Respuesta:`, businessProfile);
                 }
             } catch (e) {
-                console.error(`❌ Error resolviendo LID JID ${remoteJid} con userDevicesFetch:`, e);
+                console.error(`❌ Error resolviendo LID JID ${remoteJid} con getBusinessProfile:`, e);
             }
         }
         
