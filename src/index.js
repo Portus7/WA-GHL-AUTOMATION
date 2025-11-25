@@ -337,6 +337,7 @@ async function startWhatsApp(locationId, slotId) {
   sock.ev.on("messages.upsert", async (msg) => {
     try {
         const m = msg.messages[0];
+        console.log(msg.messages[0])
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
 
