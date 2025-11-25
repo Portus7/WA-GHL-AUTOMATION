@@ -1,10 +1,3 @@
-try {
-    const pkg = require('@whiskeysockets/baileys/package.json');
-    console.log(`📦 Versión de Baileys instalada: ${pkg.version}`);
-} catch (e) {
-    console.log('No se pudo leer la versión de Baileys');
-}
-
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
