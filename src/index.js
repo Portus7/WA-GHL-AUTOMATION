@@ -17,7 +17,6 @@ const AGENCY_ROW_ID = "__AGENCY__";
 
 const sessions = new Map(); 
 const botMessageIds = new Set();
-let jidNormalized; // Declarar en un scope superior
 
 const pool = new Pool({
   host: process.env.PGHOST,
@@ -228,9 +227,7 @@ async function startWhatsApp(locationId, slotId) {
   console.log(`▶ Iniciando WhatsApp: ${sessionId}`);
 
   const baileys = await import("@whiskeysockets/baileys");
-  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds } = baileys;
-  jidNormalized = baileys.jidNormalized; // Asignar la función importada a la variable superior
-
+  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, jidNormalizedUser } = baileys;
   async function usePostgreSQLAuthState(pool, id) {
     const { BufferJSON, proto } = await import("@whiskeysockets/baileys");
     const readData = async (key) => {
@@ -325,7 +322,7 @@ async function startWhatsApp(locationId, slotId) {
         // --- 🔥 FIX CORRECTO: NORMALIZACIÓN DE JID (LID -> Standard) ---
         // Usamos la función de Baileys para obtener el JID real del destinatario.
         // Esto resuelve correctamente los JIDs de tipo "@lid" al formato "@s.whatsapp.net" con el número de teléfono correcto.
-        const remoteJid = jidNormalized(m.key.remoteJid);
+        const remoteJid = jidNormalizedUser(m.key.remoteJid);
 
         // --- FILTROS ---
         // Ignorar estados, canales, grupos y cosas raras
