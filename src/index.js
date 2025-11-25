@@ -323,7 +323,7 @@ async function startWhatsApp(locationId, slotId) {
         // Usamos la función de Baileys para obtener el JID real del destinatario.
         // Esto resuelve correctamente los JIDs de tipo "@lid" al formato "@s.whatsapp.net" con el número de teléfono correcto.
         const remoteJid = jidNormalizedUser(m.key.remoteJid);
-
+        console.log(remoteJid, "the jid")
         // --- FILTROS ---
         // Ignorar estados, canales, grupos y cosas raras
         if (remoteJid === "status@broadcast" || remoteJid.includes("@newsletter")) return;
