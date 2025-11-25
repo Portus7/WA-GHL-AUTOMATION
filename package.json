@@ -10,6 +10,7 @@
   "dependencies": {
     "@gohighlevel/api-client": "^2.2.2",
     "@whiskeysockets/baileys": "^6.7.21",
+    "baileys": "github:WhiskeySockets/Baileys",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
