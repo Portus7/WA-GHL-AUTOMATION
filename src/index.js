@@ -6,7 +6,6 @@ const pino = require("pino");
 const { webcrypto } = require("crypto");
 const { Pool } = require("pg");
 const axios = require("axios");
-const { Console } = require("console");
 
 if (!globalThis.crypto) { globalThis.crypto = webcrypto; }
 
@@ -18,52 +17,49 @@ const AGENCY_ROW_ID = "__AGENCY__";
 const sessions = new Map(); 
 const botMessageIds = new Set();
 
+// 🔥 STORE GLOBAL: Diccionario para traducir LID a JID real
+let store; 
+
 const pool = new Pool({
-  host: process.env.PGHOST,
-  port: process.env.PGPORT,
-  database: process.env.PGDATABASE,
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
-  ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
+  host: process.env.PGHOST,
+  port: process.env.PGPORT,
+  database: process.env.PGDATABASE,
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
+  ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
 });
 
-// --- HELPERS ---
+// --- HELPERS (Sin cambios en lógica de DB) ---
 
 async function deleteSessionData(locationId, slot) {
-  const sessionId = `${locationId}_slot${slot}`;
-  const session = sessions.get(sessionId);
-  if (session && session.sock) { 
-      try { 
-          session.sock.end(undefined); 
-          session.sock.ws.close();
-      } catch (e) {} 
-  }
-  sessions.delete(sessionId);
-  try { await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]); } catch (e) {}
-  try { await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]); } catch (e) {}
+  const sessionId = `${locationId}_slot${slot}`;
+  const session = sessions.get(sessionId);
+  if (session && session.sock) { try { session.sock.end(undefined); session.sock.ws.close(); } catch (e) {} }
+  sessions.delete(sessionId);
+  try { await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]); } catch (e) {}
+  try { await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]); } catch (e) {}
 }
 
 async function syncSlotInfo(locationId, slotId, phoneNumber) {
-  const check = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
-  const res = await pool.query(check, [locationId, slotId]);
-  if (res.rows.length === 0) {
-    const insert = `INSERT INTO location_slots (location_id, slot_id, phone_number, priority) VALUES ($1, $2, $3, $4)`;
-    await pool.query(insert, [locationId, slotId, phoneNumber, slotId]);
-  } else {
-    const update = "UPDATE location_slots SET phone_number = $1, updated_at = NOW() WHERE location_id = $2 AND slot_id = $3";
-    await pool.query(update, [phoneNumber, locationId, slotId]);
-  }
+  const check = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
+  const res = await pool.query(check, [locationId, slotId]);
+  if (res.rows.length === 0) {
+    const insert = `INSERT INTO location_slots (location_id, slot_id, phone_number, priority) VALUES ($1, $2, $3, $4)`;
+    await pool.query(insert, [locationId, slotId, phoneNumber, slotId]);
+  } else {
+    const update = "UPDATE location_slots SET phone_number = $1, updated_at = NOW() WHERE location_id = $2 AND slot_id = $3";
+    await pool.query(update, [phoneNumber, locationId, slotId]);
+  }
 }
 
 async function getLocationSlotsConfig(locationId) {
-    const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
-    try {
-        const res = await pool.query(sql, [locationId]);
-        return res.rows; 
-    } catch (e) { return []; }
+    const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
+    try {
+        const res = await pool.query(sql, [locationId]);
+        return res.rows; 
+    } catch (e) { return []; }
 }
 
-// --- TOKENS ---
 async function saveTokens(locationId, tokenData) {
   const sql = `INSERT INTO auth_db (locationid, raw_token) VALUES ($1, $2::jsonb) ON CONFLICT (locationid) DO UPDATE SET raw_token = EXCLUDED.raw_token`;
   await pool.query(sql, [locationId, JSON.stringify(tokenData)]);
@@ -75,7 +71,6 @@ async function getTokens(locationId) {
 }
 
 async function forceRefreshToken(locationId) {
-  console.log(`🔄 Refrescando token forzado para: ${locationId}`);
   const tokens = await getTokens(locationId);
   if (!tokens) throw new Error(`No hay tokens para ${locationId}`);
   try {
@@ -84,7 +79,7 @@ async function forceRefreshToken(locationId) {
     const newToken = refreshRes.data;
     await saveTokens(locationId, { ...tokens, locationAccess: newToken });
     return newToken.access_token;
-  } catch (e) { console.error(`❌ Error refrescando token: ${e.message}`); throw e; }
+  } catch (e) { throw e; }
 }
 
 async function ensureAgencyToken() {
@@ -116,7 +111,6 @@ async function callGHLWithLocation(locationId, config) {
     return await axios({ ...config, headers: { Accept: "application/json", Version: GHL_API_VERSION, Authorization: `Bearer ${tokenData.accessToken}`, "Location-Id": tokenData.realLocationId, ...(config.headers || {}) } });
   } catch (error) {
     if (error.response?.status === 401) {
-      console.warn(`⚠️ [AXIOS] 401 Detectado. Refrescando...`);
       const newAccessToken = await forceRefreshToken(locationId);
       return await axios({ ...config, headers: { Accept: "application/json", Version: GHL_API_VERSION, Authorization: `Bearer ${newAccessToken}`, "Location-Id": tokenData.realLocationId, ...(config.headers || {}) } });
     }
@@ -124,7 +118,6 @@ async function callGHLWithLocation(locationId, config) {
   }
 }
 
-// --- ROUTING ---
 function normalizePhone(phone) {
   if (!phone) return "";
   return phone.replace(/[^\d+]/g, "");
@@ -146,10 +139,11 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
-// --- GHL CONTACTS ---
+// --- GHL CONTACTS MEJORADO ---
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
-  console.log(locationId, phone, waName, contactId)
-  const p = "+" + normalizePhone(phone); 
+  const rawPhone = phone.replace(/\D/g, ''); 
+  const phoneWithPlus = `+${rawPhone}`;
+
   if (contactId) {
     try {
       const lookupRes = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
@@ -157,45 +151,45 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
       if (contact?.id) return contact;
     } catch (err) {}
   }
+
+  try {
+      const searchRes = await callGHLWithLocation(locationId, {
+          method: "GET", url: "https://services.leadconnectorhq.com/contacts/",
+          params: { locationId: locationId, query: rawPhone, limit: 1 }
+      });
+      if (searchRes.data && searchRes.data.contacts && searchRes.data.contacts.length > 0) {
+          const found = searchRes.data.contacts[0];
+          const foundPhone = found.phone ? found.phone.replace(/\D/g, '') : "";
+          if (foundPhone.includes(rawPhone) || rawPhone.includes(foundPhone)) {
+              return found;
+          }
+      }
+  } catch(e) {}
+
   try {
     const createdRes = await callGHLWithLocation(locationId, {
       method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
-      data: { locationId, phone: p, firstName: waName, source: "WhatsApp Baileys" }
+      data: { locationId, phone: phoneWithPlus, firstName: waName, source: "WhatsApp Baileys" }
     });
     return createdRes.data.contact || createdRes.data;
   } catch (err) {
     const body = err.response?.data;
-    if (err.response?.status === 400 && body?.meta?.contactId) return { id: body.meta.contactId, phone: p };
-    console.error("❌ Error creando contacto:", err.message);
+    if (err.response?.status === 400 && body?.meta?.contactId) return { id: body.meta.contactId, phone: phoneWithPlus };
     return null;
   }
 }
 
-// 🔥 FIX DE BURBUJAS: Usar endpoints distintos según la dirección
 async function logMessageToGHL(locationId, contactId, text, direction) {
   try {
-    // Si es inbound (cliente), USAR EL ENDPOINT ESPECÍFICO INBOUND
-    // Si es outbound (yo), usar el endpoint genérico
-    
-    let url = "https://services.leadconnectorhq.com/conversations/messages"; // Default (Outbound)
-    if (direction === "inbound") {
-        url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
-    }
+    let url = "https://services.leadconnectorhq.com/conversations/messages"; 
+    if (direction === "inbound") url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
 
     await callGHLWithLocation(locationId, {
       method: "POST", url: url,
-      data: { 
-          type: "SMS", 
-          contactId, 
-          locationId, 
-          message: text, 
-          direction: direction 
-      }
+      data: { type: "SMS", contactId, locationId, message: text, direction: direction }
     });
-    console.log(`✅ GHL Sync [${direction}]: ${text.substring(0, 20)}...`);
-  } catch (err) { 
-      console.error(`❌ GHL Log Error (${direction}):`, err.response?.data || err.message);
-  }
+    console.log(`✅ GHL Sync [${direction}]: ${text.substring(0, 15)}...`);
+  } catch (err) { console.error(`❌ GHL Log Error:`, err.message); }
 }
 
 // -----------------------------
@@ -224,10 +218,17 @@ async function startWhatsApp(locationId, slotId) {
   const sessionData = { sock: null, qr: null, isConnected: false, myNumber: null };
   sessions.set(sessionId, sessionData);
 
-  console.log(`▶ Iniciando WhatsApp: ${sessionId}`);
+  console.log(`▶ Iniciando: ${sessionId}`);
 
   const baileys = await import("@whiskeysockets/baileys");
-  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, jidNormalizedUser } = baileys;
+  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, makeInMemoryStore } = baileys; // Asegurarse de importar makeInMemoryStore
+
+  // 🔥 STORE: Inicializar y Persistir (Lectura de LID/JID)
+  if (!store) {
+      store = makeInMemoryStore({ });
+      // El store se llenará automáticamente al vincular/sincronizar
+  }
+
   async function usePostgreSQLAuthState(pool, id) {
     const { BufferJSON, proto } = await import("@whiskeysockets/baileys");
     const readData = async (key) => {
@@ -281,6 +282,9 @@ async function startWhatsApp(locationId, slotId) {
     retryRequestDelayMs: 500
   });
 
+  // 🔥 VINCULAR SOCKET AL STORE
+  store.bind(sock.ev);
+
   sessionData.sock = sock;
   sock.ev.on("creds.update", saveCreds);
 
@@ -309,105 +313,68 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
-// 📩 UPSERT: Mensajes Entrantes Y Salientes
   sock.ev.on("messages.upsert", async (msg) => {
     try {
-        console.log(msg.messages[0], "the sock")
         const m = msg.messages[0];
         if (!m?.message) return;
-        
-        // 1. Ignorar Ecos del Bot (si tenemos el ID en caché)
-        if (botMessageIds.has(m.key.id)) return;
+        if (botMessageIds.has(m.key.id)) return; 
 
-        // --- 🔥 FIX AVANZADO: RESOLUCIÓN Y NORMALIZACIÓN DE JID (LID -> Standard) ---
-        // Primero, intentamos resolver activamente los JIDs de tipo @lid, que son comunes en cuentas de Business.
-        // jidNormalizedUser por sí solo a veces no es suficiente.
         let remoteJid = m.key.remoteJid;
-        if (remoteJid && remoteJid.endsWith('@lid')) {
-            console.log(`ℹ️ Detectado LID JID: ${remoteJid}. Intentando resolver con un query de 'profile:picture'...`);
-            try {
-                const result = await sock.query({
-                    tag: 'iq',
-                    attrs: {
-                        type: 'get',
-                        xmlns: 'w:profile:picture',
-                        to: remoteJid,
-                    },
-                });
 
-                const fromJid = result.attrs?.from;
-                if (fromJid) {
-                    const resolvedJid = jidNormalizedUser(fromJid);
-                    console.log(`✅ JID resuelto con query 'profile:picture': ${remoteJid} -> ${resolvedJid}`);
-                    remoteJid = resolvedJid;
-                } else {
-                     console.warn(`⚠️ No se pudo resolver el LID JID con query 'profile:picture'. Respuesta:`, result);
-                }
-            } catch (e) {
-                console.error(`❌ Error resolviendo LID JID ${remoteJid} con query 'profile:picture':`, e);
+        // 🔥 TRADUCCIÓN LID -> TELÉFONO REAL CON STORE
+        if (remoteJid && remoteJid.endsWith('@lid')) {
+            // 1. Intentar resolver el LID a JID (número) usando el store
+            const contactFromStore = store.contacts[remoteJid] || Object.values(store.contacts).find(c => c.lid === remoteJid);
+            
+            if (contactFromStore && contactFromStore.id) {
+                remoteJid = contactFromStore.id; // Reemplazamos el LID con el PNID
+            } else {
+                console.warn(`❌ No se pudo resolver el destinatario LID: ${remoteJid}. Mensaje ignorado.`);
+                return; // No podemos procesar si no sabemos a quién se lo mandamos
             }
         }
-        
-        // Como segundo paso o fallback, normalizamos el JID.
-        remoteJid = jidNormalizedUser(remoteJid);
-        console.log(remoteJid, "the jid final")
 
-        // --- FILTROS ---
-        // Ignorar estados, canales, grupos y cosas raras.
+        // Filtros estándar
         if (remoteJid === "status@broadcast" || remoteJid.includes("@newsletter")) return;
-        if (remoteJid.includes("@g.us")) return; // Ignorar grupos (opcional)
-
-        // Ahora el filtro es más confiable porque el JID ya debería estar resuelto.
-        if (!remoteJid.includes("@s.whatsapp.net")) {
-            console.log(`🚫 JID ignorado por formato no estándar tras intentos de resolución: ${remoteJid}`);
-            return;
-        }
+        if (!remoteJid.includes("@s.whatsapp.net")) return;
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
 
-        // Extraemos el teléfono del JID YA NORMALIZADO
         const clientPhone = normalizePhone(remoteJid.split("@")[0]);
-        
-        // Datos del bot (Slot actual)
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
         const isFromMe = m.key.fromMe;
 
-        // -------------------------------------------------------
-        // LÓGICA DE GHL (Contactos y Logging)
-        // -------------------------------------------------------
+        console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
 
-        // 1. Routing
+        // Routing
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         
-        // Buscamos/Creamos contacto en GHL
+        // 🔥 BÚSQUEDA GHL
         const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
 
-        if (!contact?.id) return;
+        if (!contact?.id) {
+            console.error("❌ GHL Contacto no encontrado/creado.");
+            return;
+        }
 
-        // Guardamos routing para mantener la conversación pegada a este número
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
 
         let messageForGHL = "";
-        let direction = "inbound"; // Default (gris/izquierda)
+        let direction = "inbound";
 
         if (isFromMe) {
-            // ✅ MENSAJE ENVIADO DESDE TU CELULAR
-            // Lo marcamos como 'outbound' para que salga Azul/Derecha en GHL
-            // Le ponemos la firma para que el Webhook de GHL sepa que NO debe reenviarlo
+            // SALIENTE (MÓVIL) -> AZUL
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
             direction = "outbound"; 
-            console.log(`📱 Sync Celular -> GHL (+${clientPhone}): "${text.substring(0,10)}..."`);
         } else {
-            // ✅ MENSAJE RECIBIDO DEL CLIENTE
+            // ENTRANTE -> GRIS
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 
-            console.log(`📩 Inbound Cliente -> GHL (+${clientPhone}): "${text.substring(0,10)}..."`);
         }
 
-        // Subir a GHL
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction);
 
     } catch (error) { console.error("Upsert Error:", error.message); }
@@ -443,13 +410,12 @@ app.get("/status", async (req, res) => {
   res.json({ connected: false, priority: extra.priority, tags: extra.tags });
 });
 
-// --- WEBHOOK OUTBOUND CON FILTRO LOOP ---
+// --- WEBHOOK OUTBOUND (FILTRO LOOP) ---
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
     if (!locationId || !phone || !message) return res.json({ ignored: true });
 
-    // 🛑 FILTRO ANTI-BUCLE
     if (message.includes("[Enviado desde otro dispositivo]")) return res.json({ ignored: true });
 
     if (type === "Outbound" || type === "SMS") {
@@ -464,7 +430,6 @@ app.post("/ghl/webhook", async (req, res) => {
             session: sessions.get(`${locationId}_slot${conf.slot_id}`)
         })).filter(c => c.session && c.session.isConnected);
 
-        // Fallback
         if (availableCandidates.length === 0) {
              for (const [sid, s] of sessions.entries()) {
                 if (sid.startsWith(`${locationId}_slot`) && s.isConnected) 
@@ -504,7 +469,6 @@ app.post("/ghl/webhook", async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: "Error" }); }
 });
 
-// ... Config / Remove / Install ...
 app.post("/config-slot", async (req, res) => {
   const { locationId, slot, phoneNumber, priority, addTag, removeTag } = req.body;
   if (!locationId) return res.status(400).json({ error: "Faltan datos" });
