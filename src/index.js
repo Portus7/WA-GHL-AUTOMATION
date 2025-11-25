@@ -171,12 +171,12 @@ async function getRecipientPhone(remoteJid, sock) {
 
 // --- GHL CONTACTS ---
 // --- GHL CONTACTS MEJORADO ---
-async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
+async function findOrCreateGHLContact(locationId, phone, waName, contactId, fromMe) {
   const rawPhone = phone.replace(/\D/g, ''); 
   const phoneWithPlus = `+${rawPhone}`;
   
   // Definimos un nombre por defecto si waName viene vacío
-  const safeName = (waName && waName.trim()) ? waName : "Usuario WhatsApp";
+  const safeName = (waName && waName.trim() && !fromMe) ? waName : "Usuario WhatsApp";
 
   let contact = null;
 
@@ -398,7 +398,7 @@ async function startWhatsApp(locationId, slotId) {
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         
-        const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId);
+        const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe);
 
         if (!contact?.id) return;
 
