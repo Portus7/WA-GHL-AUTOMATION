@@ -319,16 +319,38 @@ async function startWhatsApp(locationId, slotId) {
         // 1. Ignorar Ecos del Bot (si tenemos el ID en caché)
         if (botMessageIds.has(m.key.id)) return;
 
-        // --- 🔥 FIX CORRECTO: NORMALIZACIÓN DE JID (LID -> Standard) ---
-        // Usamos la función de Baileys para obtener el JID real del destinatario.
-        // Esto resuelve correctamente los JIDs de tipo "@lid" al formato "@s.whatsapp.net" con el número de teléfono correcto.
-        const remoteJid = jidNormalizedUser(m.key.remoteJid);
-        console.log(remoteJid, "the jid")
+        // --- 🔥 FIX AVANZADO: RESOLUCIÓN Y NORMALIZACIÓN DE JID (LID -> Standard) ---
+        // Primero, intentamos resolver activamente los JIDs de tipo @lid, que son comunes en cuentas de Business.
+        // jidNormalizedUser por sí solo a veces no es suficiente.
+        let remoteJid = m.key.remoteJid;
+        if (remoteJid && remoteJid.endsWith('@lid')) {
+            try {
+                const [contact] = await sock.onWhatsApp(remoteJid);
+                if (contact?.jid) {
+                    console.log(`✅ JID resuelto de LID a standard: ${remoteJid} -> ${contact.jid}`);
+                    remoteJid = contact.jid;
+                } else {
+                     console.warn(`⚠️ No se pudo resolver el LID JID: ${remoteJid}. Se intentará con jidNormalizedUser.`);
+                }
+            } catch (e) {
+                console.error(`❌ Error resolviendo LID JID ${remoteJid} con onWhatsApp:`, e);
+            }
+        }
+        
+        // Como segundo paso o fallback, normalizamos el JID.
+        remoteJid = jidNormalizedUser(remoteJid);
+        console.log(remoteJid, "the jid final")
+
         // --- FILTROS ---
-        // Ignorar estados, canales, grupos y cosas raras
+        // Ignorar estados, canales, grupos y cosas raras.
         if (remoteJid === "status@broadcast" || remoteJid.includes("@newsletter")) return;
         if (remoteJid.includes("@g.us")) return; // Ignorar grupos (opcional)
-        if (!remoteJid.includes("@s.whatsapp.net")) return;
+
+        // Ahora el filtro es más confiable porque el JID ya debería estar resuelto.
+        if (!remoteJid.includes("@s.whatsapp.net")) {
+            console.log(`🚫 JID ignorado por formato no estándar tras intentos de resolución: ${remoteJid}`);
+            return;
+        }
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
