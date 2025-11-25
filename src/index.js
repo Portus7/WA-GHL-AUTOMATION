@@ -325,7 +325,7 @@ async function startWhatsApp(locationId, slotId) {
         let remoteJid = m.key.remoteJid;
         if (remoteJid && remoteJid.endsWith('@lid')) {
             try {
-                const [contact] = await sock.onWhatsApp(remoteJid);
+                const [contact] = await sock.onWhatsApp([remoteJid]);
                 if (contact?.jid) {
                     console.log(`✅ JID resuelto de LID a standard: ${remoteJid} -> ${contact.jid}`);
                     remoteJid = contact.jid;
