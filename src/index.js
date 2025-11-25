@@ -26,7 +26,9 @@ const pool = new Pool({
   ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
 });
 
-// --- HELPERS ---
+// ----------------------------------------------------------------------
+// HELPERS: SESIONES Y DB
+// ----------------------------------------------------------------------
 
 async function deleteSessionData(locationId, slot) {
   const sessionId = `${locationId}_slot${slot}`;
@@ -56,13 +58,13 @@ async function syncSlotInfo(locationId, slotId, phoneNumber) {
 
 async function getLocationSlotsConfig(locationId) {
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
-    try {
-        const res = await pool.query(sql, [locationId]);
-        return res.rows; 
-    } catch (e) { return []; }
+    try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { return []; }
 }
 
-// --- TOKENS ---
+// ----------------------------------------------------------------------
+// HELPERS: TOKENS GHL
+// ----------------------------------------------------------------------
+
 async function saveTokens(locationId, tokenData) {
   const sql = `INSERT INTO auth_db (locationid, raw_token) VALUES ($1, $2::jsonb) ON CONFLICT (locationid) DO UPDATE SET raw_token = EXCLUDED.raw_token`;
   await pool.query(sql, [locationId, JSON.stringify(tokenData)]);
@@ -87,13 +89,13 @@ async function forceRefreshToken(locationId) {
 
 async function ensureAgencyToken() {
   let tokens = await getTokens(AGENCY_ROW_ID);
-  if (!tokens) throw new Error("No hay tokens agencia ADSASDAS");
+  if (!tokens) throw new Error("No hay tokens agencia");
   return tokens.access_token; 
 }
 
 async function ensureLocationToken(locationId) {
   const tokens = await getTokens(locationId);
-  if (!tokens?.locationAccess) throw new Error(`No hay tokens para  ${locationId}`);
+  if (!tokens?.locationAccess) throw new Error(`No hay tokens para ${locationId}`);
   return { accessToken: tokens.locationAccess.access_token, realLocationId: tokens.locationAccess.locationId };
 }
 
@@ -120,6 +122,10 @@ async function callGHLWithLocation(locationId, config) {
   }
 }
 
+// ----------------------------------------------------------------------
+// HELPERS: ROUTING & CONTACTOS
+// ----------------------------------------------------------------------
+
 function normalizePhone(phone) {
   if (!phone) return "";
   return phone.replace(/[^\d+]/g, "");
@@ -141,48 +147,35 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
-// 🔥 HELPER: Resolución Activa de LID a JID
-async function getRecipientPhone(remoteJid, sock) {
-    // 1. Si ya es un número normal, lo devolvemos limpio
-    if (remoteJid.includes("@s.whatsapp.net")) {
-        return normalizePhone(remoteJid.split("@")[0]);
-    }
-
-    // 2. Si es un LID, le preguntamos a WhatsApp quién es
-    if (remoteJid.includes("@lid")) {
-        try {
-            console.log(`🔍 Consultando a WhatsApp quién es el LID: ${remoteJid}...`);
-            
-            // Hacemos una query binaria interactiva para pedir el JID real
-            const [result] = await sock.onWhatsApp(remoteJid);
-            
-            if (result && result.jid) {
-                const realNumber = normalizePhone(result.jid.split("@")[0]);
-                console.log(`✅ WhatsApp respondió: ${remoteJid} ===> ${realNumber}`);
-                return realNumber;
-            }
-        } catch (e) {
-            console.error("Error en consulta onWhatsApp:", e.message);
-        }
-    }
-    
-    return null;
-}
-
-// --- GHL CONTACTS ---
+// --- GHL: BUSCAR, CREAR Y ACTUALIZAR ---
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   const rawPhone = phone.replace(/\D/g, ''); 
   const phoneWithPlus = `+${rawPhone}`;
+  const safeName = waName || "Usuario WhatsApp";
 
+  // 1. Buscar por ID (si existe)
   if (contactId) {
     try {
       const lookupRes = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
       const contact = lookupRes.data.contact || lookupRes.data;
-      if (contact?.id) return contact;
+      
+      if (contact?.id) {
+          // 🔥 ACTUALIZACIÓN DE NOMBRE: Si se llamaba "Usuario WhatsApp" y ahora tenemos nombre real
+          if (contact.firstName === "Usuario" && contact.lastName === "WhatsApp" && waName && waName !== "Usuario") {
+               console.log(`🔄 Actualizando nombre: ${safeName}`);
+               try {
+                   await callGHLWithLocation(locationId, {
+                       method: "PUT", url: `https://services.leadconnectorhq.com/contacts/${contact.id}`,
+                       data: { firstName: safeName, lastName: "" } // Actualizar solo nombre
+                   });
+               } catch(e){}
+          }
+          return contact;
+      }
     } catch (err) {}
   }
 
-  // Búsqueda inteligente (Query)
+  // 2. Búsqueda Inteligente (Query)
   try {
       const searchRes = await callGHLWithLocation(locationId, {
           method: "GET", url: "https://services.leadconnectorhq.com/contacts/",
@@ -191,15 +184,26 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
       if (searchRes.data && searchRes.data.contacts && searchRes.data.contacts.length > 0) {
           const found = searchRes.data.contacts[0];
           const foundPhone = found.phone ? found.phone.replace(/\D/g, '') : "";
-          if (foundPhone.includes(rawPhone) || rawPhone.includes(foundPhone)) return found;
+          if (foundPhone.includes(rawPhone) || rawPhone.includes(foundPhone)) {
+              // Actualizar nombre si es necesario
+              if (found.firstName === "Usuario" && found.lastName === "WhatsApp" && waName && waName !== "Usuario") {
+                   try {
+                       await callGHLWithLocation(locationId, {
+                           method: "PUT", url: `https://services.leadconnectorhq.com/contacts/${found.id}`,
+                           data: { firstName: safeName, lastName: "" }
+                       });
+                   } catch(e){}
+              }
+              return found;
+          }
       }
   } catch(e) {}
 
-  // Crear
+  // 3. Crear Contacto Nuevo
   try {
     const createdRes = await callGHLWithLocation(locationId, {
       method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
-      data: { locationId, phone: phoneWithPlus, firstName: waName, source: "WhatsApp Baileys" }
+      data: { locationId, phone: phoneWithPlus, firstName: safeName, source: "WhatsApp Baileys" }
     });
     return createdRes.data.contact || createdRes.data;
   } catch (err) {
@@ -218,7 +222,7 @@ async function logMessageToGHL(locationId, contactId, text, direction) {
       method: "POST", url: url,
       data: { type: "SMS", contactId, locationId, message: text, direction: direction }
     });
-    console.log(`✅ GHL Sync [${direction}]: ${text.substring(0, 15)}...`);
+    console.log(`✅ Sync [${direction}]: ${text.substring(0, 15)}...`);
   } catch (err) { console.error(`❌ GHL Log Error:`, err.message); }
 }
 
@@ -240,6 +244,18 @@ async function waitForSocketOpen(sock) {
     });
 }
 
+// Helper para resolver LID usando API (Sin Store)
+async function getRecipientPhone(remoteJid, sock) {
+    if (remoteJid.includes("@s.whatsapp.net")) return normalizePhone(remoteJid.split("@")[0]);
+    if (remoteJid.includes("@lid")) {
+        try {
+            const [result] = await sock.onWhatsApp(remoteJid);
+            if (result && result.jid) return normalizePhone(result.jid.split("@")[0]);
+        } catch (e) {}
+    }
+    return null;
+}
+
 async function startWhatsApp(locationId, slotId) {
   const sessionId = `${locationId}_slot${slotId}`; 
   const existing = sessions.get(sessionId);
@@ -250,6 +266,7 @@ async function startWhatsApp(locationId, slotId) {
 
   console.log(`▶ Iniciando: ${sessionId}`);
 
+  // IMPORTACIÓN LIMPIA
   const baileys = await import("@whiskeysockets/baileys");
   const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds } = baileys;
 
@@ -337,21 +354,14 @@ async function startWhatsApp(locationId, slotId) {
   sock.ev.on("messages.upsert", async (msg) => {
     try {
         const m = msg.messages[0];
-        console.log(msg.messages[0])
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
 
-        const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
-
-        clientPhone = normalizePhone(from.split("@")[0]);
-        // 🔥 TRADUCCIÓN DE LID A TELÉFONO (Usando API de WhatsApp)
-        //const clientPhone = await getRecipientPhone(from, sock); // Pasamos 'sock'
+        const from = m.key.remoteJid;
         
-        //if (!clientPhone) {
-             // Filtros de basura silenciosa
-        //     if (from.includes("@lid")) console.warn("LID no traducible, ignorando.");
-        //     return;
-        //}
+        // Resolución de LID (Sin Store)
+        const clientPhone = await getRecipientPhone(from, sock);
+        if (!clientPhone) return;
 
         if (from === "status@broadcast" || from.includes("@newsletter")) return;
 
@@ -361,13 +371,15 @@ async function startWhatsApp(locationId, slotId) {
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
         const isFromMe = m.key.fromMe;
+        const waName = m.pushName || "Usuario"; // Nombre que tiene el usuario en WhatsApp
 
         console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
 
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         
-        const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
+        // Pasamos el 'waName' para que se actualice si era genérico
+        const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId);
 
         if (!contact?.id) return;
 
