@@ -317,7 +317,10 @@ async function startWhatsApp(locationId, slotId) {
         
         // --- FILTRO LID (Sin Store) ---
         // Si es LID, no podemos traducir, así que lo ignoramos.
-        if (from.includes("@lid")) return;
+        if (from.includes("@lid")) {
+          console.log(msg) 
+          return
+        };
 
         if (from === "status@broadcast" || from.includes("@newsletter")) return;
         if (!from.includes("@s.whatsapp.net")) return;
