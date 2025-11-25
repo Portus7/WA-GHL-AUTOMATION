@@ -6,7 +6,6 @@ const pino = require("pino");
 const { webcrypto } = require("crypto");
 const { Pool } = require("pg");
 const axios = require("axios");
-const { jidNormalized } = require("@whiskeysockets/baileys");
 const { Console } = require("console");
 
 if (!globalThis.crypto) { globalThis.crypto = webcrypto; }
@@ -18,6 +17,7 @@ const AGENCY_ROW_ID = "__AGENCY__";
 
 const sessions = new Map(); 
 const botMessageIds = new Set();
+let jidNormalized; // Declarar en un scope superior
 
 const pool = new Pool({
   host: process.env.PGHOST,
@@ -227,7 +227,9 @@ async function startWhatsApp(locationId, slotId) {
 
   console.log(`▶ Iniciando WhatsApp: ${sessionId}`);
 
-  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds } = await import("@whiskeysockets/baileys");
+  const baileys = await import("@whiskeysockets/baileys");
+  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds } = baileys;
+  jidNormalized = baileys.jidNormalized; // Asignar la función importada a la variable superior
 
   async function usePostgreSQLAuthState(pool, id) {
     const { BufferJSON, proto } = await import("@whiskeysockets/baileys");
