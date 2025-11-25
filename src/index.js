@@ -6,6 +6,7 @@ const pino = require("pino");
 const { webcrypto } = require("crypto");
 const { Pool } = require("pg");
 const axios = require("axios");
+const fs = require("fs"); 
 
 if (!globalThis.crypto) { globalThis.crypto = webcrypto; }
 
@@ -16,48 +17,46 @@ const AGENCY_ROW_ID = "__AGENCY__";
 
 const sessions = new Map(); 
 const botMessageIds = new Set();
+const STORE_FILE = "baileys_store.json";
 
-// 🔥 STORE GLOBAL: Diccionario para traducir LID a JID real
+// 🔥 FIX: Store global para traducción LID
 let store; 
 
 const pool = new Pool({
-  host: process.env.PGHOST,
-  port: process.env.PGPORT,
-  database: process.env.PGDATABASE,
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
-  ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
+  host: process.env.PGHOST,
+  port: process.env.PGPORT,
+  database: process.env.PGDATABASE,
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
+  ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
 });
 
-// --- HELPERS (Sin cambios en lógica de DB) ---
+// --- HELPERS (Simplificado) ---
 
 async function deleteSessionData(locationId, slot) {
-  const sessionId = `${locationId}_slot${slot}`;
-  const session = sessions.get(sessionId);
-  if (session && session.sock) { try { session.sock.end(undefined); session.sock.ws.close(); } catch (e) {} }
-  sessions.delete(sessionId);
-  try { await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]); } catch (e) {}
-  try { await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]); } catch (e) {}
+  const sessionId = `${locationId}_slot${slot}`;
+  const session = sessions.get(sessionId);
+  if (session && session.sock) { try { session.sock.end(undefined); session.sock.ws.close(); } catch (e) {} }
+  sessions.delete(sessionId);
+  try { await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]); } catch (e) {}
+  try { await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]); } catch (e) {}
 }
 
 async function syncSlotInfo(locationId, slotId, phoneNumber) {
-  const check = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
-  const res = await pool.query(check, [locationId, slotId]);
-  if (res.rows.length === 0) {
-    const insert = `INSERT INTO location_slots (location_id, slot_id, phone_number, priority) VALUES ($1, $2, $3, $4)`;
-    await pool.query(insert, [locationId, slotId, phoneNumber, slotId]);
-  } else {
-    const update = "UPDATE location_slots SET phone_number = $1, updated_at = NOW() WHERE location_id = $2 AND slot_id = $3";
-    await pool.query(update, [phoneNumber, locationId, slotId]);
-  }
+  const check = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
+  const res = await pool.query(check, [locationId, slotId]);
+  if (res.rows.length === 0) {
+    const insert = `INSERT INTO location_slots (location_id, slot_id, phone_number, priority) VALUES ($1, $2, $3, $4)`;
+    await pool.query(insert, [locationId, slotId, phoneNumber, slotId]);
+  } else {
+    const update = "UPDATE location_slots SET phone_number = $1, updated_at = NOW() WHERE location_id = $2 AND slot_id = $3";
+    await pool.query(update, [phoneNumber, locationId, slotId]);
+  }
 }
 
 async function getLocationSlotsConfig(locationId) {
-    const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
-    try {
-        const res = await pool.query(sql, [locationId]);
-        return res.rows; 
-    } catch (e) { return []; }
+    const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
+    try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { return []; }
 }
 
 async function saveTokens(locationId, tokenData) {
@@ -106,7 +105,6 @@ async function callGHLWithLocation(locationId, config) {
       const newToken = await forceRefreshToken(locationId);
       tokenData = { accessToken: newToken, realLocationId: locationId };
   }
-
   try {
     return await axios({ ...config, headers: { Accept: "application/json", Version: GHL_API_VERSION, Authorization: `Bearer ${tokenData.accessToken}`, "Location-Id": tokenData.realLocationId, ...(config.headers || {}) } });
   } catch (error) {
@@ -139,7 +137,6 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
-// --- GHL CONTACTS MEJORADO ---
 async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   const rawPhone = phone.replace(/\D/g, ''); 
   const phoneWithPlus = `+${rawPhone}`;
@@ -210,6 +207,30 @@ async function waitForSocketOpen(sock) {
     });
 }
 
+// 🔥 Nueva función para resolver el número del destinatario
+async function getRecipientPhone(remoteJid, store) {
+    let targetJid = remoteJid;
+
+    // 1. Si es un LID, consultar el store
+    if (remoteJid.includes("@lid")) {
+        const contactFromStore = store.contacts[remoteJid] || Object.values(store.contacts).find(c => c.lid === remoteJid);
+        
+        if (contactFromStore && contactFromStore.id) {
+             targetJid = contactFromStore.id; // Traducido a PNID (Phone Number ID)
+        } else {
+             // Si el store no tiene la traducción, no podemos procesar el mensaje
+             console.warn(`❌ No se pudo resolver LID para GHL: ${remoteJid}`);
+             return null;
+        }
+    }
+    
+    // 2. Si no es un número de teléfono, fallar
+    if (!targetJid.includes("@s.whatsapp.net")) return null;
+
+    // 3. Devolvemos el número limpio
+    return normalizePhone(targetJid.split("@")[0]);
+}
+
 async function startWhatsApp(locationId, slotId) {
   const sessionId = `${locationId}_slot${slotId}`; 
   const existing = sessions.get(sessionId);
@@ -221,12 +242,13 @@ async function startWhatsApp(locationId, slotId) {
   console.log(`▶ Iniciando: ${sessionId}`);
 
   const baileys = await import("@whiskeysockets/baileys");
-  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, makeInMemoryStore } = baileys; // Asegurarse de importar makeInMemoryStore
+  // 🔥 FIX DE TYPE ERROR: Destructuring makeInMemoryStore
+  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, makeInMemoryStore } = baileys; 
 
   // 🔥 STORE: Inicializar y Persistir (Lectura de LID/JID)
   if (!store) {
       store = makeInMemoryStore({ });
-      // El store se llenará automáticamente al vincular/sincronizar
+      // Aquí se podría agregar lógica para leer y escribir el store en disco.
   }
 
   async function usePostgreSQLAuthState(pool, id) {
@@ -282,7 +304,7 @@ async function startWhatsApp(locationId, slotId) {
     retryRequestDelayMs: 500
   });
 
-  // 🔥 VINCULAR SOCKET AL STORE
+  // 🔥 BINDING: Conectar Store al Socket
   store.bind(sock.ev);
 
   sessionData.sock = sock;
@@ -319,29 +341,17 @@ async function startWhatsApp(locationId, slotId) {
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
 
-        let remoteJid = m.key.remoteJid;
-
-        // 🔥 TRADUCCIÓN LID -> TELÉFONO REAL CON STORE
-        if (remoteJid && remoteJid.endsWith('@lid')) {
-            // 1. Intentar resolver el LID a JID (número) usando el store
-            const contactFromStore = store.contacts[remoteJid] || Object.values(store.contacts).find(c => c.lid === remoteJid);
-            
-            if (contactFromStore && contactFromStore.id) {
-                remoteJid = contactFromStore.id; // Reemplazamos el LID con el PNID
-            } else {
-                console.warn(`❌ No se pudo resolver el destinatario LID: ${remoteJid}. Mensaje ignorado.`);
-                return; // No podemos procesar si no sabemos a quién se lo mandamos
-            }
+        // 🔥 FIX: RESOLVER EL DESTINATARIO (remoteJid) AL NÚMERO REAL
+        const clientPhone = await getRecipientPhone(m.key.remoteJid, store);
+        
+        if (!clientPhone) {
+             console.warn(`❌ No se pudo resolver el destinatario (LID/JID desconocido): ${m.key.remoteJid}. Ignorando mensaje.`);
+             return;
         }
-
-        // Filtros estándar
-        if (remoteJid === "status@broadcast" || remoteJid.includes("@newsletter")) return;
-        if (!remoteJid.includes("@s.whatsapp.net")) return;
 
         const text = m.message.conversation || m.message.extendedTextMessage?.text;
         if (!text) return; 
 
-        const clientPhone = normalizePhone(remoteJid.split("@")[0]);
         const myJid = sock.user?.id || "";
         const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
         const isFromMe = m.key.fromMe;
@@ -352,7 +362,7 @@ async function startWhatsApp(locationId, slotId) {
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         
-        // 🔥 BÚSQUEDA GHL
+        // 🔥 BÚSQUEDA GHL (Usando el número REAL)
         const contact = await findOrCreateGHLContact(locationId, clientPhone, "Usuario WhatsApp", existingContactId);
 
         if (!contact?.id) {
@@ -366,11 +376,9 @@ async function startWhatsApp(locationId, slotId) {
         let direction = "inbound";
 
         if (isFromMe) {
-            // SALIENTE (MÓVIL) -> AZUL
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
             direction = "outbound"; 
         } else {
-            // ENTRANTE -> GRIS
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 
         }
@@ -440,7 +448,6 @@ app.post("/ghl/webhook", async (req, res) => {
 
         if (availableCandidates.length === 0) return res.status(200).json({ error: "No connected devices" });
 
-        // PRIORIDAD 1
         let selectedCandidate = availableCandidates[0];
         const sessionToUse = selectedCandidate.session;
         const jid = clientPhone.replace(/\D/g, '') + "@s.whatsapp.net";
