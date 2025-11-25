@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@gohighlevel/api-client": "^2.2.2",
-    "baileys": "github:WhiskeySockets/Baileys",
+    "@whiskeysockets/baileys": "github:WhiskeySockets/Baileys",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
