@@ -243,8 +243,16 @@ async function startWhatsApp(locationId, slotId) {
 
   const baileys = await import("@whiskeysockets/baileys");
   // 🔥 FIX DE TYPE ERROR: Destructuring makeInMemoryStore
-  const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, makeInMemoryStore } = baileys; 
-
+const { 
+    default: makeWASocket, 
+    fetchLatestBaileysVersion, 
+    makeCacheableSignalKeyStore, 
+    initAuthCreds, 
+    makeInMemoryStore, // <-- ESTO YA NO FALLARÁ
+    jidNormalizedUser, 
+    BufferJSON, 
+    proto 
+  } = await import("@whiskeysockets/baileys");
   // 🔥 STORE: Inicializar y Persistir (Lectura de LID/JID)
   if (!store) {
       store = makeInMemoryStore({ });
