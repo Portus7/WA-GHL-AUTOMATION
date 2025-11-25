@@ -87,13 +87,13 @@ async function forceRefreshToken(locationId) {
 
 async function ensureAgencyToken() {
   let tokens = await getTokens(AGENCY_ROW_ID);
-  if (!tokens) throw new Error("No hay tokens agencia");
+  if (!tokens) throw new Error("No hay tokens agencia ADSASDAS");
   return tokens.access_token; 
 }
 
 async function ensureLocationToken(locationId) {
   const tokens = await getTokens(locationId);
-  if (!tokens?.locationAccess) throw new Error(`No hay tokens para ${locationId}`);
+  if (!tokens?.locationAccess) throw new Error(`No hay tokens para  ${locationId}`);
   return { accessToken: tokens.locationAccess.access_token, realLocationId: tokens.locationAccess.locationId };
 }
 
