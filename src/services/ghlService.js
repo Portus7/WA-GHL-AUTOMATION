@@ -96,10 +96,10 @@ async function callGHLWithLocation(locationId, config) {
 
 // --- Lógica de Contactos ---
 
-async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
+async function findOrCreateGHLContact(locationId, phone, waName, contactId, isFromMe) {
   const rawPhone = phone.replace(/\D/g, ''); 
   const phoneWithPlus = `+${rawPhone}`;
-  const safeName = (waName && waName.trim()) ? waName : "Usuario WhatsApp";
+  const safeName = (waName && waName.trim() && isFromMe) ? waName : "Usuario WhatsApp";
 
   if (contactId) {
     try {

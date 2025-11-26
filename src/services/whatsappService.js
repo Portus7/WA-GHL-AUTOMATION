@@ -348,7 +348,7 @@ async function startWhatsApp(locationId, slotId) {
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         
-        const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId);
+        const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe);
 
         if (!contact?.id) return;
 
