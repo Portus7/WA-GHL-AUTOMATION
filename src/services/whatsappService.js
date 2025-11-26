@@ -253,13 +253,11 @@ async function startWhatsApp(locationId, slotId) {
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
 
-        const from = m.key.remoteJid;
-        
-        // 1. Obtener teléfono real (usando helper robusto)
-        const clientPhone = await getRecipientPhone(from, sock);
-        if (!clientPhone) return;
+        const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
 
-        if (from.includes("status@") || from.includes("@newsletter")) return;
+        if (!from || from.includes("status@") || from.includes("@newsletter")) return;
+
+        const clientPhone = normalizePhone(from.split("@")[0]);
 
         // 2. DETECCIÓN DE CONTENIDO (Texto + Media)
         const msgType = Object.keys(m.message)[0];
