@@ -149,16 +149,26 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
   }
 }
 
-async function logMessageToGHL(locationId, contactId, text, direction) {
+async function logMessageToGHL(locationId, contactId, text, direction, attachments = []) {
   try {
     let url = "https://services.leadconnectorhq.com/conversations/messages"; 
     if (direction === "inbound") url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
 
+    // Payload con attachments
+    const payload = { 
+        type: "SMS", 
+        contactId, 
+        locationId, 
+        message: text, 
+        direction: direction,
+        attachments: attachments // <--- AHORA ENVIAMOS LAS FOTOS
+    };
+
     await callGHLWithLocation(locationId, {
       method: "POST", url: url,
-      data: { type: "SMS", contactId, locationId, message: text, direction: direction }
+      data: payload
     });
-    console.log(`✅ GHL Sync [${direction}]: ${text.substring(0, 15)}...`);
+    console.log(`✅ GHL Sync [${direction}]: ${text.substring(0, 15)}... (Media: ${attachments.length})`);
   } catch (err) { console.error(`❌ GHL Log Error:`, err.message); }
 }
 
@@ -169,5 +179,5 @@ module.exports = {
     callGHLWithLocation,
     findOrCreateGHLContact,
     logMessageToGHL,
-    ensureAgencyToken // Exportado para el install webhook
+    ensureAgencyToken,
 };

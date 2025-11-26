@@ -4,7 +4,7 @@ const { findOrCreateGHLContact, logMessageToGHL } = require("./ghlService");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
-const mime = require("mime-types"); // 📦 npm install mime-types
+const mime = require("mime-types");
 
 // Estado Global
 const sessions = new Map();
