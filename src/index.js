@@ -1,4 +1,5 @@
 const path = require("path");
+const { initDb } = require("./db/init");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const express = require("express");
