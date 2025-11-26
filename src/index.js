@@ -18,11 +18,7 @@ const sessions = new Map();
 const botMessageIds = new Set();
 
 const pool = new Pool({
-  host: process.env.PGHOST,
-  port: process.env.PGPORT,
-  database: process.env.PGDATABASE,
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
+  connectionString: process.env.DATABASE_URL,
   ssl: process.env.PGSSLMODE === "require" ? { rejectUnauthorized: false } : false,
 });
 
@@ -567,4 +563,20 @@ async function restoreSessions() {
   } catch (e) { console.error(e); }
 }
 
-app.listen(PORT, async () => { console.log(`API OK ${PORT}`); await restoreSessions(); });
+(async () => {
+  try {
+    // 1. Primero creamos las tablas
+    await initDb();
+
+    // 2. Luego iniciamos el servidor HTTP
+    app.listen(PORT, async () => {
+      console.log(`API OK ${PORT}`);
+
+      // 3. Finalmente restauramos sesiones (ya que la tabla baileys_auth seguro existe)
+      await restoreSessions();
+    });
+  } catch (e) {
+    console.error("❌ Error fatal al iniciar:", e);
+    process.exit(1);
+  }
+})();
