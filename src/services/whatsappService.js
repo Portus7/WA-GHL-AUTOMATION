@@ -80,12 +80,26 @@ async function deleteSessionData(locationId, slot) {
 }
 
 async function syncSlotInfo(locationId, slotId, phoneNumber) {
+  // 1. Verificar si el slot ya existe
   const check = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
   const res = await pool.query(check, [locationId, slotId]);
+
   if (res.rows.length === 0) {
+    // 🔥 LÓGICA DE COLA: Asignar al final de la lista
+    // Buscamos cuál es la prioridad más alta que existe actualmente para esta agencia
+    const prioQuery = "SELECT COALESCE(MAX(priority), 0) as max_priority FROM location_slots WHERE location_id = $1";
+    const prioRes = await pool.query(prioQuery, [locationId]);
+    
+    // La nueva prioridad será la máxima actual + 1. 
+    // (Si no hay nadie, max es 0, así que el nuevo será 1).
+    const nextPriority = parseInt(prioRes.rows[0].max_priority) + 1;
+
     const insert = `INSERT INTO location_slots (location_id, slot_id, phone_number, priority) VALUES ($1, $2, $3, $4)`;
-    await pool.query(insert, [locationId, slotId, phoneNumber, slotId]);
+    await pool.query(insert, [locationId, slotId, phoneNumber, nextPriority]);
+    
+    console.log(`🆕 Slot ${slotId} registrado con Prioridad ${nextPriority}`);
   } else {
+    // Si ya existe, solo actualizamos el número, NO tocamos la prioridad
     const update = "UPDATE location_slots SET phone_number = $1, updated_at = NOW() WHERE location_id = $2 AND slot_id = $3";
     await pool.query(update, [phoneNumber, locationId, slotId]);
   }
