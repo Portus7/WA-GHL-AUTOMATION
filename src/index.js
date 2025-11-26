@@ -367,7 +367,7 @@ async function startWhatsApp(locationId, slotId) {
         console.log(msg.messages[0])
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
-
+        console.log("LLEGO HASYA ACA")
         const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
 
         clientPhone = normalizePhone(from.split("@")[0]);
