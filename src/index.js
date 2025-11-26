@@ -107,12 +107,30 @@ app.post("/ghl/webhook", async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ error: "Error" }); }
 });
 
-// ... Endpoints de config (config-slot, remove-slot) se mantienen igual ...
-// (Asegúrate de importar las funciones necesarias desde los services)
 app.post("/config-slot", async (req, res) => {
-    // ... lógica de config (copiar del código anterior o mover a un controller)
-    // Para brevedad en esta respuesta, asumo que copias el bloque de config-slot aquí
-    res.json({success:true}); 
+  const { locationId, slot, phoneNumber, priority, addTag, removeTag } = req.body;
+  if (!locationId) return res.status(400).json({ error: "Faltan datos" });
+  try {
+    let targetSlot = slot;
+    if(!targetSlot && phoneNumber) {
+        const norm = normalizePhone(phoneNumber);
+        const r = await pool.query("SELECT slot_id FROM location_slots WHERE location_id=$1 AND phone_number=$2", [locationId, norm]);
+        if(r.rows.length) targetSlot = r.rows[0].slot_id;
+    }
+    if(priority !== undefined) {
+        const p = parseInt(priority);
+        const all = await pool.query("SELECT slot_id, priority FROM location_slots WHERE location_id=$1", [locationId]);
+        const conflict = all.rows.find(x => x.priority === p && x.slot_id != targetSlot);
+        if(conflict) await pool.query("UPDATE location_slots SET priority=$1 WHERE location_id=$2 AND slot_id=$3", [99, locationId, conflict.slot_id]);
+    }
+    const chk = await pool.query("SELECT tags, priority FROM location_slots WHERE location_id=$1 AND slot_id=$2", [locationId, targetSlot]);
+    let t = chk.rows[0]?.tags || [];
+    if(addTag && !t.includes(addTag)) t.push(addTag);
+    if(removeTag) t = t.filter(x => x !== removeTag);
+    const finalP = priority !== undefined ? parseInt(priority) : chk.rows[0]?.priority;
+    await pool.query("UPDATE location_slots SET tags=$1::jsonb, priority=$2 WHERE location_id=$3 AND slot_id=$4", [JSON.stringify(t), finalP, locationId, targetSlot]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({error:e.message}); }
 });
 
 app.post("/remove-slot", async (req, res) => {
