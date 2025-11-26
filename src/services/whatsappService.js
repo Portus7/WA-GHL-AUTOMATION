@@ -1,6 +1,6 @@
 const { pool } = require("../config/db");
 const { normalizePhone } = require("../helpers/utils");
-const { findOrCreateGHLContact, logMessageToGHL } = require("./ghlService");
+const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
