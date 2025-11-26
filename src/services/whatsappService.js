@@ -108,8 +108,12 @@ async function getRoutingForPhone(clientPhone) {
 }
 
 async function getLocationSlotsConfig(locationId) {
+    // 🔥 CLAVE: ORDER BY priority ASC (Menor número = Mayor prioridad)
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
-    try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { return []; }
+    try {
+        const res = await pool.query(sql, [locationId]);
+        return res.rows; 
+    } catch (e) { return []; }
 }
 
 // 🔥 HELPER: Descargar y Guardar Media

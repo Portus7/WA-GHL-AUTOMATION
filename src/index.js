@@ -65,21 +65,20 @@ app.get("/status", async (req, res) => {
   res.json({ connected: false, priority: extra.priority, tags: extra.tags });
 });
 
-// --- WEBHOOK OUTBOUND CON JERARQUÍA (TAG > ROUTING > PRIORIDAD) ---
+// --- WEBHOOK OUTBOUND CON LÓGICA DE PRIORIDAD REAL ---
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type } = req.body;
     if (!locationId || !phone || !message) return res.json({ ignored: true });
-
-    // 1. Filtro Anti-Bucle
     if (message.includes("[Enviado desde otro dispositivo]")) return res.json({ ignored: true });
 
     if (type === "Outbound" || type === "SMS") {
         const clientPhone = normalizePhone(phone);
         
-        // 2. Obtener Candidatos Conectados
+        // 1. Obtener configuración ordenada por prioridad (1, 2, 3...)
         let dbConfigs = await getLocationSlotsConfig(locationId);
         
+        // 2. Mapear a sesiones activas en memoria
         let availableCandidates = dbConfigs.map(conf => ({
             slot: conf.slot_id,
             priority: conf.priority,
@@ -88,61 +87,45 @@ app.post("/ghl/webhook", async (req, res) => {
             session: sessions.get(`${locationId}_slot${conf.slot_id}`)
         })).filter(c => c.session && c.session.isConnected);
 
-        // Fallback Memoria (si DB falla)
+        // Fallback Memoria (Si DB falla, ordenamos por slot como emergencia)
         if (availableCandidates.length === 0) {
              for (const [sid, s] of sessions.entries()) {
                 if (sid.startsWith(`${locationId}_slot`) && s.isConnected) 
-                    availableCandidates.push({ 
-                        slot: parseInt(sid.split("_slot")[1]), 
-                        priority: 99, 
-                        tags: [], 
-                        myNumber: s.myNumber, 
-                        session: s 
-                    });
+                    availableCandidates.push({ slot: parseInt(sid.split("_slot")[1]), priority: 99, myNumber: s.myNumber, session: s });
              }
+             // Ordenar por slot si no hay prioridad definida
+             availableCandidates.sort((a,b) => a.slot - b.slot);
         }
 
         if (availableCandidates.length === 0) return res.status(200).json({ error: "No connected devices" });
 
-        // -----------------------------------------------------------
-        // 🧠 LÓGICA DE SELECCIÓN (JERARQUÍA)
-        // -----------------------------------------------------------
+        // 3. SELECCIÓN DEL CANDIDATO
         let selectedCandidate = null;
         let selectionReason = "";
 
-        // NIVEL 1: TAG "PRIOR" (Manda sobre todo)
-        // Buscamos si algún slot tiene el tag "PRIOR" (o "#priority")
-        const priorCandidate = availableCandidates.find(c => 
-            c.tags && c.tags.some(t => t.toUpperCase() === "PRIOR" || t === "#priority")
-        );
-
-        if (priorCandidate) {
-            selectedCandidate = priorCandidate;
-            selectionReason = "Tag PRIOR detectado";
+        // A) Routing Histórico (Sticky Session)
+        // Intentamos mantener la conversación en el mismo número
+        const route = await getRoutingForPhone(clientPhone);
+        if (route?.channelNumber) {
+             const sticky = availableCandidates.find(c => c.myNumber === route.channelNumber);
+             if (sticky) {
+                 selectedCandidate = sticky;
+                 selectionReason = "Historial";
+             }
         }
 
-        // NIVEL 2: ROUTING (Historial)
-        // Si no hay Tag forzado, intentamos mantener la conversación con el mismo número
+        // B) Prioridad (Si es nuevo o el histórico falló)
         if (!selectedCandidate) {
-            const route = await getRoutingForPhone(clientPhone);
-            if (route?.channelNumber) {
-                const stickyCandidate = availableCandidates.find(c => c.myNumber === route.channelNumber);
-                if (stickyCandidate) {
-                    selectedCandidate = stickyCandidate;
-                    selectionReason = "Historial (Routing)";
-                }
-            }
-        }
-
-        // NIVEL 3: PRIORIDAD NUMÉRICA (Default)
-        // Si no hay Tag ni Historial, usamos el de menor número de prioridad (1, 2, 3...)
-        if (!selectedCandidate) {
-            // Ordenamos por prioridad (menor a mayor)
+            // Como dbConfigs ya venía ordenado por prioridad ASC, 
+            // y availableCandidates mantiene ese orden relativo,
+            // el índice 0 es el de mejor prioridad disponible.
+            
+            // Refuerzo: Ordenamos explícitamente por prioridad
             availableCandidates.sort((a, b) => a.priority - b.priority);
+            
             selectedCandidate = availableCandidates[0];
-            selectionReason = `Prioridad Numérica (${selectedCandidate.priority})`;
+            selectionReason = `Prioridad ${selectedCandidate.priority}`;
         }
-        // -----------------------------------------------------------
 
         const sessionToUse = selectedCandidate.session;
         const jid = clientPhone.replace(/\D/g, '') + "@s.whatsapp.net";
@@ -163,7 +146,27 @@ app.post("/ghl/webhook", async (req, res) => {
             return res.json({ ok: true });
 
         } catch (e) {
-            console.error(`❌ Error envío: ${e.message}`);
+            // FALLBACK AUTOMÁTICO (Si falla el prioritario, intenta el siguiente)
+            console.warn(`⚠️ Falló Slot ${selectedCandidate.slot}. Intentando siguiente...`);
+            
+            // Quitamos al fallido de la lista
+            const nextCandidates = availableCandidates.filter(c => c.slot !== selectedCandidate.slot);
+            
+            if (nextCandidates.length > 0) {
+                const backup = nextCandidates[0]; // El siguiente en prioridad
+                console.log(`🚀 Reintentando con Slot ${backup.slot} (Backup)...`);
+                try {
+                    await waitForSocketOpen(backup.session.sock);
+                    const sentBackup = await backup.session.sock.sendMessage(jid, { text: message });
+                    if (sentBackup?.key?.id) {
+                         botMessageIds.add(sentBackup.key.id);
+                         setTimeout(() => botMessageIds.delete(sentBackup.key.id), 15000);
+                    }
+                    await saveRouting(clientPhone, locationId, null, backup.myNumber);
+                    return res.json({ ok: true });
+                } catch(e2) {}
+            }
+            
             return res.status(500).json({ error: "Send failed" });
         }
     }
