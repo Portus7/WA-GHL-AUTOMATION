@@ -270,6 +270,7 @@ async function startWhatsApp(locationId, slotId) {
         if (isFromMe) {
             messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
             direction = "outbound"; 
+            await addTagToContact(locationId, contact.id, "another device");
         } else {
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 

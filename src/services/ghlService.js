@@ -148,6 +148,18 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId, isFr
     return null;
   }
 }
+async function addTagToContact(locationId, contactId, tag) {
+  try {
+    console.log(`🏷️ Agregando tag '${tag}' al contacto ${contactId}...`);
+    await callGHLWithLocation(locationId, {
+      method: "POST",
+      url: `https://services.leadconnectorhq.com/contacts/${contactId}/tags`,
+      data: { tags: [tag] }
+    });
+  } catch (e) {
+    console.error("Error agregando tag:", e.message);
+  }
+}
 
 async function logMessageToGHL(locationId, contactId, text, direction, attachments = []) {
   try {
@@ -195,4 +207,5 @@ module.exports = {
     findOrCreateGHLContact,
     logMessageToGHL,
     ensureAgencyToken,
+    addTagToContact,
 };
