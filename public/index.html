@@ -82,7 +82,7 @@
       loading.style.display = "none";
       renderSlots(maxSlots);
       
-      // 🔥 GLOBAL POLLING: Revisa cambios externos cada 5s
+      // Global Polling: Revisa cambios externos cada 5s
       setInterval(syncAllSlots, 5000);
 
     } catch (e) {
@@ -130,12 +130,10 @@
     }
   }
 
-  // 🔥 Revisa TODOS los slots para actualizar UI si hubo cambios externos
   function syncAllSlots() {
       const slots = document.querySelectorAll('.slot-card');
       slots.forEach((_, index) => {
           const slotNum = index + 1;
-          // Solo checar si no estamos en medio de un proceso de escaneo activo
           if (!activeConnections.has(slotNum)) {
               checkStatus(slotNum);
           }
@@ -158,38 +156,44 @@
     const qrArea = document.getElementById(`qr-area-${slot}`);
     const metaDiv = document.getElementById(`meta-${slot}`);
 
-    if (priority !== undefined || (tags && tags.length > 0)) {
-        metaDiv.style.display = "block";
-        document.getElementById(`prio-val-${slot}`).textContent = priority ?? "Auto";
-        document.getElementById(`tags-list-${slot}`).innerHTML = (tags && tags.length) ? tags.map(t => `<span class="tag">${t}</span>`).join("") : "<em style='color:#9ca3af'>Sin tags</em>";
-    } else {
-        metaDiv.style.display = "none";
-    }
-
-    // Solo actualizar si hay un cambio real de estado visual para evitar parpadeos
+    // 🔥 FIX: Lógica de Visualización de Metadatos Correcta
     if (isConnected) {
-      if(badge.textContent !== "ACTIVO") {
-          badge.className = "badge badge-on";
-          badge.textContent = "ACTIVO";
-          viewCon.style.display = "block";
-          viewDisc.style.display = "none";
-          qrArea.classList.remove("active");
-          activeConnections.delete(slot); // Liberar bloqueo
-      }
-      phoneText.textContent = "+" + phone;
+        // Si está conectado, mostramos los metadatos reales
+        if (priority !== undefined || (tags && tags.length > 0)) {
+            metaDiv.style.display = "block";
+            document.getElementById(`prio-val-${slot}`).textContent = priority ?? "Auto";
+            document.getElementById(`tags-list-${slot}`).innerHTML = (tags && tags.length) ? tags.map(t => `<span class="tag">${t}</span>`).join("") : "<em style='color:#9ca3af'>Sin tags</em>";
+        } else {
+            metaDiv.style.display = "none";
+        }
+
+        if(badge.textContent !== "ACTIVO") {
+            badge.className = "badge badge-on";
+            badge.textContent = "ACTIVO";
+            viewCon.style.display = "block";
+            viewDisc.style.display = "none";
+            qrArea.classList.remove("active");
+            activeConnections.delete(slot); 
+        }
+        phoneText.textContent = "+" + phone;
+
     } else {
-      // Si estamos desconectados
-      if(badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
-          badge.className = "badge badge-off";
-          badge.textContent = "INACTIVO";
-          viewCon.style.display = "none";
-          viewDisc.style.display = "block";
-      }
+        // 🔥 FIX: Si está desconectado, ocultamos/limpiamos los metadatos
+        metaDiv.style.display = "none";
+        document.getElementById(`prio-val-${slot}`).textContent = "-";
+        document.getElementById(`tags-list-${slot}`).innerHTML = "";
+
+        if(badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
+            badge.className = "badge badge-off";
+            badge.textContent = "INACTIVO";
+            viewCon.style.display = "none";
+            viewDisc.style.display = "block";
+        }
     }
   }
 
   async function startConnect(slot) {
-    activeConnections.add(slot); // Bloquear updates globales mientras escanea
+    activeConnections.add(slot); 
     const btn = document.getElementById(`btn-${slot}`);
     const qrArea = document.getElementById(`qr-area-${slot}`);
     const msg = document.getElementById(`msg-${slot}`);
@@ -206,14 +210,13 @@
 
       msg.textContent = "Escanea este código con WhatsApp:";
       
-      // Polling local rápido para QR
       const localInterval = setInterval(async () => {
         const statRes = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
         const statData = await statRes.json();
         
         if (statData.connected) {
           clearInterval(localInterval);
-          activeConnections.delete(slot); // Liberar
+          activeConnections.delete(slot);
           updateUI(slot, true, statData.myNumber, statData.priority, statData.tags);
           return;
         }
@@ -244,12 +247,10 @@
 
       try {
           await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-          // Forzar update visual inmediato
-          const badge = document.getElementById(`badge-${slot}`);
-          badge.textContent = "INACTIVO"; // Esto forzará al updateUI a redibujar
+          
+          // 🔥 FIX: Forzar limpieza visual inmediata
           updateUI(slot, false, null, undefined, undefined);
           
-          // Resetear visuales
           document.getElementById(`btn-${slot}`).disabled = false;
           document.getElementById(`btn-${slot}`).textContent = "Vincular WhatsApp";
           document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
