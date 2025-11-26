@@ -152,24 +152,39 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId) {
 async function logMessageToGHL(locationId, contactId, text, direction, attachments = []) {
   try {
     let url = "https://services.leadconnectorhq.com/conversations/messages"; 
-    if (direction === "inbound") url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
-
-    // Payload con attachments
+    
+    // Objeto base
     const payload = { 
         type: "SMS", 
         contactId, 
         locationId, 
-        message: text, 
-        direction: direction,
-        attachments: attachments // <--- AHORA ENVIAMOS LAS FOTOS
+        message: text || " ", // GHL no acepta mensajes vacíos, ponemos un espacio por seguridad
+        direction: direction
     };
 
+    // 🔥 FIX: Solo agregamos attachments si el array NO está vacío
+    if (attachments && attachments.length > 0) {
+        payload.attachments = attachments;
+    }
+
+    // Cambiar endpoint si es inbound
+    if (direction === "inbound") {
+        url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
+    }
+
     await callGHLWithLocation(locationId, {
-      method: "POST", url: url,
+      method: "POST", 
+      url: url,
       data: payload
     });
-    console.log(`✅ GHL Sync [${direction}]: ${text.substring(0, 15)}... (Media: ${attachments.length})`);
-  } catch (err) { console.error(`❌ GHL Log Error:`, err.message); }
+
+    console.log(`✅ GHL Sync [${direction}]: ${text ? text.substring(0, 15) : 'Media'}... (Media: ${attachments.length})`);
+
+  } catch (err) { 
+      // 🔥 FIX: Loguear el error real que devuelve GHL para saber qué pasó
+      const errorMsg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      console.error(`❌ GHL Log Error (${direction}):`, errorMsg); 
+  }
 }
 
 module.exports = {
