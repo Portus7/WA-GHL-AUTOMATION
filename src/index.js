@@ -32,11 +32,11 @@ if (!fs.existsSync(MEDIA_DIR)) {
     fs.mkdirSync(MEDIA_DIR, { recursive: true }); 
 }
 
-app.use(express.static(PUBLIC_DIR));
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
+app.use(express.static(PUBLIC_DIR));
 
 // --- RUTAS ---
 
