@@ -110,27 +110,68 @@ app.post("/ghl/webhook", async (req, res) => {
 app.post("/config-slot", async (req, res) => {
   const { locationId, slot, phoneNumber, priority, addTag, removeTag } = req.body;
   if (!locationId) return res.status(400).json({ error: "Faltan datos" });
+
   try {
+    // 1. Identificar el Slot Objetivo (targetSlot)
     let targetSlot = slot;
-    if(!targetSlot && phoneNumber) {
+    if (!targetSlot && phoneNumber) {
         const norm = normalizePhone(phoneNumber);
         const r = await pool.query("SELECT slot_id FROM location_slots WHERE location_id=$1 AND phone_number=$2", [locationId, norm]);
-        if(r.rows.length) targetSlot = r.rows[0].slot_id;
+        if (r.rows.length) targetSlot = r.rows[0].slot_id;
     }
-    if(priority !== undefined) {
-        const p = parseInt(priority);
-        const all = await pool.query("SELECT slot_id, priority FROM location_slots WHERE location_id=$1", [locationId]);
-        const conflict = all.rows.find(x => x.priority === p && x.slot_id != targetSlot);
-        if(conflict) await pool.query("UPDATE location_slots SET priority=$1 WHERE location_id=$2 AND slot_id=$3", [99, locationId, conflict.slot_id]);
+    
+    if (!targetSlot) return res.status(404).json({ error: "Slot no encontrado" });
+
+    // 2. Obtener estado ACTUAL de todos los slots (Necesario para el Swap)
+    const allRes = await pool.query("SELECT slot_id, priority, tags FROM location_slots WHERE location_id=$1", [locationId]);
+    const allSlots = allRes.rows;
+
+    // Datos actuales del slot que queremos modificar
+    const currentSlotData = allSlots.find(s => s.slot_id == targetSlot);
+    
+    // Valores por defecto si no existían
+    let t = currentSlotData?.tags || [];
+    let finalP = currentSlotData?.priority || 99;
+    let currentPriority = currentSlotData?.priority || 99; // Guardamos la prioridad "vieja"
+
+    // 3. Lógica de PRIORIDAD (SWAP / INTERCAMBIO)
+    if (priority !== undefined) {
+        const requestedPriority = parseInt(priority);
+
+        // Solo hacemos swap si la prioridad es diferente a la que ya tiene
+        if (requestedPriority !== currentPriority) {
+            // Buscamos si alguien más YA TIENE la prioridad que queremos robar
+            const conflictSlot = allSlots.find(x => x.priority === requestedPriority && x.slot_id != targetSlot);
+            
+            if (conflictSlot) {
+                console.log(`🔄 Swap: Slot ${targetSlot} toma la ${requestedPriority}, Slot ${conflictSlot.slot_id} se queda con la ${currentPriority}`);
+                
+                // Al slot conflictivo le asignamos MI prioridad vieja (currentPriority)
+                await pool.query(
+                    "UPDATE location_slots SET priority=$1 WHERE location_id=$2 AND slot_id=$3", 
+                    [currentPriority, locationId, conflictSlot.slot_id]
+                );
+            }
+            finalP = requestedPriority;
+        }
     }
-    const chk = await pool.query("SELECT tags, priority FROM location_slots WHERE location_id=$1 AND slot_id=$2", [locationId, targetSlot]);
-    let t = chk.rows[0]?.tags || [];
-    if(addTag && !t.includes(addTag)) t.push(addTag);
-    if(removeTag) t = t.filter(x => x !== removeTag);
-    const finalP = priority !== undefined ? parseInt(priority) : chk.rows[0]?.priority;
-    await pool.query("UPDATE location_slots SET tags=$1::jsonb, priority=$2 WHERE location_id=$3 AND slot_id=$4", [JSON.stringify(t), finalP, locationId, targetSlot]);
+
+    // 4. Lógica de TAGS
+    if (addTag && !t.includes(addTag)) t.push(addTag);
+    if (removeTag) t = t.filter(x => x !== removeTag);
+
+    // 5. Guardar cambios del slot objetivo
+    await pool.query(
+        "UPDATE location_slots SET tags=$1::jsonb, priority=$2 WHERE location_id=$3 AND slot_id=$4", 
+        [JSON.stringify(t), finalP, locationId, targetSlot]
+    );
+
     res.json({ success: true });
-  } catch(e) { res.status(500).json({error:e.message}); }
+
+  } catch(e) { 
+      console.error(e);
+      res.status(500).json({error:e.message}); 
+  }
 });
 
 app.post("/remove-slot", async (req, res) => {
