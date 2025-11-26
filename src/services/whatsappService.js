@@ -4,102 +4,41 @@ const { findOrCreateGHLContact, logMessageToGHL } = require("./ghlService");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
-const mime = require("mime-types");
+const mime = require("mime-types"); 
 
 // Estado Global
 const sessions = new Map();
 const botMessageIds = new Set();
-const STORE_FILE = "baileys_store.json";
 
 // Configuración de Directorios para Medios
-// Subimos 2 niveles (src/services -> src -> root) y entramos a public
 const PUBLIC_DIR = path.join(__dirname, "..", "..", "public");
 const MEDIA_DIR = path.join(PUBLIC_DIR, "media");
 const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "https://wa.clicandapp.com";
 
-// Asegurar que exista la carpeta media
 if (!fs.existsSync(MEDIA_DIR)) {
     fs.mkdirSync(MEDIA_DIR, { recursive: true });
 }
-
-// 🔥 STORE MANUAL
-const store = {
-    contacts: {},
-    bind: (ev) => {
-        ev.on('contacts.upsert', (contacts) => {
-            for (const contact of contacts) {
-                if (contact.id) store.contacts[contact.id] = { ...(store.contacts[contact.id] || {}), ...contact };
-                if (contact.lid) store.contacts[contact.lid] = store.contacts[contact.id];
-            }
-        });
-    },
-    writeToFile: (filename) => { try { fs.writeFileSync(filename, JSON.stringify(store.contacts)); } catch(e){} },
-    readFromFile: (filename) => { try { if(fs.existsSync(filename)) store.contacts = JSON.parse(fs.readFileSync(filename, 'utf-8')); } catch(e){} }
-};
-
-store.readFromFile(STORE_FILE);
-setInterval(() => store.writeToFile(STORE_FILE), 10_000);
 
 // --- DB HELPERS LOCALES ---
 
 async function deleteSessionData(locationId, slot) {
   const sessionId = `${locationId}_slot${slot}`;
   const session = sessions.get(sessionId);
-
-  // 1. INTENTAR CERRAR SESIÓN EN WHATSAPP (Logout real)
-  if (session && session.sock) {
-    try {
-      // Verificamos si el socket está abierto antes de intentar logout
-      if (session.sock.ws && session.sock.ws.isOpen) {
-        console.log(`🔌 Cerrando sesión activa de WhatsApp para: ${sessionId}`);
-        await session.sock.logout(); // <--- ESTA ES la clave para que desaparezca del celular
-      }
-    } catch (e) {
-      console.warn(`⚠️ No se pudo cerrar sesión limpiamente (posiblemente ya cerrada): ${e.message}`);
-    }
-
-    try {
-      // Destruir conexiones residuales
-      session.sock.end(undefined);
-      session.sock.ws.close();
-    } catch (e) {}
+  if (session && session.sock) { 
+      try { session.sock.end(undefined); session.sock.ws.close(); } catch (e) {} 
   }
-
-  // 2. Limpiar Memoria
   sessions.delete(sessionId);
-
-  // 3. Limpiar Base de Datos
-  try {
-    await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
-  } catch (e) { console.error("Error DB Auth:", e.message); }
-  
-  try {
-    await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
-    console.log(`🗑️ Datos eliminados correctamente: ${sessionId}`);
-  } catch (e) { console.error("Error DB Slots:", e.message); }
+  try { await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]); } catch (e) {}
+  try { await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]); } catch (e) {}
 }
 
 async function syncSlotInfo(locationId, slotId, phoneNumber) {
-  // 1. Verificar si el slot ya existe
   const check = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
   const res = await pool.query(check, [locationId, slotId]);
-
   if (res.rows.length === 0) {
-    // 🔥 LÓGICA DE COLA: Asignar al final de la lista
-    // Buscamos cuál es la prioridad más alta que existe actualmente para esta agencia
-    const prioQuery = "SELECT COALESCE(MAX(priority), 0) as max_priority FROM location_slots WHERE location_id = $1";
-    const prioRes = await pool.query(prioQuery, [locationId]);
-    
-    // La nueva prioridad será la máxima actual + 1. 
-    // (Si no hay nadie, max es 0, así que el nuevo será 1).
-    const nextPriority = parseInt(prioRes.rows[0].max_priority) + 1;
-
     const insert = `INSERT INTO location_slots (location_id, slot_id, phone_number, priority) VALUES ($1, $2, $3, $4)`;
-    await pool.query(insert, [locationId, slotId, phoneNumber, nextPriority]);
-    
-    console.log(`🆕 Slot ${slotId} registrado con Prioridad ${nextPriority}`);
+    await pool.query(insert, [locationId, slotId, phoneNumber, slotId]);
   } else {
-    // Si ya existe, solo actualizamos el número, NO tocamos la prioridad
     const update = "UPDATE location_slots SET phone_number = $1, updated_at = NOW() WHERE location_id = $2 AND slot_id = $3";
     await pool.query(update, [phoneNumber, locationId, slotId]);
   }
@@ -122,27 +61,19 @@ async function getRoutingForPhone(clientPhone) {
 }
 
 async function getLocationSlotsConfig(locationId) {
-    // 🔥 CLAVE: ORDER BY priority ASC (Menor número = Mayor prioridad)
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
-    try {
-        const res = await pool.query(sql, [locationId]);
-        return res.rows; 
-    } catch (e) { return []; }
+    try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { return []; }
 }
 
 // 🔥 HELPER: Descargar y Guardar Media
 async function downloadAndSaveMedia(message, type) {
     try {
         const { downloadMediaMessage } = await import("@whiskeysockets/baileys");
-        
         const buffer = await downloadMediaMessage(
             message,
             'buffer',
-            { },
-            { 
-                logger: pino({ level: 'silent' }),
-                reuploadRequest: (msg) => new Promise((resolve) => resolve(msg)) 
-            }
+            {},
+            { logger: pino({ level: 'silent' }), reuploadRequest: (msg) => new Promise((resolve) => resolve(msg)) }
         );
         
         let ext = "bin";
@@ -159,31 +90,11 @@ async function downloadAndSaveMedia(message, type) {
         const filepath = path.join(MEDIA_DIR, filename);
         
         fs.writeFileSync(filepath, buffer);
-        
-        // Retornamos la URL pública que GHL podrá descargar
         return `${API_PUBLIC_URL}/media/${filename}`;
     } catch (e) {
         console.error("Error descargando media:", e);
         return null;
     }
-}
-
-// 🔥 HELPER JID: Recuperé la versión robusta que maneja LIDs
-async function getRecipientPhone(remoteJid, sock) {
-    if (remoteJid.includes("@s.whatsapp.net")) return normalizePhone(remoteJid.split("@")[0]);
-    
-    if (remoteJid.includes("@lid")) {
-        // 1. Buscar en Store Manual
-        const cached = store.contacts[remoteJid];
-        if (cached && cached.id) return normalizePhone(cached.id.split("@")[0]);
-
-        // 2. Fallback API
-        try {
-            const [result] = await sock.onWhatsApp(remoteJid);
-            if (result && result.jid) return normalizePhone(result.jid.split("@")[0]);
-        } catch (e) {}
-    }
-    return null;
 }
 
 async function waitForSocketOpen(sock) {
@@ -262,9 +173,6 @@ async function startWhatsApp(locationId, slotId) {
     retryRequestDelayMs: 500
   });
 
-  // 🔥 VINCULAR STORE MANUAL
-  store.bind(sock.ev);
-
   sessionData.sock = sock;
   sock.ev.on("creds.update", saveCreds);
 
@@ -290,20 +198,20 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
-  // 📩 UPSERT VITAMINADO (Soporte Media + Replies + LIDs)
+  // 📩 UPSERT CON TU LÓGICA + MEDIA
   sock.ev.on("messages.upsert", async (msg) => {
     try {
         const m = msg.messages[0];
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
 
+        // 🔥 TU LÓGICA SAGRADA (Respetada al 100%)
         const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
 
+        // Filtros básicos para no procesar basura
         if (!from || from.includes("status@") || from.includes("@newsletter")) return;
 
-        const clientPhone = normalizePhone(from.split("@")[0]);
-
-        // 2. DETECCIÓN DE CONTENIDO (Texto + Media)
+        // 1. DETECCIÓN DE TIPO DE MENSAJE (Texto vs Media)
         const msgType = Object.keys(m.message)[0];
         let text = "";
         let attachments = [];
@@ -315,39 +223,41 @@ async function startWhatsApp(locationId, slotId) {
         else if (msgType === 'videoMessage') text = m.message.videoMessage.caption || "";
         else if (msgType === 'documentMessage') text = m.message.documentMessage.caption || "";
 
-        // Extraer Media
+        // Extraer Media (Descargar)
         if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(msgType)) {
             const url = await downloadAndSaveMedia(m, msgType);
-            if (url) attachments.push(url);
-            if (!text) text = `[Archivo Adjunto: ${msgType}]`;
+            if(url) attachments.push(url);
+            if(!text) text = `[Archivo: ${msgType}]`;
         }
 
-        if (!text && attachments.length === 0) return;
-
-        // 3. DETECCIÓN DE RESPUESTA (Quoted Message)
+        // 2. DETECCIÓN DE RESPUESTA (Quoted) - Opcional, mejora la visualización
         const contextInfo = m.message[msgType]?.contextInfo || m.message.extendedTextMessage?.contextInfo;
         if (contextInfo && contextInfo.quotedMessage) {
-            let quotedText = "";
-            const qMsg = contextInfo.quotedMessage;
-            if (qMsg.conversation) quotedText = qMsg.conversation;
-            else if (qMsg.extendedTextMessage) quotedText = qMsg.extendedTextMessage.text;
-            else if (qMsg.imageMessage) quotedText = "[Imagen]";
-            
-            // Formato visual para GHL
-            if (quotedText) {
-                text = `> En respuesta a: "${quotedText.substring(0, 50)}..."\n\n${text}`;
-            }
+             let qText = "";
+             const q = contextInfo.quotedMessage;
+             if (q.conversation) qText = q.conversation;
+             else if (q.extendedTextMessage) qText = q.extendedTextMessage.text;
+             else if (q.imageMessage) qText = "[Imagen]";
+             else qText = "[Archivo]";
+             
+             if (qText) text = `> En respuesta a: "${qText.substring(0, 50)}..."\n\n${text}`;
         }
 
+        // Si no hay nada útil, salir
+        if (!text && attachments.length === 0) return;
+
+        const clientPhone = normalizePhone(from.split("@")[0]);
         const myId = sock.user?.id;
         const myChannelNumber = myId ? normalizePhone(myId.split(":")[0]) : "";
         const isFromMe = m.key.fromMe;
         const waName = m.pushName || "Usuario WhatsApp";
 
-        // Routing
+        console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
+
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         
+        // 🔥 Pasamos isFromMe para que no cambie el nombre si soy yo
         const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe);
 
         if (!contact?.id) return;
@@ -365,7 +275,7 @@ async function startWhatsApp(locationId, slotId) {
             direction = "inbound"; 
         }
 
-        // 4. Enviar a GHL con attachments
+        // 🔥 Enviar con attachments
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
 
     } catch (error) { console.error("Upsert Error:", error.message); }
