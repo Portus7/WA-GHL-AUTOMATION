@@ -45,12 +45,38 @@ setInterval(() => store.writeToFile(STORE_FILE), 10_000);
 async function deleteSessionData(locationId, slot) {
   const sessionId = `${locationId}_slot${slot}`;
   const session = sessions.get(sessionId);
-  if (session && session.sock) { 
-      try { session.sock.end(undefined); session.sock.ws.close(); } catch (e) {} 
+
+  // 1. INTENTAR CERRAR SESIÓN EN WHATSAPP (Logout real)
+  if (session && session.sock) {
+    try {
+      // Verificamos si el socket está abierto antes de intentar logout
+      if (session.sock.ws && session.sock.ws.isOpen) {
+        console.log(`🔌 Cerrando sesión activa de WhatsApp para: ${sessionId}`);
+        await session.sock.logout(); // <--- ESTA ES la clave para que desaparezca del celular
+      }
+    } catch (e) {
+      console.warn(`⚠️ No se pudo cerrar sesión limpiamente (posiblemente ya cerrada): ${e.message}`);
+    }
+
+    try {
+      // Destruir conexiones residuales
+      session.sock.end(undefined);
+      session.sock.ws.close();
+    } catch (e) {}
   }
+
+  // 2. Limpiar Memoria
   sessions.delete(sessionId);
-  try { await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]); } catch (e) {}
-  try { await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]); } catch (e) {}
+
+  // 3. Limpiar Base de Datos
+  try {
+    await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
+  } catch (e) { console.error("Error DB Auth:", e.message); }
+  
+  try {
+    await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
+    console.log(`🗑️ Datos eliminados correctamente: ${sessionId}`);
+  } catch (e) { console.error("Error DB Slots:", e.message); }
 }
 
 async function syncSlotInfo(locationId, slotId, phoneNumber) {
