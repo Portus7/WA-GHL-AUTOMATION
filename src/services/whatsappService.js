@@ -2,12 +2,46 @@ const { pool } = require("../config/db");
 const { normalizePhone } = require("../helpers/utils");
 const { findOrCreateGHLContact, logMessageToGHL } = require("./ghlService");
 const pino = require("pino");
+const fs = require("fs");
+const path = require("path");
+const mime = require("mime-types"); // 📦 npm install mime-types
 
-// Estado en memoria
+// Estado Global
 const sessions = new Map();
 const botMessageIds = new Set();
+const STORE_FILE = "baileys_store.json";
 
-// DB Helpers locales para WA
+// Configuración de Directorios para Medios
+// Subimos 2 niveles (src/services -> src -> root) y entramos a public
+const PUBLIC_DIR = path.join(__dirname, "..", "..", "public");
+const MEDIA_DIR = path.join(PUBLIC_DIR, "media");
+const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "https://wa.clicandapp.com";
+
+// Asegurar que exista la carpeta media
+if (!fs.existsSync(MEDIA_DIR)) {
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
+}
+
+// 🔥 STORE MANUAL
+const store = {
+    contacts: {},
+    bind: (ev) => {
+        ev.on('contacts.upsert', (contacts) => {
+            for (const contact of contacts) {
+                if (contact.id) store.contacts[contact.id] = { ...(store.contacts[contact.id] || {}), ...contact };
+                if (contact.lid) store.contacts[contact.lid] = store.contacts[contact.id];
+            }
+        });
+    },
+    writeToFile: (filename) => { try { fs.writeFileSync(filename, JSON.stringify(store.contacts)); } catch(e){} },
+    readFromFile: (filename) => { try { if(fs.existsSync(filename)) store.contacts = JSON.parse(fs.readFileSync(filename, 'utf-8')); } catch(e){} }
+};
+
+store.readFromFile(STORE_FILE);
+setInterval(() => store.writeToFile(STORE_FILE), 10_000);
+
+// --- DB HELPERS LOCALES ---
+
 async function deleteSessionData(locationId, slot) {
   const sessionId = `${locationId}_slot${slot}`;
   const session = sessions.get(sessionId);
@@ -52,10 +86,54 @@ async function getLocationSlotsConfig(locationId) {
     try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { return []; }
 }
 
-// Helper LID Resolution
+// 🔥 HELPER: Descargar y Guardar Media
+async function downloadAndSaveMedia(message, type) {
+    try {
+        const { downloadMediaMessage } = await import("@whiskeysockets/baileys");
+        
+        const buffer = await downloadMediaMessage(
+            message,
+            'buffer',
+            { },
+            { 
+                logger: pino({ level: 'silent' }),
+                reuploadRequest: (msg) => new Promise((resolve) => resolve(msg)) 
+            }
+        );
+        
+        let ext = "bin";
+        let mimeType = "";
+
+        if (type === 'imageMessage') mimeType = message.message.imageMessage.mimetype;
+        else if (type === 'videoMessage') mimeType = message.message.videoMessage.mimetype;
+        else if (type === 'audioMessage') mimeType = message.message.audioMessage.mimetype;
+        else if (type === 'documentMessage') mimeType = message.message.documentMessage.mimetype;
+        
+        if(mimeType) ext = mime.extension(mimeType) || "bin";
+
+        const filename = `${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+        const filepath = path.join(MEDIA_DIR, filename);
+        
+        fs.writeFileSync(filepath, buffer);
+        
+        // Retornamos la URL pública que GHL podrá descargar
+        return `${API_PUBLIC_URL}/media/${filename}`;
+    } catch (e) {
+        console.error("Error descargando media:", e);
+        return null;
+    }
+}
+
+// 🔥 HELPER JID: Recuperé la versión robusta que maneja LIDs
 async function getRecipientPhone(remoteJid, sock) {
     if (remoteJid.includes("@s.whatsapp.net")) return normalizePhone(remoteJid.split("@")[0]);
+    
     if (remoteJid.includes("@lid")) {
+        // 1. Buscar en Store Manual
+        const cached = store.contacts[remoteJid];
+        if (cached && cached.id) return normalizePhone(cached.id.split("@")[0]);
+
+        // 2. Fallback API
         try {
             const [result] = await sock.onWhatsApp(remoteJid);
             if (result && result.jid) return normalizePhone(result.jid.split("@")[0]);
@@ -75,7 +153,7 @@ async function waitForSocketOpen(sock) {
     });
 }
 
-// --- START WHATSAPP ---
+// --- MAIN START FUNCTION ---
 async function startWhatsApp(locationId, slotId) {
   const sessionId = `${locationId}_slot${slotId}`; 
   const existing = sessions.get(sessionId);
@@ -91,21 +169,18 @@ async function startWhatsApp(locationId, slotId) {
 
   async function usePostgreSQLAuthState(pool, id) {
     const { BufferJSON } = await import("@whiskeysockets/baileys");
-    // ... (Lógica Auth IDÉNTICA a tu código anterior para leer/escribir en DB) ...
-    // Para ahorrar espacio aquí, asumo que copias la función usePostgreSQLAuthState completa
-    // que ya tenías en el index.js
     const readData = async (key) => {
-        try {
-            const res = await pool.query("SELECT data FROM baileys_auth WHERE session_id = $1 AND key_id = $2", [id, key]);
-            return res.rows.length > 0 ? JSON.parse(JSON.stringify(res.rows[0].data), BufferJSON.reviver) : null;
-        } catch (e) { return null; }
+      try {
+        const res = await pool.query("SELECT data FROM baileys_auth WHERE session_id = $1 AND key_id = $2", [id, key]);
+        return res.rows.length > 0 ? JSON.parse(JSON.stringify(res.rows[0].data), BufferJSON.reviver) : null;
+      } catch (e) { return null; }
     };
     const writeData = async (key, data) => {
-        try {
-            const jsonData = JSON.stringify(data, BufferJSON.replacer);
-            const sql = `INSERT INTO baileys_auth (session_id, key_id, data, updated_at) VALUES ($1, $2, $3::jsonb, NOW()) ON CONFLICT (session_id, key_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`;
-            await pool.query(sql, [id, key, jsonData]);
-        } catch (e) {}
+      try {
+        const jsonData = JSON.stringify(data, BufferJSON.replacer);
+        const sql = `INSERT INTO baileys_auth (session_id, key_id, data, updated_at) VALUES ($1, $2, $3::jsonb, NOW()) ON CONFLICT (session_id, key_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`;
+        await pool.query(sql, [id, key, jsonData]);
+      } catch (e) {}
     };
     const creds = (await readData("creds")) || initAuthCreds();
     return {
@@ -114,7 +189,6 @@ async function startWhatsApp(locationId, slotId) {
                 const data = {};
                 await Promise.all(ids.map(async (id) => {
                     let value = await readData(`${type}-${id}`);
-                    // Nota: Importar proto si es necesario para deserializar
                     if (value) data[id] = value;
                 }));
                 return data;
@@ -144,6 +218,9 @@ async function startWhatsApp(locationId, slotId) {
     retryRequestDelayMs: 500
   });
 
+  // 🔥 VINCULAR STORE MANUAL
+  store.bind(sock.ev);
+
   sessionData.sock = sock;
   sock.ev.on("creds.update", saveCreds);
 
@@ -154,8 +231,8 @@ async function startWhatsApp(locationId, slotId) {
     if (connection === "open") { 
         sessionData.isConnected = true; 
         sessionData.qr = null; 
-        const myJid = sock.user?.id;
-        const myPhone = myJid ? normalizePhone(myJid.split(":")[0]) : "Desconocido";
+        const rawId = sock.user?.id;
+        const myPhone = rawId ? normalizePhone(rawId.split(":")[0]) : "Desconocido";
         sessionData.myNumber = myPhone;
         console.log(`✅ CONECTADO: ${sessionId} (${myPhone})`); 
         syncSlotInfo(locationId, slotId, myPhone).catch(console.error);
@@ -164,31 +241,68 @@ async function startWhatsApp(locationId, slotId) {
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
       sessionData.isConnected = false; sessionData.sock = null;
-      if (code !== 401 && code !== 403 && code !== 440) {
-          setTimeout(() => startWhatsApp(locationId, slotId), 3000);
-      } else {
-          if (sessions.get(sessionId) === sessionData) sessions.delete(sessionId);
-      }
+      if (code !== 401 && code !== 403 && code !== 440) setTimeout(() => startWhatsApp(locationId, slotId), 3000);
+      else sessions.delete(sessionId);
     }
   });
 
+  // 📩 UPSERT VITAMINADO (Soporte Media + Replies + LIDs)
   sock.ev.on("messages.upsert", async (msg) => {
     try {
         const m = msg.messages[0];
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
 
-        const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
-
-        if (!from || from.includes("status@") || from.includes("@newsletter")) return;
-
-        const clientPhone = normalizePhone(from.split("@")[0]);
+        const from = m.key.remoteJid;
         
-        const myJid = sock.user?.id || "";
-        const myChannelNumber = normalizePhone(myJid.split(":")[0].split("@")[0]);
-        const isFromMe = m.key.fromMe;
-        const waName = m.pushName || "";
+        // 1. Obtener teléfono real (usando helper robusto)
+        const clientPhone = await getRecipientPhone(from, sock);
+        if (!clientPhone) return;
 
+        if (from.includes("status@") || from.includes("@newsletter")) return;
+
+        // 2. DETECCIÓN DE CONTENIDO (Texto + Media)
+        const msgType = Object.keys(m.message)[0];
+        let text = "";
+        let attachments = [];
+
+        // Extraer Texto
+        if (msgType === 'conversation') text = m.message.conversation;
+        else if (msgType === 'extendedTextMessage') text = m.message.extendedTextMessage.text;
+        else if (msgType === 'imageMessage') text = m.message.imageMessage.caption || "";
+        else if (msgType === 'videoMessage') text = m.message.videoMessage.caption || "";
+        else if (msgType === 'documentMessage') text = m.message.documentMessage.caption || "";
+
+        // Extraer Media
+        if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(msgType)) {
+            const url = await downloadAndSaveMedia(m, msgType);
+            if (url) attachments.push(url);
+            if (!text) text = `[Archivo Adjunto: ${msgType}]`;
+        }
+
+        if (!text && attachments.length === 0) return;
+
+        // 3. DETECCIÓN DE RESPUESTA (Quoted Message)
+        const contextInfo = m.message[msgType]?.contextInfo || m.message.extendedTextMessage?.contextInfo;
+        if (contextInfo && contextInfo.quotedMessage) {
+            let quotedText = "";
+            const qMsg = contextInfo.quotedMessage;
+            if (qMsg.conversation) quotedText = qMsg.conversation;
+            else if (qMsg.extendedTextMessage) quotedText = qMsg.extendedTextMessage.text;
+            else if (qMsg.imageMessage) quotedText = "[Imagen]";
+            
+            // Formato visual para GHL
+            if (quotedText) {
+                text = `> En respuesta a: "${quotedText.substring(0, 50)}..."\n\n${text}`;
+            }
+        }
+
+        const myId = sock.user?.id;
+        const myChannelNumber = myId ? normalizePhone(myId.split(":")[0]) : "";
+        const isFromMe = m.key.fromMe;
+        const waName = m.pushName || "Usuario WhatsApp";
+
+        // Routing
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         
@@ -197,9 +311,6 @@ async function startWhatsApp(locationId, slotId) {
         if (!contact?.id) return;
 
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
-
-        const text = m.message.conversation || m.message.extendedTextMessage?.text || "";
-        if (!text) return;
 
         let messageForGHL = "";
         let direction = "inbound";
@@ -212,7 +323,8 @@ async function startWhatsApp(locationId, slotId) {
             direction = "inbound"; 
         }
 
-        await logMessageToGHL(locationId, contact.id, messageForGHL, direction);
+        // 4. Enviar a GHL con attachments
+        await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
 
     } catch (error) { console.error("Upsert Error:", error.message); }
   });
