@@ -66,7 +66,7 @@ async function syncSlotInfo(locationId, slotId, phoneNumber) {
 async function saveRouting(clientPhone, locationId, contactId, channelNumber) {
   const normClient = normalizePhone(clientPhone);
   const normChannel = normalizePhone(channelNumber);
-  const sql = `INSERT INTO phone_routing (phone, location_id, contact_id, channel_number, updated_at, messages_count) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (phone) DO UPDATE SET location_id = EXCLUDED.location_id, contact_id = COALESCE(EXCLUDED.contact_id, phone_routing.contact_id), channel_number = EXCLUDED.channel_number, updated_at = NOW(), messages_count = phone_routing.messages_count + 1;`;
+  const sql = `INSERT INTO phone_routing (phone, location_id, contact_id, channel_number, updated_at, messages_count) VALUES ($1, $2, $3, $4, NOW(), 1) ON CONFLICT (phone) DO UPDATE SET location_id = EXCLUDED.location_id, contact_id = COALESCE(EXCLUDED.contact_id, phone_routing.contact_id), channel_number = EXCLUDED.channel_number, updated_at = NOW(), messages_count = phone_routing.messages_count + 1;`;
   try { await pool.query(sql, [normClient, locationId, contactId, normChannel]); } catch (e) { console.error("Routing Error:", e.message); }
 }
 
