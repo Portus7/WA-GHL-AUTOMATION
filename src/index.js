@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
-console.log("NUEVA ACTUALIZACION")
+console.log("NUEVA ACTUALIZACION 2222")
 const express = require("express");
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
