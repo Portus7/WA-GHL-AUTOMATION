@@ -34,7 +34,8 @@ const initDb = async () => {
         location_id VARCHAR(255) NOT NULL,
         contact_id VARCHAR(255),
         channel_number VARCHAR(50),
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        messages_count INT DEFAULT 0
       );
     `);
 
