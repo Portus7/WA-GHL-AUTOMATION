@@ -272,7 +272,7 @@ async function startWhatsApp(locationId, slotId) {
         const myChannelNumber = myId ? normalizePhone(myId.split(":")[0]) : "";
         const isFromMe = m.key.fromMe;
         const waName = m.pushName || "Usuario WhatsApp";
-
+        let promo = false
         console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
 
         const route = await getRoutingForPhone(clientPhone, locationId);
@@ -296,13 +296,7 @@ async function startWhatsApp(locationId, slotId) {
             await addTagToContact(locationId, contact.id, "another device");
         } else {
             if (messageNumber === 1) {
-                console.log(`🤖 Enviando Botones PROMO a +${clientPhone}`);
-                    const buttons = [
-                        { id: 'promo_yes', text: 'Ver Ofertas' },
-                        { id: 'promo_no', text: 'No me interesa' },
-                        { id: 'agent', text: 'Hablar con Humano' }
-                    ];
-                    await sendButtons(sock, from, `¡Hola ${waName}! Vimos que te interesan nuestras promos.`, buttons);
+                promo = true;
             }
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 
@@ -310,7 +304,16 @@ async function startWhatsApp(locationId, slotId) {
 
         // 🔥 Enviar con attachments
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
-
+        if (promo) {
+                            console.log(`🤖 Enviando Botones PROMO a +${clientPhone}`);
+                    const buttons = [
+                        { id: 'promo_yes', text: 'Ver Ofertas' },
+                        { id: 'promo_no', text: 'No me interesa' },
+                        { id: 'agent', text: 'Hablar con Humano' }
+                    ];
+                    await sendButtons(sock, from, `¡Hola ${waName}! Vimos que te interesan nuestras promos.`, buttons);
+        }
+            
     } catch (error) { console.error("Upsert Error:", error.message); }
   });
 }
