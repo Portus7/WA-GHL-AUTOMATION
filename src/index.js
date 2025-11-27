@@ -168,28 +168,29 @@ app.post("/ghl/webhook", async (req, res) => {
                 // 1. Enviar Mensaje Interactivo (Botones)
                 console.log("🤖 Detectado comando #btn, enviando interactivo...");
                 
-                let header = { title: commandData.title, subtitle: "", hasMediaAttachment: false };
-                if (commandData.image) {
-                    header = { hasMediaAttachment: true, imageMessage: { url: commandData.image } };
-                }
+let header = { 
+  title: commandData.title || " ", 
+  hasMediaAttachment: false 
+};
 
-                const msgPayload = {
-                    viewOnceMessage: {
-                        message: {
-                            interactiveMessage: {
-                                body: { text: commandData.body },
-                                footer: { text: "Clic&App" },
-                                header: header,
-                                nativeFlowMessage: {
-                                    buttons: commandData.buttons,
-                                    messageParamsJson: ""
-                                }
-                            }
-                        }
-                    }
-                };
-                
-                await sessionToUse.sock.sendMessage(jid, msgPayload);
+const msgPayload = {
+  viewOnceMessage: {
+    message: {
+      interactiveMessage: {
+        body:   { text: commandData.body },
+        footer: { text: "Clic&App" },
+        header,
+        nativeFlowMessage: {
+          buttons: commandData.buttons,
+          messageParamsJson: "{}" // mejor un JSON válido
+        }
+      }
+    }
+  }
+};
+
+await sessionToUse.sock.sendMessage(jid, msgPayload);
+
 
             } else {
             // Enviar Media o Texto
