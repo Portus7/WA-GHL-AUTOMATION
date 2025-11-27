@@ -1,6 +1,7 @@
 const { pool } = require("../config/db");
 const { normalizePhone } = require("../helpers/utils");
 const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
+const { parseGHLCommand } = require("../helpers/parser");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
@@ -79,6 +80,38 @@ async function getLocationSlotsConfig(locationId, slotId=null) {
     }
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
     try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { console.error("Error fetching location slots config:", e); return []; }
+}
+
+async function sendInteractiveMessage(sock, jid, parsedData) {
+    const { title, body, image, buttons } = parsedData;
+
+    let header = { title: title, subtitle: "", hasMediaAttachment: false };
+
+    // Si hay imagen, cambiamos el header
+    if (image) {
+        header = {
+            hasMediaAttachment: true,
+            imageMessage: { url: image } // Baileys descarga la URL por ti
+        };
+    }
+
+    const msgPayload = {
+        viewOnceMessage: {
+            message: {
+                interactiveMessage: {
+                    body: { text: body },
+                    footer: { text: "Clic&App" }, // Puedes personalizar esto
+                    header: header,
+                    nativeFlowMessage: {
+                        buttons: buttons,
+                        messageParamsJson: ""
+                    }
+                }
+            }
+        }
+    };
+
+    await sock.sendMessage(jid, msgPayload);
 }
 
 // 🔥 HELPER: Descargar y Guardar Media
@@ -312,6 +345,37 @@ async function startWhatsApp(locationId, slotId) {
   });
 }
 
+async function sendInteractiveMessage(sock, jid, parsedData) {
+    const { title, body, image, buttons } = parsedData;
+
+    let header = { title: title, subtitle: "", hasMediaAttachment: false };
+    
+    if (image) {
+        header = {
+            hasMediaAttachment: true,
+            imageMessage: { url: image }
+        };
+    }
+
+    const msgPayload = {
+        viewOnceMessage: {
+            message: {
+                interactiveMessage: {
+                    body: { text: body },
+                    footer: { text: "Clic&App" }, 
+                    header: header,
+                    nativeFlowMessage: {
+                        buttons: buttons,
+                        messageParamsJson: ""
+                    }
+                }
+            }
+        }
+    };
+
+    await sock.sendMessage(jid, msgPayload);
+}
+
 module.exports = {
     sessions,
     botMessageIds,
@@ -321,5 +385,7 @@ module.exports = {
     getRoutingForPhone,
     getLocationSlotsConfig,
     waitForSocketOpen,
-    sendButtons
+    sendButtons,
+    parseGHLCommand, 
+    sendInteractiveMessage
 };

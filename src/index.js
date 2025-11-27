@@ -17,6 +17,7 @@ const {
 } = require("./services/whatsappService");
 const { saveTokens, getTokens, ensureAgencyToken, callGHLWithAgency } = require("./services/ghlService");
 const { normalizePhone } = require("./helpers/utils");
+const { parseGHLCommand } = require("./helpers/parser");
 
 // Parche crypto
 if (!globalThis.crypto) { globalThis.crypto = require("crypto").webcrypto; }
@@ -161,6 +162,36 @@ app.post("/ghl/webhook", async (req, res) => {
         try {
             await waitForSocketOpen(sessionToUse.sock);
 
+            const commandData = parseGHLCommand(message)
+
+            if (commandData) {
+                // 1. Enviar Mensaje Interactivo (Botones)
+                console.log("🤖 Detectado comando #btn, enviando interactivo...");
+                
+                let header = { title: commandData.title, subtitle: "", hasMediaAttachment: false };
+                if (commandData.image) {
+                    header = { hasMediaAttachment: true, imageMessage: { url: commandData.image } };
+                }
+
+                const msgPayload = {
+                    viewOnceMessage: {
+                        message: {
+                            interactiveMessage: {
+                                body: { text: commandData.body },
+                                footer: { text: "Clic&App" },
+                                header: header,
+                                nativeFlowMessage: {
+                                    buttons: commandData.buttons,
+                                    messageParamsJson: ""
+                                }
+                            }
+                        }
+                    }
+                };
+                
+                await sessionToUse.sock.sendMessage(jid, msgPayload);
+
+            } else {
             // Enviar Media o Texto
             if (attachments && attachments.length > 0) {
                 for (const url of attachments) {
@@ -181,7 +212,7 @@ app.post("/ghl/webhook", async (req, res) => {
             console.log(clientPhone)
             await saveRouting(clientPhone.replace("+",""), locationId, null, selectedCandidate.myNumber);
             return res.json({ ok: true });
-
+        }
         } catch (e) {
             console.error(`❌ Error envío: ${e.message}`);
             return res.status(500).json({ error: "Send failed" });
