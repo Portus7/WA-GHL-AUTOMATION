@@ -276,8 +276,7 @@ async function startWhatsApp(locationId, slotId) {
         console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
 
         const route = await getRoutingForPhone(clientPhone, locationId);
-        console.log("ROUTE: ", route)
-        const { messageNumber } = route?.slots?.[0]?.messages_count ?? null
+        const messageNumber = route?.slots?.[0]?.messages_count ?? 1;
         console.log("Nro de mensajes: ",messageNumber)
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe);
