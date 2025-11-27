@@ -5,6 +5,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const express = require("express");
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
+const { sendMetaButtons } = require("./services/metawhatsapp");
 const { 
     startWhatsApp, 
     sessions, 
