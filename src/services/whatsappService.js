@@ -21,22 +21,15 @@ if (!fs.existsSync(MEDIA_DIR)) {
 
 // --- DB HELPERS LOCALES ---
 
-// Helper para enviar Botones/Listas (Compatible)
 async function sendButtons(sock, jid, text, buttons) {
-    // Estructura simple de botones (Reply Buttons)
-    // Nota: En iOS a veces se ven como texto, es limitación de WhatsApp actual
-    const buttonMessage = {
-        text: text,
-        footer: "Selecciona una opción:",
-        buttons: buttons.map((btn, i) => ({
-            buttonId: btn.id,
-            buttonText: { displayText: btn.text },
-            type: 1
-        })),
-        headerType: 1
-    };
+    let menu = `${text}\n\n`;
+    // Construimos la lista: 1. Opción A, 2. Opción B...
+    buttons.forEach((btn, i) => {
+        menu += `*${i + 1}.* ${btn.text}\n`;
+    });
+    menu += `\n_Responde con el número de tu opción._`;
 
-    await sock.sendMessage(jid, buttonMessage);
+    await sock.sendMessage(jid, { text: menu });
 }
 
 
@@ -305,13 +298,14 @@ async function startWhatsApp(locationId, slotId) {
         // 🔥 Enviar con attachments
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
         if (promo) {
-                    console.log(`🤖 Enviando Botones PROMO a +${clientPhone}`);
-                    const buttons = [
-                        { id: 'promo_yes', text: 'Ver Ofertas' },
-                        { id: 'promo_no', text: 'No me interesa' },
-                        { id: 'agent', text: 'Hablar con Humano' }
-                    ];
-                    await sendButtons(sock, from, `¡Hola ${waName}! Vimos que te interesan nuestras promos.`, buttons);
+            const isSelectingOption = ["1", "2", "3"].includes(text.trim());
+            console.log(`🤖 Enviando Botones PROMO a +${clientPhone}`);
+            const buttons = [
+                { id: 'promo_yes', text: 'Ver Ofertas' },
+                { id: 'promo_no', text: 'No me interesa' },
+                { id: 'agent', text: 'Hablar con Humano' }
+            ];
+            await sendButtons(sock, from, `¡Hola ${waName}! Vimos que te interesan nuestras promos.`, buttons);
         }
             
     } catch (error) { console.error("Upsert Error:", error.message); }
