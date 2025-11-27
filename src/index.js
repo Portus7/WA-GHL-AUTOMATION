@@ -5,7 +5,7 @@ console.log("NUEVA ACTUALIZACION")
 const express = require("express");
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
-const { sendMetaButtons } = require("./services/metaWhatsapp");
+const { sendMetaButtons } = require("WA-GHL-AUTOMATION\src\services\metaWhatsapp.js");
 const { 
     startWhatsApp, 
     sessions, 
