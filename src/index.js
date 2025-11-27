@@ -164,34 +164,27 @@ app.post("/ghl/webhook", async (req, res) => {
 
             const commandData = parseGHLCommand(message)
 
-            if (commandData) {
-                console.log("🤖 Enviando Botones Interactivos...");
-                
-                // IMPORTANTE: Importamos la herramienta necesaria aquí mismo
-                const { prepareWAMessageMedia } = await import("@whiskeysockets/baileys");
+if (commandData) {
+    console.log("🤖 Enviando Botones Interactivos...");
 
-let header = { 
-  title: commandData.title || " ", 
-  hasMediaAttachment: false 
-};
-
-const msgPayload = {
-  viewOnceMessage: {
-    message: {
-      interactiveMessage: {
-        body:   { text: commandData.body },
-        footer: { text: "Clic&App" },
-        header,
-        nativeFlowMessage: {
-          buttons: commandData.buttons,
-          messageParamsJson: "{}" // mejor un JSON válido
+    const msgPayload = {
+        interactiveMessage: {
+            body:   { text: commandData.body },
+            footer: { text: "Clic&App" },
+            header: {
+                title: commandData.title || " ",
+                hasMediaAttachment: false
+            },
+            nativeFlowMessage: {
+                buttons: commandData.buttons,
+                messageParamsJson: "{}"
+            }
         }
-      }
-    }
-  }
-};
+    };
 
-await sessionToUse.sock.sendMessage(jid, msgPayload);
+    await sessionToUse.sock.sendMessage(jid, msgPayload);
+
+
 
             } else {
             // Enviar Media o Texto
