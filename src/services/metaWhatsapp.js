@@ -1,5 +1,6 @@
 // services/metaWhatsapp.js
 const axios = require("axios");
+const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const META_WA_TOKEN = process.env.META_WA_TOKEN;
