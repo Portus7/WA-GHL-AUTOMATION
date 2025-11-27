@@ -79,9 +79,13 @@ async function getRoutingForPhone(clientPhone) {
   } catch (e) { return null; }
 }
 
-async function getLocationSlotsConfig(locationId) {
+async function getLocationSlotsConfig(locationId, slotId=null) {
+    if (slotId) {
+        const sql = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
+        try { const res = await pool.query(sql, [locationId, slotId]); return res.rows; } catch (e) { console.error("Error fetching slot config:", e); return []; }
+    }
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
-    try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { return []; }
+    try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { console.error("Error fetching location slots config:", e); return []; }
 }
 
 // 🔥 HELPER: Descargar y Guardar Media

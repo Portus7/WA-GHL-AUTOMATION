@@ -260,7 +260,7 @@ app.post("/config-slot", async (req, res) => {
 app.get("/get-info", async (req, res) => {
     try {
         const { locationId, slot } = req.query;
-        const slots = await getLocationSlotsConfig(locationId);
+        const slots = await getLocationSlotsConfig(locationId, slot);
         return res.json({ slots });
     } catch (e) { res.status(500).json({ error: e.message }); }   
 })  
