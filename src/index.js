@@ -178,6 +178,7 @@ app.post("/ghl/webhook", async (req, res) => {
 
             console.log(`✅ Enviado.`);
             // Actualizamos el routing para que la respuesta del cliente vuelva a este nuevo número
+            console.log(clientPhone)
             await saveRouting(clientPhone, locationId, null, selectedCandidate.myNumber);
             return res.json({ ok: true });
 
