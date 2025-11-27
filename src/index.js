@@ -13,11 +13,13 @@ const {
     saveRouting, 
     getRoutingForPhone, 
     getLocationSlotsConfig, 
-    waitForSocketOpen 
+    waitForSocketOpen,
+    sendMetaButtons
 } = require("./services/whatsappService");
 const { saveTokens, getTokens, ensureAgencyToken, callGHLWithAgency } = require("./services/ghlService");
 const { normalizePhone } = require("./helpers/utils");
 const { parseGHLCommand } = require("./helpers/parser");
+
 
 // Parche crypto
 if (!globalThis.crypto) { globalThis.crypto = require("crypto").webcrypto; }
@@ -166,53 +168,20 @@ app.post("/ghl/webhook", async (req, res) => {
             console.log("commandData:", JSON.stringify(commandData, null, 2))
 
 if (commandData) {
-    console.log("🤖 Enviando Botones (buttons clásicos)...");
+      console.log("🤖 Enviando botones via Meta (Cloud API)...");
 
-    const buttons = [];
-    let i = 1;
+  // OJO: aquí to va CON + y en E.164
+  const toE164 = "+" + clientPhone.replace(/\D/g, "");
 
-    for (const b of commandData.buttons) {
-        const params = JSON.parse(b.buttonParamsJson);
-
-        // Todos los tipos los convertimos en "reply buttons"
-        // y usamos buttonId para saber qué hicieron.
-        if (b.name === 'quick_reply') {
-            buttons.push({
-                buttonId: params.id || `quick_${i}`,
-                buttonText: { displayText: params.display_text },
-                type: 1
-            });
-        } else if (b.name === 'cta_url') {
-            buttons.push({
-                buttonId: `url::${params.url}`,
-                buttonText: { displayText: params.display_text },
-                type: 1
-            });
-        } else if (b.name === 'cta_call') {
-            buttons.push({
-                buttonId: `call::${params.phone_number}`,
-                buttonText: { displayText: params.display_text },
-                type: 1
-            });
-        } else if (b.name === 'cta_copy') {
-            buttons.push({
-                buttonId: `copy::${params.copy_code}`,
-                buttonText: { displayText: params.display_text },
-                type: 1
-            });
-        }
-
-        i++;
-    }
-
-    const msgPayload = {
-        text: commandData.body,        // "Elige una acción"
-        footer: "Clic&App",
-        buttons,
-        headerType: 1                  // texto simple
-    };
-
-    await sessionToUse.sock.sendMessage(jid, msgPayload);
+  try {
+    await sendMetaButtons(toE164, commandData);
+    // Opcional: marcar en tu DB que este contacto ahora también
+    // tiene interacción por el número de Cloud API.
+    return res.json({ ok: true, provider: "meta" });
+  } catch (e) {
+    console.error("Error enviando botones Meta:", e.response?.data || e.message);
+    return res.status(500).json({ error: "Meta send failed" });
+  }
 }
  else {
             // Enviar Media o Texto
