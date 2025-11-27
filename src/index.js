@@ -15,7 +15,6 @@ const {
     getRoutingForPhone, 
     getLocationSlotsConfig, 
     waitForSocketOpen,
-    sendMetaButtons
 } = require("./services/whatsappService");
 const { saveTokens, getTokens, ensureAgencyToken, callGHLWithAgency } = require("./services/ghlService");
 const { normalizePhone } = require("./helpers/utils");
