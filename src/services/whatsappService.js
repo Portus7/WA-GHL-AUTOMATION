@@ -74,7 +74,7 @@ async function getRoutingForPhone(clientPhone, locationId) {
   const normClient = normalizePhone(clientPhone);
   try {
     const res = await pool.query("SELECT location_id, contact_id, channel_number, messages_count FROM phone_routing WHERE phone = $1 AND location_id = $2", [normClient, locationId]);
-    if (res.rows.length > 0) return { locationId: res.rows[0].location_id, contactId: res.rows[0].contact_id, channelNumber: res.rows[0].channel_number, messages: res.rows.length };
+    if (res.rows.length > 0) return { locationId: res.rows[0].location_id, contactId: res.rows[0].contact_id, channelNumber: res.rows[0].channel_number, messages: res.rows[0].messages_count };
     return null;
   } catch (e) { return null; }
 }
