@@ -134,7 +134,7 @@ app.post("/ghl/webhook", async (req, res) => {
         // NIVEL 3: ROUTING (Historial)
         // Si no hay Tag ni Rey (todos son prioridad 2 o más), respetamos la conversación previa.
         if (!selectedCandidate) {
-            const route = await getRoutingForPhone(clientPhone);
+            const route = await getRoutingForPhone(clientPhone, locationId);
             if (route?.channelNumber) {
                 const stickyCandidate = availableCandidates.find(c => c.myNumber === route.channelNumber);
                 if (stickyCandidate) {
