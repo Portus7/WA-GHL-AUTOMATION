@@ -344,6 +344,40 @@ app.post("/ghl/app-webhook", async (req, res) => {
     } catch (e) { res.status(500).json({error: "Error"}); }
 });
 
+app.get("/test-buttons", async (req, res) => {
+  try {
+    const { locationId, slot, phone } = req.query;
+    const sess = sessions.get(`${locationId}_slot${slot}`);
+    if (!sess || !sess.isConnected) return res.status(400).json({ error: "No session" });
+
+    const jid = phone.replace(/\D/g, "") + "@s.whatsapp.net";
+
+    const buttons = [
+      {
+        buttonId: "id1",
+        buttonText: { displayText: "Botón 1" },
+        type: 1
+      },
+      {
+        buttonId: "id2",
+        buttonText: { displayText: "Botón 2" },
+        type: 1
+      }
+    ];
+
+    await sess.sock.sendMessage(jid, {
+      text: "Test botones",
+      buttons,
+      headerType: 1
+    });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/config", (req, res) => res.json({ max_slots: 3 }));
 
 // --- ARRANQUE ---
