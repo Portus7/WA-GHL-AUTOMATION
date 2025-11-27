@@ -168,7 +168,7 @@ app.post("/ghl/webhook", async (req, res) => {
             console.log("commandData:", JSON.stringify(commandData, null, 2))
 
 if (commandData) {
-      console.log("🤖 Enviando botones via Meta (Cloud API)...");
+      console.log(" asdasd🤖 Enviando botones via Meta (Cloud API)...");
 
   // OJO: aquí to va CON + y en E.164
   const toE164 = "+" + clientPhone.replace(/\D/g, "");
