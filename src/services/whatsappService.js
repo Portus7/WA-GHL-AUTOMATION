@@ -277,13 +277,13 @@ async function startWhatsApp(locationId, slotId) {
 
         const route = await getRoutingForPhone(clientPhone);
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
-        
-        // 🔥 Pasamos isFromMe para que no cambie el nombre si soy yo
         const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe);
 
         if (!contact?.id) return;
 
+        const slotInfo = getLocationSlotsConfig(locationId, slotId);
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
+        
 
         let messageForGHL = "";
         let direction = "inbound";
