@@ -163,6 +163,7 @@ app.post("/ghl/webhook", async (req, res) => {
             await waitForSocketOpen(sessionToUse.sock);
 
             const commandData = parseGHLCommand(message)
+            console.log("commandData:", JSON.stringify(commandData, null, 2))
 
 if (commandData) {
     console.log("🤖 Enviando Botones Interactivos...");
