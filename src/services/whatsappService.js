@@ -277,7 +277,7 @@ async function startWhatsApp(locationId, slotId) {
 
         const route = await getRoutingForPhone(clientPhone, locationId);
         const messageNumber = route?.slots?.[0]?.messages_count ?? 1;
-        console.log("Nro de mensajes: ",messageNumber)
+        console.log("Nro de mensajes: ",messageNumber, "ROUTE: ", route)
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe);
 
@@ -305,7 +305,7 @@ async function startWhatsApp(locationId, slotId) {
         // 🔥 Enviar con attachments
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
         if (promo) {
-                            console.log(`🤖 Enviando Botones PROMO a +${clientPhone}`);
+                    console.log(`🤖 Enviando Botones PROMO a +${clientPhone}`);
                     const buttons = [
                         { id: 'promo_yes', text: 'Ver Ofertas' },
                         { id: 'promo_no', text: 'No me interesa' },
