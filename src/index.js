@@ -166,28 +166,60 @@ app.post("/ghl/webhook", async (req, res) => {
             console.log("commandData:", JSON.stringify(commandData, null, 2))
 
 if (commandData) {
-    console.log("🤖 Enviando Botones Interactivos...");
+    console.log("🤖 Enviando Botones (templateButtons)...");
+
+    // 1. Convertimos tus buttons a templateButtons
+    const templateButtons = [];
+    let idx = 1;
+
+    for (const b of commandData.buttons) {
+        const params = JSON.parse(b.buttonParamsJson);
+
+        if (b.name === 'quick_reply') {
+            templateButtons.push({
+                index: idx++,
+                quickReplyButton: {
+                    displayText: params.display_text,
+                    id: params.id || `btn_${idx}`
+                }
+            });
+        } else if (b.name === 'cta_url') {
+            templateButtons.push({
+                index: idx++,
+                urlButton: {
+                    displayText: params.display_text,
+                    url: params.url
+                }
+            });
+        } else if (b.name === 'cta_call') {
+            templateButtons.push({
+                index: idx++,
+                callButton: {
+                    displayText: params.display_text,
+                    phoneNumber: params.phone_number
+                }
+            });
+        } else if (b.name === 'cta_copy') {
+            // WhatsApp no tiene botón nativo "copiar";
+            // lo mandamos como quick reply que luego tu backend interpreta.
+            templateButtons.push({
+                index: idx++,
+                quickReplyButton: {
+                    displayText: params.display_text,
+                    id: `copy_${params.copy_code}`
+                }
+            });
+        }
+    }
 
     const msgPayload = {
-        interactiveMessage: {
-            body:   { text: commandData.body },
-            footer: { text: "Clic&App" },
-            header: {
-                title: commandData.title || " ",
-                hasMediaAttachment: false
-            },
-            nativeFlowMessage: {
-                buttons: commandData.buttons,
-                messageParamsJson: "{}"
-            }
-        }
+        text: commandData.body,
+        footer: "Clic&App",
+        templateButtons
     };
 
     await sessionToUse.sock.sendMessage(jid, msgPayload);
-
-
-
-            } else {
+} else {
             // Enviar Media o Texto
             if (attachments && attachments.length > 0) {
                 for (const url of attachments) {
