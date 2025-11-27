@@ -206,13 +206,12 @@ app.post("/ghl/webhook", async (req, res) => {
                 const sent = await sessionToUse.sock.sendMessage(jid, { text: message });
                 if(sent?.key?.id) { botMessageIds.add(sent.key.id); setTimeout(() => botMessageIds.delete(sent.key.id), 15000); }
             }
-
+            }
             console.log(`✅ Enviado.`);
             // Actualizamos el routing para que la respuesta del cliente vuelva a este nuevo número
-            console.log(clientPhone)
             await saveRouting(clientPhone.replace("+",""), locationId, null, selectedCandidate.myNumber);
             return res.json({ ok: true });
-        }
+        
         } catch (e) {
             console.error(`❌ Error envío: ${e.message}`);
             return res.status(500).json({ error: "Send failed" });
