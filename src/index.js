@@ -257,6 +257,14 @@ app.post("/config-slot", async (req, res) => {
   }
 });
 
+app.get("/get-info", async (req, res) => {
+    try {
+        const { locationId, slot } = req.query;
+        const slots = await getLocationSlotsConfig(locationId);
+        return res.json({ slots });
+    } catch (e) { res.status(500).json({ error: e.message }); }   
+})  
+
 app.post("/remove-slot", async (req, res) => {
     try { await deleteSessionData(req.query.locationId, req.query.slot); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });

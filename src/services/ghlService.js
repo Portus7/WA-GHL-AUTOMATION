@@ -161,6 +161,20 @@ async function addTagToContact(locationId, contactId, tag) {
   }
 }
 
+async function deleteTagsContact(locationId, contactId, tags) {
+    console.log(`🗑️ Eliminando tags '${tags}' del contacto ${contactId}...`);
+    try {
+        await callGHLWithLocation(locationId, {
+            method: "DELETE",
+            url: `https://services.leadconnectorhq.com/contacts/${contactId}/tags`,
+            data: { tags: [tags] }
+        });
+    } catch (e) {
+        console.error("Error eliminando tags:", e.message);
+    }
+}
+
+
 async function logMessageToGHL(locationId, contactId, text, direction, attachments = []) {
   try {
     let url = "https://services.leadconnectorhq.com/conversations/messages"; 
@@ -170,11 +184,10 @@ async function logMessageToGHL(locationId, contactId, text, direction, attachmen
         type: "SMS", 
         contactId, 
         locationId, 
-        message: text || " ", // GHL no acepta mensajes vacíos, ponemos un espacio por seguridad
+        message: text || " ", 
         direction: direction
     };
 
-    // 🔥 FIX: Solo agregamos attachments si el array NO está vacío
     if (attachments && attachments.length > 0) {
         payload.attachments = attachments;
     }
@@ -208,4 +221,5 @@ module.exports = {
     logMessageToGHL,
     ensureAgencyToken,
     addTagToContact,
+    deleteTagsContact,
 };

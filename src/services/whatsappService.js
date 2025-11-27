@@ -21,6 +21,25 @@ if (!fs.existsSync(MEDIA_DIR)) {
 
 // --- DB HELPERS LOCALES ---
 
+// Helper para enviar Botones/Listas (Compatible)
+async function sendButtons(sock, jid, text, buttons) {
+    // Estructura simple de botones (Reply Buttons)
+    // Nota: En iOS a veces se ven como texto, es limitación de WhatsApp actual
+    const buttonMessage = {
+        text: text,
+        footer: "Selecciona una opción:",
+        buttons: buttons.map((btn, i) => ({
+            buttonId: btn.id,
+            buttonText: { displayText: btn.text },
+            type: 1
+        })),
+        headerType: 1
+    };
+
+    await sock.sendMessage(jid, buttonMessage);
+}
+
+
 async function deleteSessionData(locationId, slot) {
   const sessionId = `${locationId}_slot${slot}`;
   const session = sessions.get(sessionId);
@@ -198,14 +217,12 @@ async function startWhatsApp(locationId, slotId) {
     }
   });
 
-  // 📩 UPSERT CON TU LÓGICA + MEDIA
   sock.ev.on("messages.upsert", async (msg) => {
     try {
         const m = msg.messages[0];
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
 
-        // 🔥 TU LÓGICA SAGRADA (Respetada al 100%)
         const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
 
         // Filtros básicos para no procesar basura
@@ -291,5 +308,6 @@ module.exports = {
     saveRouting,
     getRoutingForPhone,
     getLocationSlotsConfig,
-    waitForSocketOpen
+    waitForSocketOpen,
+    sendButtons
 };
