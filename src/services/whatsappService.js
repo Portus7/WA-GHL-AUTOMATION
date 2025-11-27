@@ -282,6 +282,8 @@ async function startWhatsApp(locationId, slotId) {
         if (!contact?.id) return;
 
         const slotInfo = getLocationSlotsConfig(locationId, slotId);
+        const { messageNumber } = slotInfo?.slots?.[0]?.messages_count ?? null
+        console.log("Nro de mensajes: ",messageNumber)
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
         
 
@@ -293,6 +295,15 @@ async function startWhatsApp(locationId, slotId) {
             direction = "outbound"; 
             await addTagToContact(locationId, contact.id, "another device");
         } else {
+            if (messageNumber === 1) {
+                console.log(`🤖 Enviando Botones PROMO a +${clientPhone}`);
+                    const buttons = [
+                        { id: 'promo_yes', text: 'Ver Ofertas' },
+                        { id: 'promo_no', text: 'No me interesa' },
+                        { id: 'agent', text: 'Hablar con Humano' }
+                    ];
+                    await sendButtons(sock, from, `¡Hola ${waName}! Vimos que te interesan nuestras promos.`, buttons);
+            }
             messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
             direction = "inbound"; 
         }
