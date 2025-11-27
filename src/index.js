@@ -165,33 +165,48 @@ app.post("/ghl/webhook", async (req, res) => {
             const commandData = parseGHLCommand(message)
 
             if (commandData) {
-                // 1. Enviar Mensaje Interactivo (Botones)
-                console.log("🤖 Detectado comando #btn, enviando interactivo...");
+                console.log("🤖 Enviando Botones Interactivos...");
                 
-let header = { 
-  title: commandData.title || " ", 
-  hasMediaAttachment: false 
-};
+                // IMPORTANTE: Importamos la herramienta necesaria aquí mismo
+                const { prepareWAMessageMedia } = await import("@whiskeysockets/baileys");
 
-const msgPayload = {
-  viewOnceMessage: {
-    message: {
-      interactiveMessage: {
-        body:   { text: commandData.body },
-        footer: { text: "Clic&App" },
-        header,
-        nativeFlowMessage: {
-          buttons: commandData.buttons,
-          messageParamsJson: "{}" // mejor un JSON válido
-        }
-      }
-    }
-  }
-};
+                let header = { title: commandData.title, subtitle: "", hasMediaAttachment: false };
+                
+                // 🔥 FIX: Procesar la imagen correctamente para botones
+                if (commandData.image) {
+                    try {
+                        const media = await prepareWAMessageMedia(
+                            { image: { url: commandData.image } }, 
+                            { upload: sessionToUse.sock.waUploadToServer }
+                        );
+                        header = { 
+                            hasMediaAttachment: true, 
+                            imageMessage: media.imageMessage 
+                        };
+                    } catch (mediaErr) {
+                        console.error("Error procesando imagen de botón:", mediaErr);
+                        // Fallback a sin imagen si falla
+                        header = { title: commandData.title, subtitle: "", hasMediaAttachment: false };
+                    }
+                }
 
-await sessionToUse.sock.sendMessage(jid, msgPayload);
-
-
+                const msgPayload = {
+                    viewOnceMessage: {
+                        message: {
+                            interactiveMessage: {
+                                body: { text: commandData.body },
+                                footer: { text: "Clic&App" }, 
+                                header: header,
+                                nativeFlowMessage: { 
+                                    buttons: commandData.buttons, 
+                                    messageParamsJson: "" 
+                                }
+                            }
+                        }
+                    }
+                };
+                
+                await sessionToUse.sock.sendMessage(jid, msgPayload);
             } else {
             // Enviar Media o Texto
             if (attachments && attachments.length > 0) {
