@@ -166,60 +166,55 @@ app.post("/ghl/webhook", async (req, res) => {
             console.log("commandData:", JSON.stringify(commandData, null, 2))
 
 if (commandData) {
-    console.log("🤖 Enviando Botones (templateButtons)...");
+    console.log("🤖 Enviando Botones (buttons clásicos)...");
 
-    // 1. Convertimos tus buttons a templateButtons
-    const templateButtons = [];
-    let idx = 1;
+    const buttons = [];
+    let i = 1;
 
     for (const b of commandData.buttons) {
         const params = JSON.parse(b.buttonParamsJson);
 
+        // Todos los tipos los convertimos en "reply buttons"
+        // y usamos buttonId para saber qué hicieron.
         if (b.name === 'quick_reply') {
-            templateButtons.push({
-                index: idx++,
-                quickReplyButton: {
-                    displayText: params.display_text,
-                    id: params.id || `btn_${idx}`
-                }
+            buttons.push({
+                buttonId: params.id || `quick_${i}`,
+                buttonText: { displayText: params.display_text },
+                type: 1
             });
         } else if (b.name === 'cta_url') {
-            templateButtons.push({
-                index: idx++,
-                urlButton: {
-                    displayText: params.display_text,
-                    url: params.url
-                }
+            buttons.push({
+                buttonId: `url::${params.url}`,
+                buttonText: { displayText: params.display_text },
+                type: 1
             });
         } else if (b.name === 'cta_call') {
-            templateButtons.push({
-                index: idx++,
-                callButton: {
-                    displayText: params.display_text,
-                    phoneNumber: params.phone_number
-                }
+            buttons.push({
+                buttonId: `call::${params.phone_number}`,
+                buttonText: { displayText: params.display_text },
+                type: 1
             });
         } else if (b.name === 'cta_copy') {
-            // WhatsApp no tiene botón nativo "copiar";
-            // lo mandamos como quick reply que luego tu backend interpreta.
-            templateButtons.push({
-                index: idx++,
-                quickReplyButton: {
-                    displayText: params.display_text,
-                    id: `copy_${params.copy_code}`
-                }
+            buttons.push({
+                buttonId: `copy::${params.copy_code}`,
+                buttonText: { displayText: params.display_text },
+                type: 1
             });
         }
+
+        i++;
     }
 
     const msgPayload = {
-        text: commandData.body,
+        text: commandData.body,        // "Elige una acción"
         footer: "Clic&App",
-        templateButtons
+        buttons,
+        headerType: 1                  // texto simple
     };
 
     await sessionToUse.sock.sendMessage(jid, msgPayload);
-} else {
+}
+ else {
             // Enviar Media o Texto
             if (attachments && attachments.length > 0) {
                 for (const url of attachments) {
