@@ -63,11 +63,11 @@ async function syncSlotInfo(locationId, slotId, phoneNumber) {
   }
 }
 
-async function saveRouting(clientPhone, locationId, contactId, channelNumber) {
+async function saveRouting(clientPhone, locationId, contactId, channelNumber, message=null) {
   const normClient = normalizePhone(clientPhone);
   const normChannel = normalizePhone(channelNumber);
-  const sql = `INSERT INTO phone_routing (phone, location_id, contact_id, channel_number, updated_at, messages_count) VALUES ($1, $2, $3, $4, NOW(), 1) ON CONFLICT (phone) DO UPDATE SET location_id = EXCLUDED.location_id, contact_id = COALESCE(EXCLUDED.contact_id, phone_routing.contact_id), channel_number = EXCLUDED.channel_number, updated_at = NOW(), messages_count = phone_routing.messages_count + 1;`;
-  try { await pool.query(sql, [normClient, locationId, contactId, normChannel]); } catch (e) { console.error("Routing Error:", e.message); }
+  const sql = `INSERT INTO phone_routing (phone, location_id, contact_id, channel_number, updated_at, messages_count) VALUES ($1, $2, $3, $4, NOW(), $5) ON CONFLICT (phone) DO UPDATE SET location_id = EXCLUDED.location_id, contact_id = COALESCE(EXCLUDED.contact_id, phone_routing.contact_id), channel_number = EXCLUDED.channel_number, updated_at = NOW(), messages_count = phone_routing.messages_count + 1;`;
+  try { await pool.query(sql, [normClient, locationId, contactId, normChannel, message ? message : 1]); } catch (e) { console.error("Routing Error:", e.message); }
 }
 
 async function getRoutingForPhone(clientPhone, locationId) {
@@ -276,7 +276,7 @@ async function startWhatsApp(locationId, slotId) {
         console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
 
         const route = await getRoutingForPhone(clientPhone, locationId);
-        const messageNumber = route?.slots?.[0]?.messages_count ?? 1;
+        const messageNumber = route?.slots?.[0]?.messages ?? 1;
         console.log("Nro de mensajes: ",messageNumber, "ROUTE: ", route)
         const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
         const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe);
@@ -284,7 +284,7 @@ async function startWhatsApp(locationId, slotId) {
         if (!contact?.id) return;
 
         const slotInfo = getLocationSlotsConfig(locationId, slotId);
-        await saveRouting(clientPhone, locationId, contact.id, myChannelNumber);
+        await saveRouting(clientPhone, locationId, contact.id, myChannelNumber, messageNumber);
         
 
         let messageForGHL = "";
