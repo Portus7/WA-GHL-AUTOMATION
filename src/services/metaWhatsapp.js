@@ -54,7 +54,7 @@ async function sendMetaButtons(toE164, commandData) {
       "Content-Type": "application/json"
     }
   });
-
+  console.log("[Meta] Respuesta:", res.status, JSON.stringify(res.data, null, 2));
   return res.data;
 }
 
