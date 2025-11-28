@@ -184,8 +184,9 @@ if (commandData) {
     console.error("Error enviando botones Meta:", e.response?.data || e.message);
     return res.status(500).json({ error: "Meta send failed" });
   }
-}
- else {
+    }
+    else {
+        console.log("Mensaje desde GHL: ", message)
             // Enviar Media o Texto
             if (attachments && attachments.length > 0) {
                 for (const url of attachments) {
