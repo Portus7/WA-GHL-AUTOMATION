@@ -71,6 +71,7 @@ app.get("/status", async (req, res) => {
 
 // --- WEBHOOK OUTBOUND CON JERARQUÍA CORREGIDA (TAG > PRIORIDAD 1 > ROUTING > RESTO) ---
 app.post("/ghl/webhook", async (req, res) => {
+    console.log("Mensaje desde GHL: ", message)
   try {
     const { locationId, phone, message, type, attachments } = req.body;
     if (!locationId || !phone || (!message && !attachments)) return res.json({ ignored: true });
@@ -186,7 +187,7 @@ if (commandData) {
   }
     }
     else {
-        console.log("Mensaje desde GHL: ", message)
+        
             // Enviar Media o Texto
             if (attachments && attachments.length > 0) {
                 for (const url of attachments) {
