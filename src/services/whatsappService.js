@@ -249,6 +249,7 @@ async function startWhatsApp(locationId, slotId) {
 
   sock.ev.on("messages.upsert", async (msg) => {
     try {
+        console.log("Mensaje recibido:", msg)
         const m = msg.messages[0];
         if (!m?.message) return;
         if (botMessageIds.has(m.key.id)) return; 
