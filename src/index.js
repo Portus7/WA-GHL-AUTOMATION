@@ -172,6 +172,7 @@ if (commandData) {
 
   // OJO: aquí to va CON + y en E.164
   const toE164 = "+" + clientPhone.replace(/\D/g, "");
+  console.log("Telefono: ", toE164)
 
   try {
     await sendMetaButtons(toE164, commandData);
