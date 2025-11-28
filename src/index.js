@@ -171,8 +171,9 @@ if (commandData) {
       console.log(" asdasd🤖 Enviando botones via Meta (Cloud API)...");
 
   // OJO: aquí to va CON + y en E.164
+  console.log("HASTA ACA LLEGO")
   const toE164 = "+" + clientPhone.replace(/\D/g, "");
-  console.log("Telefono: ", toE164)
+  console.log("Telefono por mandar: ", toE164)
 
   try {
     await sendMetaButtons(toE164, commandData);
