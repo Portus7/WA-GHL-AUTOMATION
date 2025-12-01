@@ -227,9 +227,9 @@ app.post("/ghl/webhook", async (req, res) => {
           ];
 
           const listMessage = {
-            text: commandData.body || "Cuerpo del mensaje de lista",
+            text:  "Cuerpo del mensaje de lista",
             footer: "Pie de página de prueba",
-            title: commandData.title || "Título de Prueba",
+            title:  "Título de Prueba",
             buttonText: "ABRIR MENÚ", // El texto del botón que despliega la lista
             sections,
           };
