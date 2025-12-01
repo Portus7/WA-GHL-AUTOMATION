@@ -192,74 +192,65 @@ app.post("/ghl/webhook", async (req, res) => {
         console.log("commandData:", JSON.stringify(commandData, null, 2));
 
         if (commandData) {
-          const { title, body, image, buttons } = commandData;
+          console.log("✅ Comando detectado. Enviando LISTA DE PRUEBA...");
 
-          // 1. Si hay imagen, la enviamos primero como mensaje independiente
-          if (image) {
-             const sentImg = await sessionToUse.sock.sendMessage(jid, { 
-                image: { url: image },
-                caption: title || "" // Ponemos el título como caption de la foto
-             });
-             if (sentImg?.key?.id) {
-                botMessageIds.add(sentImg.key.id);
-                setTimeout(() => botMessageIds.delete(sentImg.key.id), 15000);
-             }
-          }
+          // --- AQUÍ ESTÁ LA PRUEBA DE LISTA ---
+          // Ignoramos los botones específicos del parser y mandamos una lista dura
+          // para ver si Baileys la renderiza en tu celular.
 
-          // 2. Si hay botones, construimos una LISTA
-          if (buttons && buttons.length > 0) {
-             
-             // Mapeamos los botones a filas de lista
-             // Asumo que parseGHLCommand devuelve botones con { id, text }
-             const rows = buttons.map((btn, index) => ({
-                 title: btn.text || btn.body || `Opción ${index + 1}`,
-                 rowId: btn.id || `id_${index}`,
-                 description: "" // Opcional
-             }));
+          const sections = [
+            {
+              title: "Sección Principal",
+              rows: [
+                {
+                  title: "Opción 1",
+                  rowId: "option_1",
+                  description: "Descripción prueba 1",
+                },
+                {
+                  title: "Opción 2",
+                  rowId: "option_2",
+                  description: "Descripción prueba 2",
+                },
+              ],
+            },
+            {
+              title: "Sección Secundaria",
+              rows: [
+                {
+                  title: "Opción 3",
+                  rowId: "option_3",
+                  description: "Otra sección",
+                },
+              ],
+            },
+          ];
 
-             const listMessage = {
-                 text: body || "Selecciona una opción:",
-                 footer: "Menú interactivo",
-                 title: image ? "👇 Opciones disponibles" : (title || "Menú"),
-                 buttonText: "VER OPCIONES", // El botón que abre la lista
-                 sections: [
-                     {
-                         title: "Opciones",
-                         rows: rows
-                     }
-                 ]
-             };
+          const listMessage = {
+            text: commandData.body || "Cuerpo del mensaje de lista",
+            footer: "Pie de página de prueba",
+            title: commandData.title || "Título de Prueba",
+            buttonText: "ABRIR MENÚ", // El texto del botón que despliega la lista
+            sections,
+          };
 
-             const sent = await sessionToUse.sock.sendMessage(jid, listMessage);
-             if (sent?.key?.id) {
-                 botMessageIds.add(sent.key.id);
-                 setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
-             }
+          // Enviamos usando la estructura estándar de Baileys para listas
+          const sent = await sessionToUse.sock.sendMessage(jid, listMessage);
 
-          } else {
-             // Si commandData existe pero NO tiene botones, enviamos solo texto
-             // (Si ya mandamos imagen arriba, mandamos el body aqui)
-             const sent = await sessionToUse.sock.sendMessage(jid, { 
-                 text: body || title || "..." 
-             });
-             if (sent?.key?.id) {
-                botMessageIds.add(sent.key.id);
-                setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
-            }
-          }
+          // Log para debug
+          if (sent) console.log("📨 Mensaje de lista enviado a la red.");
 
-          // Guardar Routing
+          // Guardar Routing y salir
           await saveRouting(
             clientPhone.replace("+", ""),
             locationId,
             null,
             selectedCandidate.myNumber
           );
-          return res.json({ ok: true });
-
+          return res.json({ ok: true, type: "list_test" });
         } else {
           // --- LOGICA STANDARD (Sin comandos especiales) ---
-          
+
           if (attachments && attachments.length > 0) {
             for (const url of attachments) {
               let content = { image: { url: url }, caption: message || "" };
@@ -289,7 +280,7 @@ app.post("/ghl/webhook", async (req, res) => {
           }
         }
         console.log(`✅ Enviado.`);
-        
+
         await saveRouting(
           clientPhone.replace("+", ""),
           locationId,
