@@ -4,7 +4,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const express = require("express");
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
-const { sendMetaButtons } = require("./services/metaWhatsapp");
+// const { sendMetaButtons } = require("./services/metaWhatsapp"); // Ya no usamos esto
 const {
   startWhatsApp,
   sessions,
@@ -86,7 +86,7 @@ app.get("/status", async (req, res) => {
   res.json({ connected: false, priority: extra.priority, tags: extra.tags });
 });
 
-// --- WEBHOOK OUTBOUND CON JERARQUÍA CORREGIDA (TAG > PRIORIDAD 1 > ROUTING > RESTO) ---
+// --- WEBHOOK OUTBOUND CON LISTAS ---
 app.post("/ghl/webhook", async (req, res) => {
   try {
     const { locationId, phone, message, type, attachments } = req.body;
@@ -130,12 +130,12 @@ app.post("/ghl/webhook", async (req, res) => {
         return res.status(200).json({ error: "No connected devices" });
 
       // -----------------------------------------------------------
-      // 🧠 LÓGICA DE JERARQUÍA CORREGIDA
+      // 🧠 LÓGICA DE JERARQUÍA
       // -----------------------------------------------------------
       let selectedCandidate = null;
       let selectionReason = "";
 
-      // NIVEL 1: TAG "PRIOR" (Manda sobre todo)
+      // NIVEL 1: TAG "PRIOR"
       const priorCandidate = availableCandidates.find(
         (c) =>
           c.tags &&
@@ -147,9 +147,7 @@ app.post("/ghl/webhook", async (req, res) => {
         selectionReason = "Tag PRIOR detectado";
       }
 
-      // NIVEL 2: PRIORIDAD "REY" (Valor 1)
-      // 🔥 ESTO ES LO NUEVO: Si hay un número con prioridad 1, lo usamos SIEMPRE,
-      // ignorando el historial previo. Esto fuerza el cambio de número.
+      // NIVEL 2: PRIORIDAD 1
       if (!selectedCandidate) {
         const king = availableCandidates.find((c) => c.priority === 1);
         if (king) {
@@ -158,8 +156,7 @@ app.post("/ghl/webhook", async (req, res) => {
         }
       }
 
-      // NIVEL 3: ROUTING (Historial)
-      // Si no hay Tag ni Rey (todos son prioridad 2 o más), respetamos la conversación previa.
+      // NIVEL 3: ROUTING
       if (!selectedCandidate) {
         const route = await getRoutingForPhone(clientPhone, locationId);
         if (route?.channelNumber) {
@@ -173,14 +170,12 @@ app.post("/ghl/webhook", async (req, res) => {
         }
       }
 
-      // NIVEL 4: PRIORIDAD NUMÉRICA RESTANTE (Fallback)
-      // Usamos el mejor disponible (ej: el de prioridad 2 si no hay 1)
+      // NIVEL 4: FALLBACK
       if (!selectedCandidate) {
         availableCandidates.sort((a, b) => a.priority - b.priority);
         selectedCandidate = availableCandidates[0];
         selectionReason = `Mejor Prioridad Disponible (${selectedCandidate.priority})`;
       }
-      // -----------------------------------------------------------
 
       const sessionToUse = selectedCandidate.session;
       const jid =
@@ -199,37 +194,61 @@ app.post("/ghl/webhook", async (req, res) => {
         if (commandData) {
           const { title, body, image, buttons } = commandData;
 
-          const msg = {
-            interactiveMessage: {
-              body: { text: body || "" },
-              footer: { text: "" },
-              header: {
-                title: title || "",
-                hasMediaAttachment: !!image,
-              },
-              nativeFlowMessage: {
-                // en muchos forks es `buttons`; revisa tu versión
-                buttons,
-              },
-            },
-          };
-
-          // Si quieres imagen en el header
+          // 1. Si hay imagen, la enviamos primero como mensaje independiente
           if (image) {
-            msg.interactiveMessage.header = {
-              hasMediaAttachment: true,
-              // dependiendo del fork: imageMessage, mediaMessage o similar
-              // Ejemplo típico:
-              imageMessage: { url: image },
-            };
+             const sentImg = await sessionToUse.sock.sendMessage(jid, { 
+                image: { url: image },
+                caption: title || "" // Ponemos el título como caption de la foto
+             });
+             if (sentImg?.key?.id) {
+                botMessageIds.add(sentImg.key.id);
+                setTimeout(() => botMessageIds.delete(sentImg.key.id), 15000);
+             }
           }
 
-          const sent = await sessionToUse.sock.sendMessage(jid, msg);
-          if (sent?.key?.id) {
-            botMessageIds.add(sent.key.id);
-            setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
+          // 2. Si hay botones, construimos una LISTA
+          if (buttons && buttons.length > 0) {
+             
+             // Mapeamos los botones a filas de lista
+             // Asumo que parseGHLCommand devuelve botones con { id, text }
+             const rows = buttons.map((btn, index) => ({
+                 title: btn.text || btn.body || `Opción ${index + 1}`,
+                 rowId: btn.id || `id_${index}`,
+                 description: "" // Opcional
+             }));
+
+             const listMessage = {
+                 text: body || "Selecciona una opción:",
+                 footer: "Menú interactivo",
+                 title: image ? "👇 Opciones disponibles" : (title || "Menú"),
+                 buttonText: "VER OPCIONES", // El botón que abre la lista
+                 sections: [
+                     {
+                         title: "Opciones",
+                         rows: rows
+                     }
+                 ]
+             };
+
+             const sent = await sessionToUse.sock.sendMessage(jid, listMessage);
+             if (sent?.key?.id) {
+                 botMessageIds.add(sent.key.id);
+                 setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
+             }
+
+          } else {
+             // Si commandData existe pero NO tiene botones, enviamos solo texto
+             // (Si ya mandamos imagen arriba, mandamos el body aqui)
+             const sent = await sessionToUse.sock.sendMessage(jid, { 
+                 text: body || title || "..." 
+             });
+             if (sent?.key?.id) {
+                botMessageIds.add(sent.key.id);
+                setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
+            }
           }
 
+          // Guardar Routing
           await saveRouting(
             clientPhone.replace("+", ""),
             locationId,
@@ -237,8 +256,10 @@ app.post("/ghl/webhook", async (req, res) => {
             selectedCandidate.myNumber
           );
           return res.json({ ok: true });
+
         } else {
-          // Enviar Media o Texto
+          // --- LOGICA STANDARD (Sin comandos especiales) ---
+          
           if (attachments && attachments.length > 0) {
             for (const url of attachments) {
               let content = { image: { url: url }, caption: message || "" };
@@ -268,7 +289,7 @@ app.post("/ghl/webhook", async (req, res) => {
           }
         }
         console.log(`✅ Enviado.`);
-        // Actualizamos el routing para que la respuesta del cliente vuelva a este nuevo número
+        
         await saveRouting(
           clientPhone.replace("+", ""),
           locationId,
@@ -294,7 +315,6 @@ app.post("/config-slot", async (req, res) => {
   if (!locationId) return res.status(400).json({ error: "Faltan datos" });
 
   try {
-    // 1. Identificar el Slot Objetivo (targetSlot)
     let targetSlot = slot;
     if (!targetSlot && phoneNumber) {
       const norm = normalizePhone(phoneNumber);
@@ -308,28 +328,20 @@ app.post("/config-slot", async (req, res) => {
     if (!targetSlot)
       return res.status(404).json({ error: "Slot no encontrado" });
 
-    // 2. Obtener estado ACTUAL de todos los slots (Necesario para el Swap)
     const allRes = await pool.query(
       "SELECT slot_id, priority, tags FROM location_slots WHERE location_id=$1",
       [locationId]
     );
     const allSlots = allRes.rows;
-
-    // Datos actuales del slot que queremos modificar
     const currentSlotData = allSlots.find((s) => s.slot_id == targetSlot);
 
-    // Valores por defecto si no existían
     let t = currentSlotData?.tags || [];
     let finalP = currentSlotData?.priority || 99;
-    let currentPriority = currentSlotData?.priority || 99; // Guardamos la prioridad "vieja"
+    let currentPriority = currentSlotData?.priority || 99;
 
-    // 3. Lógica de PRIORIDAD (SWAP / INTERCAMBIO)
     if (priority !== undefined) {
       const requestedPriority = parseInt(priority);
-
-      // Solo hacemos swap si la prioridad es diferente a la que ya tiene
       if (requestedPriority !== currentPriority) {
-        // Buscamos si alguien más YA TIENE la prioridad que queremos robar
         const conflictSlot = allSlots.find(
           (x) => x.priority === requestedPriority && x.slot_id != targetSlot
         );
@@ -338,8 +350,6 @@ app.post("/config-slot", async (req, res) => {
           console.log(
             `🔄 Swap: Slot ${targetSlot} toma la ${requestedPriority}, Slot ${conflictSlot.slot_id} se queda con la ${currentPriority}`
           );
-
-          // Al slot conflictivo le asignamos MI prioridad vieja (currentPriority)
           await pool.query(
             "UPDATE location_slots SET priority=$1 WHERE location_id=$2 AND slot_id=$3",
             [currentPriority, locationId, conflictSlot.slot_id]
@@ -349,11 +359,9 @@ app.post("/config-slot", async (req, res) => {
       }
     }
 
-    // 4. Lógica de TAGS
     if (addTag && !t.includes(addTag)) t.push(addTag);
     if (removeTag) t = t.filter((x) => x !== removeTag);
 
-    // 5. Guardar cambios del slot objetivo
     await pool.query(
       "UPDATE location_slots SET tags=$1::jsonb, priority=$2 WHERE location_id=$3 AND slot_id=$4",
       [JSON.stringify(t), finalP, locationId, targetSlot]
@@ -443,7 +451,8 @@ app.post("/ghl/app-webhook", async (req, res) => {
   }
 });
 
-app.get("/test-buttons", async (req, res) => {
+// --- RUTA DE PRUEBA MODIFICADA PARA LISTAS ---
+app.get("/test-list", async (req, res) => {
   try {
     const { locationId, slot, phone } = req.query;
     const sess = sessions.get(`${locationId}_slot${slot}`);
@@ -452,24 +461,25 @@ app.get("/test-buttons", async (req, res) => {
 
     const jid = phone.replace(/\D/g, "") + "@s.whatsapp.net";
 
-    const buttons = [
+    const sections = [
       {
-        buttonId: "id1",
-        buttonText: { displayText: "Botón 1" },
-        type: 1,
-      },
-      {
-        buttonId: "id2",
-        buttonText: { displayText: "Botón 2" },
-        type: 1,
+        title: "Sección 1",
+        rows: [
+          { title: "Opción A", rowId: "opt_a", description: "Descripción A" },
+          { title: "Opción B", rowId: "opt_b", description: "Descripción B" },
+        ],
       },
     ];
 
-    await sess.sock.sendMessage(jid, {
-      text: "Test botones",
-      buttons,
-      headerType: 1,
-    });
+    const listMessage = {
+      text: "Este es el cuerpo del mensaje de lista",
+      footer: "Pie de página",
+      title: "Título de la Lista",
+      buttonText: "VER MENÚ",
+      sections,
+    };
+
+    await sess.sock.sendMessage(jid, listMessage);
 
     res.json({ ok: true });
   } catch (e) {
