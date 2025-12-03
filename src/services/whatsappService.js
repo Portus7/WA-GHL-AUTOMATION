@@ -377,7 +377,9 @@ async function startWhatsApp(locationId, slotId) {
             if (transcription) {
                 console.log(`🎤 Enviando transcripción separada para ${clientPhone}`);
                 const transcriptionMsg = `🎤 [Transcripción]:\n"${transcription}"\n\nSource: +${myChannelNumber}`;
-
+                if (isFromMe) {
+                    transcriptionMsg += "\n\n[Enviado desde otro dispositivo]";
+                }
                 // Usamos await para asegurar el orden, enviamos sin attachments
                 await logMessageToGHL(locationId, contact.id, transcriptionMsg, direction, []);
 
