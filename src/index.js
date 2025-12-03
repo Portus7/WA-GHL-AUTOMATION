@@ -14,12 +14,14 @@ const {
     getRoutingForPhone,
     getLocationSlotsConfig,
     waitForSocketOpen,
+    processKeywordTags,
 } = require("./services/whatsappService");
 const {
     saveTokens,
     getTokens,
     ensureAgencyToken,
     callGHLWithAgency,
+    findOrCreateGHLContact
 } = require("./services/ghlService");
 const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/utils");
 const { parseGHLCommand } = require("./helpers/parser");
@@ -245,6 +247,18 @@ app.post("/ghl/webhook", async (req, res) => {
                     }
                 }
                 console.log(`✅ Enviado.`);
+
+                const contact = await findOrCreateGHLContact(
+                    locationId,
+                    clientPhone,
+                    "System Outbound", // Nombre placeholder si no existe
+                    null, // No tenemos ID previo
+                    true // isFromMe = true porque nosotros lo enviamos
+                );
+
+                if (contact && contact.id) {
+                    await processKeywordTags(locationId, contact.id, finalMessage, false);
+                }
 
                 await saveRouting(
                     clientPhone.replace("+", ""),

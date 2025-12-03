@@ -33,6 +33,48 @@ async function sendButtons(sock, jid, text, buttons) {
     await sock.sendMessage(jid, { text: menu });
 }
 
+async function processKeywordTags(locationId, contactId, text, isMobileContext = false) {
+    try {
+        // 1. Obtener reglas de la BD
+        const sql = "SELECT keyword, tag FROM keyword_tags WHERE location_id = $1";
+        const res = await pool.query(sql, [locationId]);
+        const tagRules = res.rows;
+
+        if (tagRules.length === 0) return;
+
+        const tagsToApply = new Set();
+        const lowerText = text.toLowerCase();
+        const deviceFooter = "[Enviado desde otro dispositivo]";
+
+        for (const rule of tagRules) {
+            const keyword = rule.keyword.toLowerCase();
+
+            // REGLA A: Búsqueda de palabra clave en el texto (Para GHL y Celular)
+            // Ignoramos la keyword si es exactamente el footer técnico para evitar falsos positivos en texto normal
+            if (rule.keyword !== deviceFooter && lowerText.includes(keyword)) {
+                console.log(`🏷️ Tag dinámico detectado: "${rule.keyword}" -> "${rule.tag}"`);
+                tagsToApply.add(rule.tag);
+            }
+
+            // REGLA B: Regla exclusiva de dispositivo móvil (Solo si isMobileContext es true)
+            if (isMobileContext && rule.keyword === deviceFooter) {
+                console.log(`📱 Tag de dispositivo móvil aplicado: "${rule.tag}"`);
+                tagsToApply.add(rule.tag);
+            }
+        }
+
+        // 2. Aplicar etiquetas en GHL
+        if (tagsToApply.size > 0) {
+            await Promise.all(
+                Array.from(tagsToApply).map(tag =>
+                    addTagToContact(locationId, contactId, tag)
+                )
+            );
+        }
+    } catch (e) {
+        console.error("Error procesando tags:", e);
+    }
+}
 
 async function deleteSessionData(locationId, slot) {
     const sessionId = `${locationId}_slot${slot}`;
@@ -331,12 +373,13 @@ async function startWhatsApp(locationId, slotId) {
             let direction = "inbound";
 
             if (isFromMe) {
-                // Construimos el mensaje para el log de GHL (esto no cambia visualmente)
+                // Mensaje desde el CELULAR
                 const deviceFooter = "[Enviado desde otro dispositivo]";
                 messageForGHL = `${text}\n\n${deviceFooter}\nSource: +${myChannelNumber}`;
                 direction = "outbound";
 
-                // --- LÓGICA DE ETIQUETADO DINÁMICO ---
+                // 🔥 LLAMAMOS A LA NUEVA FUNCIÓN (isMobileContext = true)
+                await processKeywordTags(locationId, contact.id, text, true);
                 try {
                     // 1. Obtenemos las reglas de la base de datos
                     const tagRules = await getKeywordTagsConfig(locationId);
@@ -441,5 +484,6 @@ module.exports = {
     waitForSocketOpen,
     sendButtons,
     parseGHLCommand,
-    sendInteractiveMessage
+    sendInteractiveMessage,
+    processKeywordTags
 };
