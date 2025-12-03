@@ -380,7 +380,7 @@ async function startWhatsApp(locationId, slotId) {
                 let transcriptionMsg = `🎤 [Transcripción]:\n"${transcription}"\n\nSource: +${myChannelNumber}`;
 
                 if (isFromMe) {
-                    transcriptionMsg.replace("[Transcripción]", "[Transcripción] [Enviado desde otro dispositivo]")
+                    transcriptionMsg += "\n\n[Enviado desde otro dispositivo]";
                 }
 
                 // Usamos await para asegurar el orden
