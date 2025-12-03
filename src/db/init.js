@@ -62,6 +62,11 @@ const initDb = async () => {
       );
     `);
 
+    await pool.query(`
+            CREATE INDEX IF NOT EXISTS idx_keyword_tags_location 
+            ON keyword_tags(location_id);
+        `);
+
     console.log("✅ Tablas verificadas.");
   } catch (error) {
     console.error("❌ Error DB init:", error);
