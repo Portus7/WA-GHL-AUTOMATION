@@ -99,9 +99,29 @@ app.post("/ghl/webhook", async (req, res) => {
 
         if (type === "Outbound" || type === "SMS") {
 
+            let finalMessage = message || "";
+
+            // --- LOGICA DE SPINTAX (Random Message) ---
+            // Formato: //sep/Opcion A/Opcion B//sep_end
+            const spintaxMatch = finalMessage.match(/\/\/sep([\s\S]*?)\/\/sep_end/);
+            if (spintaxMatch) {
+                const content = spintaxMatch[1];
+                // Dividimos por / y filtramos vacíos o la palabra "sep" que pueda quedar del inicio
+                const options = content.split("/").map(o => o.trim()).filter(o => o !== "" && o !== "sep");
+
+                if (options.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * options.length);
+                    const selectedOption = options[randomIndex];
+                    console.log(`🎲 Spintax: Seleccionada opción ${randomIndex + 1}/${options.length}: "${selectedOption.substring(0, 20)}..."`);
+
+                    // Reemplazamos todo el bloque por la opción seleccionada
+                    finalMessage = finalMessage.replace(spintaxMatch[0], selectedOption);
+                }
+            }
+            // ------------------------------------------
+
             // --- LOGICA DE DELAY ---
             // Formato: //delay=5 (donde 5 son segundos maximos)
-            let finalMessage = message || "";
             const delayMatch = finalMessage.match(/\/\/delay=(\d+)/);
 
             if (delayMatch) {
