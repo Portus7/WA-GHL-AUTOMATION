@@ -116,6 +116,7 @@ app.post("/ghl/webhook", async (req, res) => {
 
                     // Reemplazamos todo el bloque por la opción seleccionada
                     finalMessage = finalMessage.replace(spintaxMatch[0], selectedOption);
+                    finalMessage.replace("/", "")
                 }
             }
             // ------------------------------------------
