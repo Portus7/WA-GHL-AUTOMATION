@@ -35,7 +35,6 @@ async function sendButtons(sock, jid, text, buttons) {
 // 🔥 FUNCIÓN CENTRALIZADA PARA ETIQUETAS
 async function processKeywordTags(locationId, contactId, text, isMobileContext = false) {
     try {
-        // 1. Obtener reglas de la BD
         const sql = "SELECT keyword, tag FROM keyword_tags WHERE location_id = $1";
         const res = await pool.query(sql, [locationId]);
         const tagRules = res.rows;
@@ -49,20 +48,17 @@ async function processKeywordTags(locationId, contactId, text, isMobileContext =
         for (const rule of tagRules) {
             const keyword = rule.keyword.toLowerCase();
 
-            // REGLA A: Búsqueda de palabra clave en el texto
             if (rule.keyword !== deviceFooter && lowerText.includes(keyword)) {
                 console.log(`🏷️ Tag dinámico detectado: "${rule.keyword}" -> "${rule.tag}"`);
                 tagsToApply.add(rule.tag);
             }
 
-            // REGLA B: Regla exclusiva de dispositivo móvil
             if (isMobileContext && rule.keyword === deviceFooter) {
                 console.log(`📱 Tag de dispositivo móvil aplicado: "${rule.tag}"`);
                 tagsToApply.add(rule.tag);
             }
         }
 
-        // 2. Aplicar etiquetas en GHL
         if (tagsToApply.size > 0) {
             await Promise.all(
                 Array.from(tagsToApply).map(tag =>
@@ -125,16 +121,10 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
 
 async function sendInteractiveMessage(sock, jid, parsedData) {
     const { title, body, image, buttons } = parsedData;
-
     let header = { title: title, subtitle: "", hasMediaAttachment: false };
-
     if (image) {
-        header = {
-            hasMediaAttachment: true,
-            imageMessage: { url: image }
-        };
+        header = { hasMediaAttachment: true, imageMessage: { url: image } };
     }
-
     const msgPayload = {
         viewOnceMessage: {
             message: {
@@ -142,15 +132,11 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
                     body: { text: body },
                     footer: { text: "Clic&App" },
                     header: header,
-                    nativeFlowMessage: {
-                        buttons: buttons,
-                        messageParamsJson: ""
-                    }
+                    nativeFlowMessage: { buttons: buttons, messageParamsJson: "" }
                 }
             }
         }
     };
-
     await sock.sendMessage(jid, msgPayload);
 }
 
@@ -311,7 +297,7 @@ async function startWhatsApp(locationId, slotId) {
             const msgType = Object.keys(m.message)[0];
             let text = "";
             let attachments = [];
-            let transcription = "";
+            let transcription = ""; // Variable separada para la transcripción
 
             // Extraer Texto
             if (msgType === 'conversation') text = m.message.conversation;
@@ -320,19 +306,19 @@ async function startWhatsApp(locationId, slotId) {
             else if (msgType === 'videoMessage') text = m.message.videoMessage.caption || "";
             else if (msgType === 'documentMessage') text = m.message.documentMessage.caption || "";
 
-            // Extraer Media (con Transcripción)
+            // Extraer Media
             if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(msgType)) {
                 const mediaData = await downloadAndSaveMedia(m, msgType);
                 if (mediaData) {
                     attachments.push(mediaData.url);
                     if (!text) text = `[Archivo: ${msgType}]`;
 
-                    // --- 🎤 TRANSCRIPCIÓN DE AUDIO ---
+                    // --- 🎤 TRANSCRIPCIÓN (SIN MODIFICAR "text" ORIGINAL) ---
                     if (msgType === 'audioMessage') {
                         const transcriptText = await transcribeAudio(mediaData.filePath);
                         if (transcriptText) {
                             transcription = transcriptText;
-                            text = `🎤 [Audio Transcrito]:\n"${transcriptText}"`;
+                            // NOTA: Ya no modificamos 'text' aquí para que salgan separados
                         }
                     }
                 }
@@ -372,23 +358,34 @@ async function startWhatsApp(locationId, slotId) {
             let direction = "inbound";
 
             if (isFromMe) {
-                // --- MENSAJE DESDE CELULAR (OUTBOUND) ---
+                // --- OUTBOUND ---
                 const deviceFooter = "[Enviado desde otro dispositivo]";
                 messageForGHL = `${text}\n\n${deviceFooter}\nSource: +${myChannelNumber}`;
                 direction = "outbound";
-
-                // 🔥 Aquí llamamos a la función centralizada (Limpieza de código duplicado)
-                // true = Es contexto móvil, aplicará el tag de "another device"
                 await processKeywordTags(locationId, contact.id, text, true);
-
             } else {
-                // --- MENSAJE DEL CLIENTE (INBOUND) ---
+                // --- INBOUND ---
                 if (messageNumber === 1) promo = true;
                 messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
                 direction = "inbound";
             }
 
+            // 1. Enviamos el mensaje ORIGINAL (Audio/Imagen/Texto)
             await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
+
+            // 2. Si hay transcripción, enviamos un SEGUNDO mensaje de texto puro
+            if (transcription) {
+                console.log(`🎤 Enviando transcripción separada para ${clientPhone}`);
+                const transcriptionMsg = `🎤 [Transcripción]:\n"${transcription}"\n\nSource: +${myChannelNumber}`;
+
+                // Usamos await para asegurar el orden, enviamos sin attachments
+                await logMessageToGHL(locationId, contact.id, transcriptionMsg, direction, []);
+
+                // (Opcional) Si quieres que la transcripción también active etiquetas de palabras clave:
+                //if (!isFromMe) {
+                //    await processKeywordTags(locationId, contact.id, transcription, false);
+                //}
+            }
 
             if (promo) {
                 const buttons = [
@@ -416,5 +413,5 @@ module.exports = {
     parseGHLCommand,
     sendInteractiveMessage,
     processKeywordTags,
-    findOrCreateGHLContact // Exportado para usar en index.js
+    findOrCreateGHLContact
 };
