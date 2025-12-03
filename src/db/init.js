@@ -52,6 +52,16 @@ const initDb = async () => {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS keyword_tags (
+        id SERIAL PRIMARY KEY,
+        location_id TEXT NOT NULL,
+        keyword TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
     console.log("✅ Tablas verificadas.");
   } catch (error) {
     console.error("❌ Error DB init:", error);

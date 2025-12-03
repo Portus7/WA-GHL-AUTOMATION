@@ -82,6 +82,17 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
     try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { console.error("Error fetching location slots config:", e); return []; }
 }
 
+async function getKeywordTagsConfig(locationId) {
+    try {
+        const sql = "SELECT keyword, tag FROM keyword_tags WHERE location_id = $1";
+        const res = await pool.query(sql, [locationId]);
+        return res.rows;
+    } catch (e) {
+        console.error("Error fetching keyword tags:", e);
+        return [];
+    }
+}
+
 async function sendInteractiveMessage(sock, jid, parsedData) {
     const { title, body, image, buttons } = parsedData;
 
@@ -320,9 +331,49 @@ async function startWhatsApp(locationId, slotId) {
             let direction = "inbound";
 
             if (isFromMe) {
-                messageForGHL = `${text}\n\n[Enviado desde otro dispositivo]\nSource: +${myChannelNumber}`;
+                // Construimos el mensaje para el log de GHL (esto no cambia visualmente)
+                const deviceFooter = "[Enviado desde otro dispositivo]";
+                messageForGHL = `${text}\n\n${deviceFooter}\nSource: +${myChannelNumber}`;
                 direction = "outbound";
-                await addTagToContact(locationId, contact.id, "another device");
+
+                // --- LÓGICA DE ETIQUETADO DINÁMICO ---
+                try {
+                    // 1. Obtenemos las reglas de la base de datos
+                    const tagRules = await getKeywordTagsConfig(locationId);
+
+                    // Usamos un Set para evitar duplicar tags si varias keywords dan el mismo tag
+                    const tagsToApply = new Set();
+                    const lowerText = text.toLowerCase(); // Para comparar sin importar mayúsculas
+
+                    for (const rule of tagRules) {
+                        const keyword = rule.keyword.toLowerCase();
+
+                        // CASO A: El mensaje real contiene la palabra clave
+                        if (lowerText.includes(keyword)) {
+                            console.log(`🏷️ Keyword detectada: "${keyword}" -> Tag: "${rule.tag}"`);
+                            tagsToApply.add(rule.tag);
+                        }
+
+                        // CASO B: Regla especial para mensajes desde el celular
+                        // Si la regla en DB es "[Enviado desde otro dispositivo]", la aplicamos siempre que sea isFromMe
+                        if (rule.keyword === deviceFooter) {
+                            tagsToApply.add(rule.tag);
+                        }
+                    }
+
+                    // 2. Aplicar todas las etiquetas encontradas
+                    if (tagsToApply.size > 0) {
+                        await Promise.all(
+                            Array.from(tagsToApply).map(tag =>
+                                addTagToContact(locationId, contact.id, tag)
+                            )
+                        );
+                    }
+
+                } catch (tagError) {
+                    console.error("Error en lógica de etiquetado dinámico:", tagError);
+                }
+
             } else {
                 if (messageNumber === 1) {
                     promo = true;
