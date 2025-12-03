@@ -103,7 +103,7 @@ app.post("/ghl/webhook", async (req, res) => {
 
             // --- LOGICA DE SPINTAX (Random Message) ---
             // Formato: //sep/Opcion A/Opcion B//sep_end
-            const spintaxMatch = finalMessage.match(/\/\/sep([\s\S]*?)\/\/sep_end/);
+            const spintaxMatch = finalMessage.match(/\/\/sep([\s\S]*?)\/\/sep_end\/?/);
             if (spintaxMatch) {
                 const content = spintaxMatch[1];
                 // Dividimos por / y filtramos vacíos o la palabra "sep" que pueda quedar del inicio
@@ -116,7 +116,6 @@ app.post("/ghl/webhook", async (req, res) => {
 
                     // Reemplazamos todo el bloque por la opción seleccionada
                     finalMessage = finalMessage.replace(spintaxMatch[0], selectedOption);
-                    finalMessage.replace("/", "")
                 }
             }
             // ------------------------------------------
