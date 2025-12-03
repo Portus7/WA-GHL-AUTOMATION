@@ -2,6 +2,7 @@ const { pool } = require("../config/db");
 const { normalizePhone } = require("../helpers/utils");
 const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
 const { parseGHLCommand } = require("../helpers/parser");
+const { transcribeAudio } = require("./openaiService");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
@@ -24,15 +25,14 @@ if (!fs.existsSync(MEDIA_DIR)) {
 
 async function sendButtons(sock, jid, text, buttons) {
     let menu = `${text}\n\n`;
-    // Construimos la lista: 1. Opción A, 2. Opción B...
     buttons.forEach((btn, i) => {
         menu += `*${i + 1}.* ${btn.text}\n`;
     });
     menu += `\n_Responde con el número de tu opción._`;
-
     await sock.sendMessage(jid, { text: menu });
 }
 
+// 🔥 FUNCIÓN CENTRALIZADA PARA ETIQUETAS
 async function processKeywordTags(locationId, contactId, text, isMobileContext = false) {
     try {
         // 1. Obtener reglas de la BD
@@ -49,14 +49,13 @@ async function processKeywordTags(locationId, contactId, text, isMobileContext =
         for (const rule of tagRules) {
             const keyword = rule.keyword.toLowerCase();
 
-            // REGLA A: Búsqueda de palabra clave en el texto (Para GHL y Celular)
-            // Ignoramos la keyword si es exactamente el footer técnico para evitar falsos positivos en texto normal
+            // REGLA A: Búsqueda de palabra clave en el texto
             if (rule.keyword !== deviceFooter && lowerText.includes(keyword)) {
                 console.log(`🏷️ Tag dinámico detectado: "${rule.keyword}" -> "${rule.tag}"`);
                 tagsToApply.add(rule.tag);
             }
 
-            // REGLA B: Regla exclusiva de dispositivo móvil (Solo si isMobileContext es true)
+            // REGLA B: Regla exclusiva de dispositivo móvil
             if (isMobileContext && rule.keyword === deviceFooter) {
                 console.log(`📱 Tag de dispositivo móvil aplicado: "${rule.tag}"`);
                 tagsToApply.add(rule.tag);
@@ -124,27 +123,15 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
     try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { console.error("Error fetching location slots config:", e); return []; }
 }
 
-async function getKeywordTagsConfig(locationId) {
-    try {
-        const sql = "SELECT keyword, tag FROM keyword_tags WHERE location_id = $1";
-        const res = await pool.query(sql, [locationId]);
-        return res.rows;
-    } catch (e) {
-        console.error("Error fetching keyword tags:", e);
-        return [];
-    }
-}
-
 async function sendInteractiveMessage(sock, jid, parsedData) {
     const { title, body, image, buttons } = parsedData;
 
     let header = { title: title, subtitle: "", hasMediaAttachment: false };
 
-    // Si hay imagen, cambiamos el header
     if (image) {
         header = {
             hasMediaAttachment: true,
-            imageMessage: { url: image } // Baileys descarga la URL por ti
+            imageMessage: { url: image }
         };
     }
 
@@ -153,7 +140,7 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
             message: {
                 interactiveMessage: {
                     body: { text: body },
-                    footer: { text: "Clic&App" }, // Puedes personalizar esto
+                    footer: { text: "Clic&App" },
                     header: header,
                     nativeFlowMessage: {
                         buttons: buttons,
@@ -167,7 +154,7 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
     await sock.sendMessage(jid, msgPayload);
 }
 
-// 🔥 HELPER: Descargar y Guardar Media
+// 🔥 HELPER: Descargar y Guardar Media (Con Transcripción Path)
 async function downloadAndSaveMedia(message, type) {
     try {
         const { downloadMediaMessage } = await import("@whiskeysockets/baileys");
@@ -187,12 +174,18 @@ async function downloadAndSaveMedia(message, type) {
         else if (type === 'documentMessage') mimeType = message.message.documentMessage.mimetype;
 
         if (mimeType) ext = mime.extension(mimeType) || "bin";
+        if (type === 'audioMessage' && !ext) ext = "ogg";
 
         const filename = `${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
         const filepath = path.join(MEDIA_DIR, filename);
 
         fs.writeFileSync(filepath, buffer);
-        return `${API_PUBLIC_URL}/media/${filename}`;
+
+        return {
+            url: `${API_PUBLIC_URL}/media/${filename}`,
+            filePath: filepath
+        };
+
     } catch (e) {
         console.error("Error descargando media:", e);
         return null;
@@ -311,13 +304,14 @@ async function startWhatsApp(locationId, slotId) {
 
             const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
 
-            // Filtros básicos para no procesar basura
+            // Filtros básicos
             if (!from || from.includes("status@") || from.includes("@newsletter")) return;
 
-            // 1. DETECCIÓN DE TIPO DE MENSAJE (Texto vs Media)
+            // 1. DETECCIÓN DE TIPO DE MENSAJE
             const msgType = Object.keys(m.message)[0];
             let text = "";
             let attachments = [];
+            let transcription = "";
 
             // Extraer Texto
             if (msgType === 'conversation') text = m.message.conversation;
@@ -326,14 +320,24 @@ async function startWhatsApp(locationId, slotId) {
             else if (msgType === 'videoMessage') text = m.message.videoMessage.caption || "";
             else if (msgType === 'documentMessage') text = m.message.documentMessage.caption || "";
 
-            // Extraer Media (Descargar)
+            // Extraer Media (con Transcripción)
             if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(msgType)) {
-                const url = await downloadAndSaveMedia(m, msgType);
-                if (url) attachments.push(url);
-                if (!text) text = `[Archivo: ${msgType}]`;
+                const mediaData = await downloadAndSaveMedia(m, msgType);
+                if (mediaData) {
+                    attachments.push(mediaData.url);
+                    if (!text) text = `[Archivo: ${msgType}]`;
+
+                    // --- 🎤 TRANSCRIPCIÓN DE AUDIO ---
+                    if (msgType === 'audioMessage') {
+                        const transcriptText = await transcribeAudio(mediaData.filePath);
+                        if (transcriptText) {
+                            transcription = transcriptText;
+                            text = `🎤 [Audio Transcrito]:\n"${transcriptText}"`;
+                        }
+                    }
+                }
             }
 
-            // 2. DETECCIÓN DE RESPUESTA (Quoted) - Opcional, mejora la visualización
             const contextInfo = m.message[msgType]?.contextInfo || m.message.extendedTextMessage?.contextInfo;
             if (contextInfo && contextInfo.quotedMessage) {
                 let qText = "";
@@ -342,11 +346,9 @@ async function startWhatsApp(locationId, slotId) {
                 else if (q.extendedTextMessage) qText = q.extendedTextMessage.text;
                 else if (q.imageMessage) qText = "[Imagen]";
                 else qText = "[Archivo]";
-
                 if (qText) text = `> En respuesta a: "${qText.substring(0, 50)}..."\n\n${text}`;
             }
 
-            // Si no hay nada útil, salir
             if (!text && attachments.length === 0) return;
 
             const clientPhone = normalizePhone(from.split("@")[0]);
@@ -354,82 +356,41 @@ async function startWhatsApp(locationId, slotId) {
             const myChannelNumber = myId ? normalizePhone(myId.split(":")[0]) : "";
             const isFromMe = m.key.fromMe;
             const waName = m.pushName || "Usuario WhatsApp";
-            let promo = false
+            let promo = false;
             console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
 
             const route = await getRoutingForPhone(clientPhone, locationId);
             const messageNumber = route?.messages ?? 1;
-            console.log("Nro de mensajes: ", messageNumber, "ROUTE: ", route)
             const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
             const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe);
 
             if (!contact?.id) return;
 
-            const slotInfo = getLocationSlotsConfig(locationId, slotId);
             await saveRouting(clientPhone, locationId, contact.id, myChannelNumber, messageNumber);
-
 
             let messageForGHL = "";
             let direction = "inbound";
 
             if (isFromMe) {
-                // Mensaje desde el CELULAR
+                // --- MENSAJE DESDE CELULAR (OUTBOUND) ---
                 const deviceFooter = "[Enviado desde otro dispositivo]";
                 messageForGHL = `${text}\n\n${deviceFooter}\nSource: +${myChannelNumber}`;
                 direction = "outbound";
 
-                // 🔥 LLAMAMOS A LA NUEVA FUNCIÓN (isMobileContext = true)
+                // 🔥 Aquí llamamos a la función centralizada (Limpieza de código duplicado)
+                // true = Es contexto móvil, aplicará el tag de "another device"
                 await processKeywordTags(locationId, contact.id, text, true);
-                try {
-                    // 1. Obtenemos las reglas de la base de datos
-                    const tagRules = await getKeywordTagsConfig(locationId);
-
-                    // Usamos un Set para evitar duplicar tags si varias keywords dan el mismo tag
-                    const tagsToApply = new Set();
-                    const lowerText = text.toLowerCase(); // Para comparar sin importar mayúsculas
-
-                    for (const rule of tagRules) {
-                        const keyword = rule.keyword.toLowerCase();
-
-                        // CASO A: El mensaje real contiene la palabra clave
-                        if (lowerText.includes(keyword)) {
-                            console.log(`🏷️ Keyword detectada: "${keyword}" -> Tag: "${rule.tag}"`);
-                            tagsToApply.add(rule.tag);
-                        }
-
-                        // CASO B: Regla especial para mensajes desde el celular
-                        // Si la regla en DB es "[Enviado desde otro dispositivo]", la aplicamos siempre que sea isFromMe
-                        if (rule.keyword === deviceFooter) {
-                            tagsToApply.add(rule.tag);
-                        }
-                    }
-
-                    // 2. Aplicar todas las etiquetas encontradas
-                    if (tagsToApply.size > 0) {
-                        await Promise.all(
-                            Array.from(tagsToApply).map(tag =>
-                                addTagToContact(locationId, contact.id, tag)
-                            )
-                        );
-                    }
-
-                } catch (tagError) {
-                    console.error("Error en lógica de etiquetado dinámico:", tagError);
-                }
 
             } else {
-                if (messageNumber === 1) {
-                    promo = true;
-                }
+                // --- MENSAJE DEL CLIENTE (INBOUND) ---
+                if (messageNumber === 1) promo = true;
                 messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
                 direction = "inbound";
             }
 
-            // 🔥 Enviar con attachments
             await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
+
             if (promo) {
-                const isSelectingOption = ["1", "2", "3"].includes(text.trim());
-                console.log(`🤖 Enviando Botones PROMO a +${clientPhone}`);
                 const buttons = [
                     { id: 'promo_yes', text: 'Ver Ofertas' },
                     { id: 'promo_no', text: 'No me interesa' },
@@ -440,37 +401,6 @@ async function startWhatsApp(locationId, slotId) {
 
         } catch (error) { console.error("Upsert Error:", error.message); }
     });
-}
-
-async function sendInteractiveMessage(sock, jid, parsedData) {
-    const { title, body, image, buttons } = parsedData;
-
-    let header = { title: title, subtitle: "", hasMediaAttachment: false };
-
-    if (image) {
-        header = {
-            hasMediaAttachment: true,
-            imageMessage: { url: image }
-        };
-    }
-
-    const msgPayload = {
-        viewOnceMessage: {
-            message: {
-                interactiveMessage: {
-                    body: { text: body },
-                    footer: { text: "Clic&App" },
-                    header: header,
-                    nativeFlowMessage: {
-                        buttons: buttons,
-                        messageParamsJson: ""
-                    }
-                }
-            }
-        }
-    };
-
-    await sock.sendMessage(jid, msgPayload);
 }
 
 module.exports = {
@@ -485,5 +415,6 @@ module.exports = {
     sendButtons,
     parseGHLCommand,
     sendInteractiveMessage,
-    processKeywordTags
+    processKeywordTags,
+    findOrCreateGHLContact // Exportado para usar en index.js
 };
