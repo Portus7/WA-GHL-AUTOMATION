@@ -297,7 +297,7 @@ async function startWhatsApp(locationId, slotId) {
             const msgType = Object.keys(m.message)[0];
             let text = "";
             let attachments = [];
-            let transcription = ""; // Variable separada para la transcripción
+            let transcription = "";
 
             // Extraer Texto
             if (msgType === 'conversation') text = m.message.conversation;
@@ -313,12 +313,11 @@ async function startWhatsApp(locationId, slotId) {
                     attachments.push(mediaData.url);
                     if (!text) text = `[Archivo: ${msgType}]`;
 
-                    // --- 🎤 TRANSCRIPCIÓN (SIN MODIFICAR "text" ORIGINAL) ---
+                    // --- 🎤 TRANSCRIPCIÓN ---
                     if (msgType === 'audioMessage') {
                         const transcriptText = await transcribeAudio(mediaData.filePath);
                         if (transcriptText) {
                             transcription = transcriptText;
-                            // NOTA: Ya no modificamos 'text' aquí para que salgan separados
                         }
                     }
                 }
@@ -358,13 +357,13 @@ async function startWhatsApp(locationId, slotId) {
             let direction = "inbound";
 
             if (isFromMe) {
-                // --- OUTBOUND ---
+                // --- OUTBOUND (desde celular) ---
                 const deviceFooter = "[Enviado desde otro dispositivo]";
                 messageForGHL = `${text}\n\n${deviceFooter}\nSource: +${myChannelNumber}`;
                 direction = "outbound";
                 await processKeywordTags(locationId, contact.id, text, true);
             } else {
-                // --- INBOUND ---
+                // --- INBOUND (desde cliente) ---
                 if (messageNumber === 1) promo = true;
                 messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
                 direction = "inbound";
@@ -376,17 +375,21 @@ async function startWhatsApp(locationId, slotId) {
             // 2. Si hay transcripción, enviamos un SEGUNDO mensaje de texto puro
             if (transcription) {
                 console.log(`🎤 Enviando transcripción separada para ${clientPhone}`);
-                const transcriptionMsg = `🎤 [Transcripción]:\n"${transcription}"\n\nSource: +${myChannelNumber}`;
+
+                // --- CORRECCIÓN AQUÍ: usamos LET en lugar de CONST ---
+                let transcriptionMsg = `🎤 [Transcripción]:\n"${transcription}"\n\nSource: +${myChannelNumber}`;
+
                 if (isFromMe) {
                     transcriptionMsg += "\n\n[Enviado desde otro dispositivo]";
                 }
-                // Usamos await para asegurar el orden, enviamos sin attachments
+
+                // Usamos await para asegurar el orden
                 await logMessageToGHL(locationId, contact.id, transcriptionMsg, direction, []);
 
-                // (Opcional) Si quieres que la transcripción también active etiquetas de palabras clave:
-                //if (!isFromMe) {
+                // (Opcional) Si quieres que la transcripción también active etiquetas
+                // if (!isFromMe) {
                 //    await processKeywordTags(locationId, contact.id, transcription, false);
-                //}
+                // }
             }
 
             if (promo) {
