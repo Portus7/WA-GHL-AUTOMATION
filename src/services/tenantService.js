@@ -42,6 +42,7 @@ async function registerNewTenant(locationId) {
     try {
         const trialDays = 5; // Configurable
         const trialEnd = new Date();
+        const planId = 1;
         trialEnd.setDate(trialEnd.getDate() + trialDays);
 
         // Configuración por defecto (Features iniciales)
@@ -54,12 +55,12 @@ async function registerNewTenant(locationId) {
         // Obtenemos ID del plan trial (asegurate de haber creado el plan en DB init)
         // O hardcodeamos un plan por defecto si no quieres consultar la tabla planes
         const sql = `
-      INSERT INTO tenants (location_id, status, trial_ends_at, settings, created_at)
-      VALUES ($1, 'trial', $2, $3::jsonb, NOW())
+      INSERT INTO tenants (location_id, status, trial_ends_at, plan_id, settings, created_at)
+      VALUES ($1, 'trial', $2, $3, $4::jsonb, NOW())
       ON CONFLICT (location_id) DO NOTHING -- Si reinstala, no reseteamos el trial (seguridad)
     `;
 
-        await pool.query(sql, [locationId, trialEnd, JSON.stringify(defaultSettings)]);
+        await pool.query(sql, [locationId, trialEnd, planId, JSON.stringify(defaultSettings)]);
         console.log(`🎉 Nuevo Tenant Registrado: ${locationId} (Trial hasta ${trialEnd.toISOString()})`);
 
     } catch (e) {
