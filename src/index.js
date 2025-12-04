@@ -485,7 +485,7 @@ const adminAuth = (req, res, next) => {
 };
 
 // 1. Obtener todos los tenants (clientes)
-app.get("admin/tenants", adminAuth, async (req, res) => {
+app.get("/admin/tenants", adminAuth, async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT t.*, p.name as plan_name 
@@ -500,7 +500,7 @@ app.get("admin/tenants", adminAuth, async (req, res) => {
 });
 
 // 2. Crear un nuevo tenant manualmente
-app.post("admin/tenants", adminAuth, async (req, res) => {
+app.post("/admin/tenants", adminAuth, async (req, res) => {
     const { locationId, planName, days } = req.body;
     try {
         // Buscar ID del plan
@@ -529,7 +529,7 @@ app.post("admin/tenants", adminAuth, async (req, res) => {
 });
 
 // 3. Actualizar Settings o Estado
-app.put("admin/tenants/:id", adminAuth, async (req, res) => {
+app.put("/admin/tenants/:id", adminAuth, async (req, res) => {
     const { id } = req.params;
     const { status, settings } = req.body;
 
