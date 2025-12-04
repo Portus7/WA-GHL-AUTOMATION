@@ -141,7 +141,8 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId, isFr
       method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
       data: { locationId, phone: phoneWithPlus, firstName: safeName, source: "WhatsApp Baileys" }
     });
-    await addTagToContact(locationId, createdRes.data.contact.id, "WhatsApp");
+    console.log(`✅ Contacto creado: ${createdRes.data.contact}, en ${locationId} `);
+    await addTagToContact(locationId, createdRes.data.contact.id, "whatsapp");
     return createdRes.data.contact || createdRes.data;
   } catch (err) {
     const body = err.response?.data;
