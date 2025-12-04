@@ -4,6 +4,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const express = require("express");
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
+const { registerNewTenant } = require("./services/tenantService");
 // const { sendMetaButtons } = require("./services/metaWhatsapp"); // Ya no usamos esto
 const {
     startWhatsApp,
@@ -367,6 +368,11 @@ app.post("/ghl/app-webhook", async (req, res) => {
     try {
         const evt = req.body;
         if (evt.type === "INSTALL") {
+            console.log(`📦 Instalación detectada: ${evt.locationId}`);
+
+            // 1. REGISTRO SAAS (TRIAL) - 🔥 AGREGAR ESTO
+            await registerNewTenant(evt.locationId);
+
             const at = await ensureAgencyToken();
             const ats = await getTokens(AGENCY_ROW_ID);
             const lr = await axios.post(

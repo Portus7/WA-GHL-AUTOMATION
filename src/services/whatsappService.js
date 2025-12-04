@@ -3,6 +3,7 @@ const { normalizePhone } = require("../helpers/utils");
 const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
 const { parseGHLCommand } = require("../helpers/parser");
 const { transcribeAudio } = require("./openaiService");
+const { getTenantConfig } = require("./tenantService");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
@@ -283,6 +284,14 @@ async function startWhatsApp(locationId, slotId) {
 
     sock.ev.on("messages.upsert", async (msg) => {
         try {
+            const tenantStatus = await getTenantConfig(locationId);
+
+            if (!tenantStatus.active) {
+                console.warn(`⛔ Tenant ${locationId} inactivo. Razón: ${tenantStatus.reason}`);
+                return;
+            }
+
+            const settings = tenantStatus.settings;
             console.log("Mensaje recibido:", msg)
             const m = msg.messages[0];
             if (!m?.message) return;
@@ -347,7 +356,7 @@ async function startWhatsApp(locationId, slotId) {
             const route = await getRoutingForPhone(clientPhone, locationId);
             const messageNumber = route?.messages ?? 1;
             const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
-            const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe);
+            const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe, settings.create_unknown_contacts);
 
             if (!contact?.id) return;
 
@@ -359,13 +368,20 @@ async function startWhatsApp(locationId, slotId) {
             if (isFromMe) {
                 // --- OUTBOUND (desde celular) ---
                 const deviceFooter = "[Enviado desde otro dispositivo]";
-                messageForGHL = `${text}\n\n${deviceFooter}\nSource: +${myChannelNumber}`;
+                messageForGHL = `${text}\n\n${deviceFooter}`;
+                if (settings.show_source_label !== false) {
+                    messageForGHL += `\nSource: +${myChannelNumber}`;
+                }
                 direction = "outbound";
                 await processKeywordTags(locationId, contact.id, text, true);
             } else {
                 // --- INBOUND (desde cliente) ---
                 if (messageNumber === 1) promo = true;
-                messageForGHL = `${text}\n\nSource: +${myChannelNumber}`;
+                messageForGHL = text;
+
+                if (settings.show_source_label !== false) {
+                    messageForGHL += `\nSource: +${myChannelNumber}`;
+                }
                 direction = "inbound";
             }
 
