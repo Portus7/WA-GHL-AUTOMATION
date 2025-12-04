@@ -57,7 +57,7 @@ async function registerNewTenant(locationId) {
         const sql = `
       INSERT INTO tenants (location_id, status, trial_ends_at, plan_id, settings, created_at)
       VALUES ($1, 'trial', $2, $3, $4::jsonb, NOW())
-      ON CONFLICT (location_id) DO NOTHING -- Si reinstala, no reseteamos el trial (seguridad)
+      ON CONFLICT (location_id) DO UPDATE SET status = 'trial', trial_ends_at = $2, plan_id = $3, settings = $4::jsonb
     `;
 
         await pool.query(sql, [locationId, trialEnd, planId, JSON.stringify(defaultSettings)]);
