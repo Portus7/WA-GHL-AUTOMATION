@@ -466,6 +466,79 @@ app.get("/test-list", async (req, res) => {
 
 app.get("/config", (req, res) => res.json({ max_slots: 3 }));
 
+const adminAuth = (req, res, next) => {
+    const secret = req.headers['x-admin-secret'];
+    if (secret !== process.env.ADMIN_SECRET && secret !== "admin123") { // "admin123" es fallback para pruebas
+        return res.status(403).json({ error: "Acceso denegado" });
+    }
+    next();
+};
+
+// 1. Obtener todos los tenants (clientes)
+app.get("/admin/tenants", adminAuth, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT t.*, p.name as plan_name 
+            FROM tenants t 
+            LEFT JOIN subscription_plans p ON t.plan_id = p.id 
+            ORDER BY t.created_at DESC
+        `);
+        res.json(result.rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 2. Crear un nuevo tenant manualmente
+app.post("/admin/tenants", adminAuth, async (req, res) => {
+    const { locationId, planName, days } = req.body;
+    try {
+        // Buscar ID del plan
+        const planRes = await pool.query("SELECT id FROM subscription_plans WHERE name = $1", [planName || 'trial']);
+        const planId = planRes.rows[0]?.id;
+
+        const trialEnd = new Date();
+        trialEnd.setDate(trialEnd.getDate() + (days || 5));
+
+        const defaultSettings = {
+            show_source_label: true,
+            create_unknown_contacts: true,
+            transcribe_audio: true
+        };
+
+        await pool.query(`
+            INSERT INTO tenants (location_id, plan_id, status, trial_ends_at, settings, created_at)
+            VALUES ($1, $2, 'active', $3, $4::jsonb, NOW())
+            ON CONFLICT (location_id) DO NOTHING
+        `, [locationId, planId, trialEnd, JSON.stringify(defaultSettings)]);
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 3. Actualizar Settings o Estado
+app.put("/admin/tenants/:id", adminAuth, async (req, res) => {
+    const { id } = req.params;
+    const { status, settings } = req.body;
+
+    try {
+        // Actualización dinámica
+        if (status) {
+            await pool.query("UPDATE tenants SET status = $1, updated_at = NOW() WHERE location_id = $2", [status, id]);
+        }
+        if (settings) {
+            // Reemplazamos el JSON completo con lo que manda el front (merge lo hace el front)
+            await pool.query("UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2", [JSON.stringify(settings), id]);
+        }
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+
 // --- ARRANQUE ---
 
 async function restoreSessions() {

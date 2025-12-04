@@ -17,6 +17,8 @@ async function getTenantConfig(locationId) {
         // Lógica de Bloqueo por Trial Vencido
         if (tenant.status === 'trial' && new Date(tenant.trial_ends_at) < now) {
             // Opcional: Actualizar DB a 'suspended'
+            const update = "UPDATE tenants SET status = 'suspended' WHERE location_id = $1";
+            await pool.query(update, [locationId]);
             return { active: false, reason: "trial_expired", settings: tenant.settings };
         }
 
