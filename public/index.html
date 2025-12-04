@@ -1,99 +1,325 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
   <meta charset="UTF-8" />
   <title>WhatsApp Multi-Device</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #f3f4f6; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; }
-    .container { width: 100%; max-width: 600px; }
-    h1 { text-align: center; color: #1f2937; margin-bottom: 20px; font-size: 1.5rem; }
-    
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f3f4f6;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      margin: 0;
+      min-height: 100vh;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 600px;
+    }
+
+    h1 {
+      text-align: center;
+      color: #1f2937;
+      margin-bottom: 20px;
+      font-size: 1.5rem;
+    }
+
     /* Cards */
     .slot-card {
-      background: white; border-radius: 12px; padding: 24px; margin-bottom: 20px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.05); border: 1px solid #e5e7eb;
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+      border: 1px solid #e5e7eb;
     }
-    .slot-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-    .slot-title { font-weight: 700; font-size: 1.1rem; color: #374151; }
-    
+
+    .slot-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    .slot-title {
+      font-weight: 700;
+      font-size: 1.1rem;
+      color: #374151;
+    }
+
     /* Badges & Info */
-    .badge { padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-    .badge-off { background: #fee2e2; color: #991b1b; }
-    .badge-on { background: #dcfce7; color: #166534; }
-    
-    .meta-info { font-size: 0.85rem; color: #6b7280; margin-bottom: 15px; background: #f9fafb; padding: 10px; border-radius: 8px; border: 1px solid #f3f4f6; display: none;}
-    .tag { background: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 4px; margin-right: 5px; font-size: 0.75rem; border: 1px solid #bae6fd; font-weight: 600; }
+    .badge {
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .badge-off {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .badge-on {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .meta-info {
+      font-size: 0.85rem;
+      color: #6b7280;
+      margin-bottom: 15px;
+      background: #f9fafb;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #f3f4f6;
+      display: none;
+    }
+
+    .tag {
+      background: #e0f2fe;
+      color: #0369a1;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-right: 5px;
+      font-size: 0.75rem;
+      border: 1px solid #bae6fd;
+      font-weight: 600;
+    }
 
     /* Buttons */
     .btn {
-      width: 100%; padding: 12px; border-radius: 8px; border: none; font-weight: 600; cursor: pointer; font-size: 0.95rem;
+      width: 100%;
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
       transition: all 0.2s;
     }
-    .btn-primary { background: #25D366; color: white; }
-    .btn-primary:hover { background: #1da851; }
-    
-    .btn-danger { background: #fff; color: #ef4444; border: 1px solid #fecaca; margin-top: 10px; }
-    .btn-danger:hover { background: #fef2f2; border-color: #ef4444; }
 
-    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-primary {
+      background: #25D366;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #1da851;
+    }
+
+    .btn-danger {
+      background: #fff;
+      color: #ef4444;
+      border: 1px solid #fecaca;
+      margin-top: 10px;
+    }
+
+    .btn-danger:hover {
+      background: #fef2f2;
+      border-color: #ef4444;
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
 
     /* QR Area */
-    .qr-area { margin-top: 15px; display: flex; flex-direction: column; align-items: center; display: none; }
-    .qr-area.active { display: flex; }
-    .qr-canvas { margin: 15px 0; border: 4px solid #fff; padding: 10px; border-radius: 12px; background: white; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-    .status-msg { font-size: 0.9rem; color: #4b5563; margin-bottom: 5px; }
+    .qr-area {
+      margin-top: 15px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      display: none;
+    }
+
+    .qr-area.active {
+      display: flex;
+    }
+
+    .qr-canvas {
+      margin: 15px 0;
+      border: 4px solid #fff;
+      padding: 10px;
+      border-radius: 12px;
+      background: white;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+
+    .status-msg {
+      font-size: 0.9rem;
+      color: #4b5563;
+      margin-bottom: 5px;
+    }
+
+    /* --- ESTILOS DE BLOQUEO --- */
+    .blocked-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #f3f4f6;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .blocked-card {
+      background: white;
+      max-width: 450px;
+      width: 100%;
+      padding: 40px;
+      border-radius: 16px;
+      text-align: center;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      border: 1px solid #e5e7eb;
+    }
+
+    .icon-lock {
+      font-size: 3rem;
+      margin-bottom: 20px;
+      display: block;
+    }
+
+    .blocked-title {
+      font-size: 1.5rem;
+      font-weight: 800;
+      color: #1f2937;
+      margin: 0 0 10px 0;
+    }
+
+    .blocked-msg {
+      color: #6b7280;
+      font-size: 1rem;
+      line-height: 1.5;
+      margin-bottom: 25px;
+    }
+
+    .btn-contact {
+      background: #4f46e5;
+      color: white;
+      text-decoration: none;
+      display: inline-block;
+    }
+
+    .btn-contact:hover {
+      background: #4338ca;
+    }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
+
 <body>
 
-<div class="container">
-  <h1>Gestión de WhatsApp</h1>
-  <div id="loading" style="text-align:center; color:#6b7280;">Cargando configuración...</div>
-  <div id="slots-container"></div>
-</div>
+  <!-- Pantalla de carga inicial -->
+  <div id="loader-view" class="container">
+    <div style="text-align:center; margin-top: 50px;">
+      <div style="margin-bottom: 15px; font-size: 2rem;">⌛</div>
+      <div style="color:#6b7280;">Verificando suscripción...</div>
+    </div>
+  </div>
 
-<script>
-  const params = new URLSearchParams(window.location.search);
-  const locationId = params.get("location_id") || params.get("locationId");
+  <!-- Contenido Principal (Oculto por defecto) -->
+  <div id="app-view" class="container" style="display: none;">
+    <h1>Gestión de WhatsApp</h1>
+    <div id="slots-container"></div>
+  </div>
 
-  if (!locationId) {
-    document.body.innerHTML = "<h3 style='text-align:center; margin-top:50px; color:red'>Error Fatal: Falta location_id en la URL</h3>";
-  }
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const locationId = params.get("location_id") || params.get("locationId");
 
-  const container = document.getElementById("slots-container");
-  const loading = document.getElementById("loading");
-  
-  // Guardamos qué slots se están conectando activamente para no interrumpirlos
-  const activeConnections = new Set(); 
-
-  async function init() {
-    try {
-      let maxSlots = 3; 
-      try {
-          const confRes = await fetch(`/config?locationId=${locationId}`);
-          if (confRes.ok) {
-              const conf = await confRes.json();
-              maxSlots = conf.max_slots || 3;
-          }
-      } catch(e) { console.warn("No se pudo cargar config, usando default 3"); }
-
-      loading.style.display = "none";
-      renderSlots(maxSlots);
-      
-      // Global Polling: Revisa cambios externos cada 5s
-      setInterval(syncAllSlots, 5000);
-
-    } catch (e) {
-      loading.textContent = "Error cargando la interfaz.";
+    if (!locationId) {
+      document.body.innerHTML = "<h3 style='text-align:center; margin-top:50px; color:red'>Error Fatal: Falta location_id en la URL</h3>";
     }
-  }
 
-  function renderSlots(total) {
-    container.innerHTML = "";
-    for (let i = 1; i <= total; i++) {
-      const html = `
+    const appView = document.getElementById("app-view");
+    const loaderView = document.getElementById("loader-view");
+    const container = document.getElementById("slots-container");
+
+    const activeConnections = new Set();
+
+    async function init() {
+      try {
+        // 1. Consultar Configuración y ESTADO
+        const confRes = await fetch(`/config?locationId=${locationId}`);
+
+        if (!confRes.ok) throw new Error("Error de conexión");
+
+        const conf = await confRes.json();
+
+        // --- 🔒 LÓGICA DE BLOQUEO ---
+        // Si el backend dice que NO está activo o no existe
+        if (conf.is_active === false) {
+          showBlockedScreen(conf.reason);
+          return; // 🛑 DETENER EJECUCIÓN AQUÍ
+        }
+        // ---------------------------
+
+        const maxSlots = conf.max_slots || 3;
+
+        // Mostrar interfaz normal
+        loaderView.style.display = "none";
+        appView.style.display = "block";
+
+        renderSlots(maxSlots);
+
+        // Iniciar polling
+        setInterval(syncAllSlots, 5000);
+
+      } catch (e) {
+        console.error(e);
+        loaderView.innerHTML = "<h3 style='color:red; text-align:center'>Error al cargar el sistema.<br>Intente recargar.</h3>";
+      }
+    }
+
+    function showBlockedScreen(reason) {
+      let title = "Cuenta Inactiva";
+      let msg = "Su cuenta no se encuentra activa en este momento.";
+      let icon = "🔒";
+
+      if (reason === "trial_expired") {
+        title = "Periodo de Prueba Finalizado";
+        msg = "Su periodo de prueba de 5 días ha terminado. Para continuar disfrutando del servicio de automatización, por favor actualice su plan.";
+        icon = "⏳";
+      } else if (reason === "subscription_inactive" || reason === "payment_due") {
+        title = "Servicio Suspendido";
+        msg = "Detectamos un problema con su suscripción. Por favor contacte a soporte para reactivar sus servicios.";
+        icon = "⛔";
+      } else if (reason === "not_found") {
+        title = "Cuenta No Encontrada";
+        msg = "Esta subcuenta no está registrada en nuestro sistema de automatización.";
+        icon = "❓";
+      }
+
+      // Reemplazar todo el body con la pantalla de bloqueo
+      document.body.innerHTML = `
+        <div class="blocked-screen">
+            <div class="blocked-card">
+                <div class="icon-lock">${icon}</div>
+                <h2 class="blocked-title">${title}</h2>
+                <p class="blocked-msg">${msg}</p>
+                <a href="https://wa.me/595984756159" target="_blank" class="btn btn-contact">Contactar Soporte</a>
+            </div>
+        </div>
+      `;
+    }
+
+    function renderSlots(total) {
+      container.innerHTML = "";
+      for (let i = 1; i <= total; i++) {
+        const html = `
         <div class="slot-card" id="card-${i}">
           
           <div class="slot-header">
@@ -125,145 +351,141 @@
 
         </div>
       `;
-      container.insertAdjacentHTML('beforeend', html);
-      checkStatus(i); 
+        container.insertAdjacentHTML('beforeend', html);
+        checkStatus(i);
+      }
     }
-  }
 
-  function syncAllSlots() {
+    function syncAllSlots() {
       const slots = document.querySelectorAll('.slot-card');
       slots.forEach((_, index) => {
-          const slotNum = index + 1;
-          if (!activeConnections.has(slotNum)) {
-              checkStatus(slotNum);
-          }
+        const slotNum = index + 1;
+        if (!activeConnections.has(slotNum)) {
+          checkStatus(slotNum);
+        }
       });
-  }
+    }
 
-  async function checkStatus(slot) {
-    try {
-      const res = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
-      const data = await res.json();
-      updateUI(slot, data.connected, data.myNumber, data.priority, data.tags);
-    } catch (e) { console.error(e); }
-  }
+    async function checkStatus(slot) {
+      try {
+        const res = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
+        const data = await res.json();
+        updateUI(slot, data.connected, data.myNumber, data.priority, data.tags);
+      } catch (e) { console.error(e); }
+    }
 
-  function updateUI(slot, isConnected, phone, priority, tags) {
-    const badge = document.getElementById(`badge-${slot}`);
-    const viewCon = document.getElementById(`connected-view-${slot}`);
-    const viewDisc = document.getElementById(`disconnected-view-${slot}`);
-    const phoneText = document.getElementById(`phone-${slot}`);
-    const qrArea = document.getElementById(`qr-area-${slot}`);
-    const metaDiv = document.getElementById(`meta-${slot}`);
+    function updateUI(slot, isConnected, phone, priority, tags) {
+      const badge = document.getElementById(`badge-${slot}`);
+      const viewCon = document.getElementById(`connected-view-${slot}`);
+      const viewDisc = document.getElementById(`disconnected-view-${slot}`);
+      const phoneText = document.getElementById(`phone-${slot}`);
+      const qrArea = document.getElementById(`qr-area-${slot}`);
+      const metaDiv = document.getElementById(`meta-${slot}`);
 
-    // 🔥 FIX: Lógica de Visualización de Metadatos Correcta
-    if (isConnected) {
-        // Si está conectado, mostramos los metadatos reales
+      if (isConnected) {
         if (priority !== undefined || (tags && tags.length > 0)) {
-            metaDiv.style.display = "block";
-            document.getElementById(`prio-val-${slot}`).textContent = priority ?? "Auto";
-            document.getElementById(`tags-list-${slot}`).innerHTML = (tags && tags.length) ? tags.map(t => `<span class="tag">${t}</span>`).join("") : "<em style='color:#9ca3af'>Sin tags</em>";
+          metaDiv.style.display = "block";
+          document.getElementById(`prio-val-${slot}`).textContent = priority ?? "Auto";
+          document.getElementById(`tags-list-${slot}`).innerHTML = (tags && tags.length) ? tags.map(t => `<span class="tag">${t}</span>`).join("") : "<em style='color:#9ca3af'>Sin tags</em>";
         } else {
-            metaDiv.style.display = "none";
+          metaDiv.style.display = "none";
         }
 
-        if(badge.textContent !== "ACTIVO") {
-            badge.className = "badge badge-on";
-            badge.textContent = "ACTIVO";
-            viewCon.style.display = "block";
-            viewDisc.style.display = "none";
-            qrArea.classList.remove("active");
-            activeConnections.delete(slot); 
+        if (badge.textContent !== "ACTIVO") {
+          badge.className = "badge badge-on";
+          badge.textContent = "ACTIVO";
+          viewCon.style.display = "block";
+          viewDisc.style.display = "none";
+          qrArea.classList.remove("active");
+          activeConnections.delete(slot);
         }
         phoneText.textContent = "+" + phone;
 
-    } else {
-        // 🔥 FIX: Si está desconectado, ocultamos/limpiamos los metadatos
+      } else {
         metaDiv.style.display = "none";
         document.getElementById(`prio-val-${slot}`).textContent = "-";
         document.getElementById(`tags-list-${slot}`).innerHTML = "";
 
-        if(badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
-            badge.className = "badge badge-off";
-            badge.textContent = "INACTIVO";
-            viewCon.style.display = "none";
-            viewDisc.style.display = "block";
+        if (badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
+          badge.className = "badge badge-off";
+          badge.textContent = "INACTIVO";
+          viewCon.style.display = "none";
+          viewDisc.style.display = "block";
         }
+      }
     }
-  }
 
-  async function startConnect(slot) {
-    activeConnections.add(slot); 
-    const btn = document.getElementById(`btn-${slot}`);
-    const qrArea = document.getElementById(`qr-area-${slot}`);
-    const msg = document.getElementById(`msg-${slot}`);
-    const qrCanvas = document.getElementById(`qr-canvas-${slot}`);
+    async function startConnect(slot) {
+      activeConnections.add(slot);
+      const btn = document.getElementById(`btn-${slot}`);
+      const qrArea = document.getElementById(`qr-area-${slot}`);
+      const msg = document.getElementById(`msg-${slot}`);
+      const qrCanvas = document.getElementById(`qr-canvas-${slot}`);
 
-    btn.disabled = true;
-    btn.textContent = "Generando sesión...";
-    qrArea.classList.add("active");
-    qrCanvas.innerHTML = ""; 
+      btn.disabled = true;
+      btn.textContent = "Generando sesión...";
+      qrArea.classList.add("active");
+      qrCanvas.innerHTML = "";
 
-    try {
-      const res = await fetch(`/start-whatsapp?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-      if(!res.ok) throw new Error("Error de inicio");
+      try {
+        const res = await fetch(`/start-whatsapp?locationId=${locationId}&slot=${slot}`, { method: "POST" });
+        if (!res.ok) throw new Error("Error de inicio");
 
-      msg.textContent = "Escanea este código con WhatsApp:";
-      
-      const localInterval = setInterval(async () => {
-        const statRes = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
-        const statData = await statRes.json();
-        
-        if (statData.connected) {
-          clearInterval(localInterval);
-          activeConnections.delete(slot);
-          updateUI(slot, true, statData.myNumber, statData.priority, statData.tags);
-          return;
-        }
+        msg.textContent = "Escanea este código con WhatsApp:";
 
-        const qrRes = await fetch(`/qr?locationId=${locationId}&slot=${slot}`);
-        if (qrRes.ok) {
-          const qrData = await qrRes.json();
-          if (qrData.qr && qrCanvas.innerHTML === "") {
-             new QRCode(qrCanvas, { text: qrData.qr, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.L });
-             btn.textContent = "Esperando escaneo...";
+        const localInterval = setInterval(async () => {
+          const statRes = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
+          const statData = await statRes.json();
+
+          if (statData.connected) {
+            clearInterval(localInterval);
+            activeConnections.delete(slot);
+            updateUI(slot, true, statData.myNumber, statData.priority, statData.tags);
+            return;
           }
-        }
-      }, 2000);
 
-    } catch (e) {
-      activeConnections.delete(slot);
-      msg.textContent = "Error al conectar. Recarga.";
-      msg.style.color = "red";
-      btn.disabled = false;
+          const qrRes = await fetch(`/qr?locationId=${locationId}&slot=${slot}`);
+          if (qrRes.ok) {
+            const qrData = await qrRes.json();
+            if (qrData.qr && qrCanvas.innerHTML === "") {
+              new QRCode(qrCanvas, { text: qrData.qr, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.L });
+              btn.textContent = "Esperando escaneo...";
+            }
+          }
+        }, 2000);
+
+      } catch (e) {
+        activeConnections.delete(slot);
+        msg.textContent = "Error al conectar. Recarga.";
+        msg.style.color = "red";
+        btn.disabled = false;
+      }
     }
-  }
 
-  async function disconnect(slot) {
-      if(!confirm("¿Estás seguro de desconectar este número?")) return;
+    async function disconnect(slot) {
+      if (!confirm("¿Estás seguro de desconectar este número?")) return;
       const btn = document.querySelector(`#connected-view-${slot} button`);
       btn.disabled = true;
       btn.textContent = "Desconectando...";
 
       try {
-          await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-          
-          // 🔥 FIX: Forzar limpieza visual inmediata
-          updateUI(slot, false, null, undefined, undefined);
-          
-          document.getElementById(`btn-${slot}`).disabled = false;
-          document.getElementById(`btn-${slot}`).textContent = "Vincular WhatsApp";
-          document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
+        await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
+        updateUI(slot, false, null, undefined, undefined);
 
-      } catch(e) {
-          alert("Error al desconectar");
-          btn.disabled = false;
-          btn.textContent = "Cerrar Sesión";
+        document.getElementById(`btn-${slot}`).disabled = false;
+        document.getElementById(`btn-${slot}`).textContent = "Vincular WhatsApp";
+        document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
+
+      } catch (e) {
+        alert("Error al desconectar");
+        btn.disabled = false;
+        btn.textContent = "Cerrar Sesión";
       }
-  }
+    }
 
-  init();
-</script>
+    init();
+  </script>
 
 </body>
+
 </html>

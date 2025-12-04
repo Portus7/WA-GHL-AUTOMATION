@@ -429,6 +429,9 @@ app.post("/ghl/app-webhook", async (req, res) => {
             await pool.query("DELETE FROM auth_db WHERE locationid=$1", [
                 evt.locationId,
             ]);
+            await pool.query("UPDATE tenants SET status='inactive' WHERE location_id=$1", [
+                evt.locationId,
+            ]);
             return res.json({ ok: true });
         }
         res.json({ ignored: true });
@@ -474,7 +477,22 @@ app.get("/test-list", async (req, res) => {
     }
 });
 
-app.get("/config", (req, res) => res.json({ max_slots: 3 }));
+app.get("/config", async (req, res) => {
+    try {
+        const { locationId } = req.query;
+        // Consultamos el estado real del cliente
+        const tenantStatus = await getTenantConfig(locationId);
+
+        res.json({
+            max_slots: 3,
+            is_active: tenantStatus.active, // true o false
+            reason: tenantStatus.reason     // 'trial_expired', 'suspended', etc.
+        });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: "Error interno" });
+    }
+});
 
 const adminAuth = (req, res, next) => {
     const secret = req.headers['x-admin-secret'];
