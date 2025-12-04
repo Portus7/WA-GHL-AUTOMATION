@@ -20,7 +20,7 @@ async function ensureAgencyToken() {
   if (!tokens) throw new Error("No hay tokens agencia");
   // Aquí podrías agregar lógica de refresh si es necesario para agencia, 
   // pero usualmente se usa el de location para operaciones diarias.
-  return tokens.access_token; 
+  return tokens.access_token;
 }
 
 async function forceRefreshToken(locationId) {
@@ -34,15 +34,15 @@ async function forceRefreshToken(locationId) {
       grant_type: "refresh_token",
       refresh_token: tokens.locationAccess.refresh_token
     });
-    const res = await axios.post("https://services.leadconnectorhq.com/oauth/token", body.toString(), { 
-        headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } 
+    const res = await axios.post("https://services.leadconnectorhq.com/oauth/token", body.toString(), {
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }
     });
     const newToken = res.data;
     await saveTokens(locationId, { ...tokens, locationAccess: newToken });
     return newToken.access_token;
-  } catch (e) { 
-      console.error(`❌ Error refresh token: ${e.message}`); 
-      throw e; 
+  } catch (e) {
+    console.error(`❌ Error refresh token: ${e.message}`);
+    throw e;
   }
 }
 
@@ -59,35 +59,35 @@ async function callGHLWithAgency(config) {
 
 async function callGHLWithLocation(locationId, config) {
   let tokenData;
-  try { tokenData = await ensureLocationToken(locationId); } 
-  catch (e) { 
-      const newToken = await forceRefreshToken(locationId);
-      tokenData = { accessToken: newToken, realLocationId: locationId };
+  try { tokenData = await ensureLocationToken(locationId); }
+  catch (e) {
+    const newToken = await forceRefreshToken(locationId);
+    tokenData = { accessToken: newToken, realLocationId: locationId };
   }
 
   try {
-    return await axios({ 
-        ...config, 
-        headers: { 
-            Accept: "application/json", 
-            Version: GHL_API_VERSION, 
-            Authorization: `Bearer ${tokenData.accessToken}`, 
-            "Location-Id": tokenData.realLocationId, 
-            ...(config.headers || {}) 
-        } 
+    return await axios({
+      ...config,
+      headers: {
+        Accept: "application/json",
+        Version: GHL_API_VERSION,
+        Authorization: `Bearer ${tokenData.accessToken}`,
+        "Location-Id": tokenData.realLocationId,
+        ...(config.headers || {})
+      }
     });
   } catch (error) {
     if (error.response?.status === 401) {
       const newAccessToken = await forceRefreshToken(locationId);
-      return await axios({ 
-          ...config, 
-          headers: { 
-              Accept: "application/json", 
-              Version: GHL_API_VERSION, 
-              Authorization: `Bearer ${newAccessToken}`, 
-              "Location-Id": tokenData.realLocationId, 
-              ...(config.headers || {}) 
-          } 
+      return await axios({
+        ...config,
+        headers: {
+          Accept: "application/json",
+          Version: GHL_API_VERSION,
+          Authorization: `Bearer ${newAccessToken}`,
+          "Location-Id": tokenData.realLocationId,
+          ...(config.headers || {})
+        }
       });
     }
     throw error;
@@ -97,7 +97,7 @@ async function callGHLWithLocation(locationId, config) {
 // --- Lógica de Contactos ---
 
 async function findOrCreateGHLContact(locationId, phone, waName, contactId, isFromMe) {
-  const rawPhone = phone.replace(/\D/g, ''); 
+  const rawPhone = phone.replace(/\D/g, '');
   const phoneWithPlus = `+${rawPhone}`;
   const safeName = (waName && waName.trim() && !isFromMe) ? waName : "Usuario WhatsApp";
 
@@ -106,34 +106,34 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId, isFr
       const res = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
       const contact = res.data.contact || res.data;
       if (contact?.id) {
-          // Update name logic if needed
-          const currentName = ((contact.firstName || "") + " " + (contact.lastName || "")).toLowerCase().trim();
-          if ((currentName === "usuario whatsapp" || currentName === "") && safeName !== "Usuario WhatsApp") {
-               await callGHLWithLocation(locationId, { method: "PUT", url: `https://services.leadconnectorhq.com/contacts/${contact.id}`, data: { firstName: safeName, lastName: "" } }).catch(()=>{});
-          }
-          return contact;
+        // Update name logic if needed
+        const currentName = ((contact.firstName || "") + " " + (contact.lastName || "")).toLowerCase().trim();
+        if ((currentName === "usuario whatsapp" || currentName === "") && safeName !== "Usuario WhatsApp") {
+          await callGHLWithLocation(locationId, { method: "PUT", url: `https://services.leadconnectorhq.com/contacts/${contact.id}`, data: { firstName: safeName, lastName: "" } }).catch(() => { });
+        }
+        return contact;
       }
-    } catch (err) {}
+    } catch (err) { }
   }
 
   // Búsqueda por Query
   try {
-      const searchRes = await callGHLWithLocation(locationId, {
-          method: "GET", url: "https://services.leadconnectorhq.com/contacts/",
-          params: { locationId: locationId, query: rawPhone, limit: 1 }
-      });
-      if (searchRes.data?.contacts?.length > 0) {
-          const found = searchRes.data.contacts[0];
-          const foundPhone = found.phone ? found.phone.replace(/\D/g, '') : "";
-          if (foundPhone.includes(rawPhone) || rawPhone.includes(foundPhone)) {
-               // Update name check
-               if ((found.firstName === "Usuario" || found.firstName === "Usuario WhatsApp") && safeName !== "Usuario WhatsApp") {
-                   await callGHLWithLocation(locationId, { method: "PUT", url: `https://services.leadconnectorhq.com/contacts/${found.id}`, data: { firstName: safeName, lastName: "" } }).catch(()=>{});
-               }
-               return found;
-          }
+    const searchRes = await callGHLWithLocation(locationId, {
+      method: "GET", url: "https://services.leadconnectorhq.com/contacts/",
+      params: { locationId: locationId, query: rawPhone, limit: 1 }
+    });
+    if (searchRes.data?.contacts?.length > 0) {
+      const found = searchRes.data.contacts[0];
+      const foundPhone = found.phone ? found.phone.replace(/\D/g, '') : "";
+      if (foundPhone.includes(rawPhone) || rawPhone.includes(foundPhone)) {
+        // Update name check
+        if ((found.firstName === "Usuario" || found.firstName === "Usuario WhatsApp") && safeName !== "Usuario WhatsApp") {
+          await callGHLWithLocation(locationId, { method: "PUT", url: `https://services.leadconnectorhq.com/contacts/${found.id}`, data: { firstName: safeName, lastName: "" } }).catch(() => { });
+        }
+        return found;
       }
-  } catch(e) {}
+    }
+  } catch (e) { }
 
   // Crear
   try {
@@ -141,6 +141,7 @@ async function findOrCreateGHLContact(locationId, phone, waName, contactId, isFr
       method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
       data: { locationId, phone: phoneWithPlus, firstName: safeName, source: "WhatsApp Baileys" }
     });
+    await addTagToContact(locationId, createdRes.data.contact.id, "WhatsApp");
     return createdRes.data.contact || createdRes.data;
   } catch (err) {
     const body = err.response?.data;
@@ -162,64 +163,64 @@ async function addTagToContact(locationId, contactId, tag) {
 }
 
 async function deleteTagsContact(locationId, contactId, tags) {
-    console.log(`🗑️ Eliminando tags '${tags}' del contacto ${contactId}...`);
-    try {
-        await callGHLWithLocation(locationId, {
-            method: "DELETE",
-            url: `https://services.leadconnectorhq.com/contacts/${contactId}/tags`,
-            data: { tags: [tags] }
-        });
-    } catch (e) {
-        console.error("Error eliminando tags:", e.message);
-    }
+  console.log(`🗑️ Eliminando tags '${tags}' del contacto ${contactId}...`);
+  try {
+    await callGHLWithLocation(locationId, {
+      method: "DELETE",
+      url: `https://services.leadconnectorhq.com/contacts/${contactId}/tags`,
+      data: { tags: [tags] }
+    });
+  } catch (e) {
+    console.error("Error eliminando tags:", e.message);
+  }
 }
 
 
 async function logMessageToGHL(locationId, contactId, text, direction, attachments = []) {
   try {
-    let url = "https://services.leadconnectorhq.com/conversations/messages"; 
-    
+    let url = "https://services.leadconnectorhq.com/conversations/messages";
+
     // Objeto base
-    const payload = { 
-        type: "SMS", 
-        contactId, 
-        locationId, 
-        message: text || " ", 
-        direction: direction
+    const payload = {
+      type: "SMS",
+      contactId,
+      locationId,
+      message: text || " ",
+      direction: direction
     };
 
     if (attachments && attachments.length > 0) {
-        payload.attachments = attachments;
+      payload.attachments = attachments;
     }
 
     // Cambiar endpoint si es inbound
     if (direction === "inbound") {
-        url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
+      url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
     }
 
     await callGHLWithLocation(locationId, {
-      method: "POST", 
+      method: "POST",
       url: url,
       data: payload
     });
 
     console.log(`✅ GHL Sync [${direction}]: ${text ? text.substring(0, 15) : 'Media'}... (Media: ${attachments.length})`);
 
-  } catch (err) { 
-      // 🔥 FIX: Loguear el error real que devuelve GHL para saber qué pasó
-      const errorMsg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-      console.error(`❌ GHL Log Error (${direction}):`, errorMsg); 
+  } catch (err) {
+    // 🔥 FIX: Loguear el error real que devuelve GHL para saber qué pasó
+    const errorMsg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error(`❌ GHL Log Error (${direction}):`, errorMsg);
   }
 }
 
 module.exports = {
-    saveTokens,
-    getTokens,
-    callGHLWithAgency,
-    callGHLWithLocation,
-    findOrCreateGHLContact,
-    logMessageToGHL,
-    ensureAgencyToken,
-    addTagToContact,
-    deleteTagsContact,
+  saveTokens,
+  getTokens,
+  callGHLWithAgency,
+  callGHLWithLocation,
+  findOrCreateGHLContact,
+  logMessageToGHL,
+  ensureAgencyToken,
+  addTagToContact,
+  deleteTagsContact,
 };
