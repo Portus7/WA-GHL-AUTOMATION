@@ -49,6 +49,15 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 app.use(express.static(PUBLIC_DIR));
+app.use(cors({
+    origin: [
+        //"https://admin.clicandapp.com",           // Tu dominio final
+        "http://localhost:5173",                  // Tu local
+        "https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host" // <--- AGREGA ESTE (El de EasyPanel)
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-admin-secret"]
+}));
 
 // --- RUTAS ---
 
