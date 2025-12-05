@@ -386,7 +386,6 @@ async function startWhatsApp(locationId, slotId) {
                     } catch (err) { console.error("Error fetching slot name:", err); }
 
                     messageForGHL += `\nSource: ${sourceLabel}`;
-                    messageForGHL = toBold(messageForGHL);
                 }
 
                 direction = "outbound";
@@ -410,7 +409,6 @@ async function startWhatsApp(locationId, slotId) {
                     } catch (err) { console.error("Error fetching slot name:", err); }
 
                     messageForGHL += `\nSource: ${sourceLabel}`;
-                    messageForGHL = toBold(messageForGHL);
                 }
                 direction = "inbound";
             }
