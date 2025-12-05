@@ -7,7 +7,6 @@ const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
 
-// 👇 Importamos el controlador de Auth (Asegúrate de haber creado este archivo)
 const { login, verifyToken } = require("./controllers/authController");
 
 const {
@@ -33,14 +32,13 @@ const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/uti
 const { parseGHLCommand } = require("./helpers/parser");
 const axios = require("axios");
 
-// Parche crypto para Baileys
 if (!globalThis.crypto) {
     globalThis.crypto = require("crypto").webcrypto;
 }
 
 const PORT = process.env.PORT || 5000;
 const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
-const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "https://wa.clicandapp.com";
+const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "[https://wa.clicandapp.com](https://wa.clicandapp.com)";
 const AGENCY_ROW_ID = "__AGENCY__";
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const MEDIA_DIR = path.join(PUBLIC_DIR, "media");
@@ -54,25 +52,21 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 app.use(express.static(PUBLIC_DIR));
 
-// Configuración CORS
 app.use(cors({
     origin: [
         "http://localhost:5173",
-        "https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host",
-        // Agrega aquí tu dominio final si lo tienes
+        "[https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host](https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host)",
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"] // 'x-admin-secret' ya no es necesario
+    allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
 // ==========================================
-// 🔓 RUTAS PÚBLICAS (Sin Login)
+// 🔓 RUTAS PÚBLICAS
 // ==========================================
 
-// 1. Login (Genera el Token JWT)
 app.post("/auth/login", login);
 
-// 2. Webhooks y Configuración WA
 app.post("/ghl/webhook", async (req, res) => {
     try {
         const { locationId, phone, message, type, attachments } = req.body;
@@ -113,7 +107,6 @@ app.post("/ghl/webhook", async (req, res) => {
             if (availableCandidates.length === 0)
                 return res.status(200).json({ error: "No connected devices" });
 
-            // Lógica de selección simple (puedes restaurar la compleja si la necesitas)
             let selectedCandidate = availableCandidates[0];
 
             const sessionToUse = selectedCandidate.session;
@@ -201,10 +194,9 @@ app.get("/status", async (req, res) => {
     res.json({ connected: false, priority: extra.priority, tags: extra.tags, slotName: extra.slot_name || `Dispositivo #${slot}` });
 });
 
-app.post("/config-slot", async (req, res) => {
+app.post("/config-slot", verifyToken, async (req, res) => {
     const { locationId, slot, slotName } = req.body;
     try {
-        // Upsert simple para el nombre del slot
         await pool.query(`
             INSERT INTO location_slots (location_id, slot_id, slot_name)
             VALUES ($1, $2, $3)
@@ -225,7 +217,7 @@ app.get("/get-info", async (req, res) => {
     }
 });
 
-app.post("/remove-slot", async (req, res) => {
+app.post("/remove-slot", verifyToken, async (req, res) => {
     try {
         await deleteSessionData(req.query.locationId, req.query.slot);
         res.json({ success: true });
@@ -252,6 +244,8 @@ app.post("/ghl/app-webhook", async (req, res) => {
     try {
         const evt = req.body;
         if (evt.type === "INSTALL") {
+            // Nota: Podríamos intentar obtener el nombre aquí si GHL enviara más datos,
+            // pero usualmente solo manda IDs. La actualización de nombre sería mejor manual o via otro endpoint.
             await registerNewTenant(evt.locationId, evt.companyId);
             return res.json({ ok: true });
         }
@@ -267,12 +261,13 @@ app.post("/ghl/app-webhook", async (req, res) => {
 
 // --- ADMIN PANEL ---
 
-// 1. Obtener Agencias
+// 1. Obtener Agencias (Actualizado para devolver nombre)
 app.get("/admin/agencies", verifyToken, async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT 
-                agency_id, 
+                agency_id,
+                MAX(agency_name) as agency_name, -- Obtenemos el nombre si existe
                 COUNT(*) as total_subaccounts,
                 SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_subaccounts
             FROM tenants 
@@ -286,7 +281,7 @@ app.get("/admin/agencies", verifyToken, async (req, res) => {
     }
 });
 
-// 2. Obtener Tenants
+// 2. Obtener Tenants (Actualizado para devolver nombre)
 app.get("/admin/tenants", verifyToken, async (req, res) => {
     const { agencyId } = req.query;
     try {
@@ -308,9 +303,9 @@ app.get("/admin/tenants", verifyToken, async (req, res) => {
     }
 });
 
-// 3. Crear Tenant
+// 3. Crear Tenant (Ahora acepta NOMBRES)
 app.post("/admin/tenants", verifyToken, async (req, res) => {
-    const { locationId, planName, days } = req.body;
+    const { locationId, planName, days, name, agencyId, agencyName } = req.body;
     try {
         const planRes = await pool.query("SELECT id FROM subscription_plans WHERE name = $1", [planName || 'trial']);
         const planId = planRes.rows[0]?.id;
@@ -319,10 +314,19 @@ app.post("/admin/tenants", verifyToken, async (req, res) => {
         const defaultSettings = { show_source_label: true, create_unknown_contacts: true, transcribe_audio: true };
 
         await pool.query(`
-            INSERT INTO tenants (location_id, plan_id, status, trial_ends_at, settings, created_at)
-            VALUES ($1, $2, 'active', $3, $4::jsonb, NOW())
-            ON CONFLICT (location_id) DO NOTHING
-        `, [locationId, planId, trialEnd, JSON.stringify(defaultSettings)]);
+            INSERT INTO tenants (
+                location_id, name, agency_id, agency_name, 
+                plan_id, status, trial_ends_at, settings, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, 'active', $6, $7::jsonb, NOW())
+            ON CONFLICT (location_id) 
+            DO UPDATE SET 
+                name = EXCLUDED.name, 
+                agency_id = EXCLUDED.agency_id,
+                agency_name = EXCLUDED.agency_name,
+                plan_id = EXCLUDED.plan_id,
+                trial_ends_at = EXCLUDED.trial_ends_at
+        `, [locationId, name, agencyId, agencyName, planId, trialEnd, JSON.stringify(defaultSettings)]);
 
         res.json({ success: true });
     } catch (e) {
@@ -333,10 +337,16 @@ app.post("/admin/tenants", verifyToken, async (req, res) => {
 // 4. Actualizar Tenant
 app.put("/admin/tenants/:id", verifyToken, async (req, res) => {
     const { id } = req.params;
-    const { status, settings } = req.body;
+    const { status, settings, name, agencyName } = req.body;
     try {
         if (status) await pool.query("UPDATE tenants SET status = $1, updated_at = NOW() WHERE location_id = $2", [status, id]);
+
         if (settings) await pool.query("UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2", [JSON.stringify(settings), id]);
+
+        // Permitir actualizar nombres
+        if (name) await pool.query("UPDATE tenants SET name = $1, updated_at = NOW() WHERE location_id = $2", [name, id]);
+        if (agencyName) await pool.query("UPDATE tenants SET agency_name = $1, updated_at = NOW() WHERE location_id = $2", [agencyName, id]);
+
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -350,7 +360,7 @@ app.get("/agency/locations", verifyToken, async (req, res) => {
     if (!agencyId) return res.status(400).json({ error: "Falta agencyId" });
     try {
         const result = await pool.query(`
-            SELECT t.location_id, t.status, t.settings, 
+            SELECT t.location_id, t.name, t.status, t.settings, 
                    (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
             FROM tenants t 
             WHERE t.agency_id = $1
@@ -361,18 +371,20 @@ app.get("/agency/locations", verifyToken, async (req, res) => {
     }
 });
 
+// ... (El resto de rutas de agency/* se mantienen igual) ...
 app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
     const { locationId } = req.params;
     try {
         const [slotsRes, keywordsRes, tenantRes] = await Promise.all([
             pool.query("SELECT * FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC", [locationId]),
             pool.query("SELECT * FROM keyword_tags WHERE location_id = $1 ORDER BY created_at DESC", [locationId]),
-            pool.query("SELECT settings FROM tenants WHERE location_id = $1", [locationId])
+            pool.query("SELECT settings, name FROM tenants WHERE location_id = $1", [locationId])
         ]);
         res.json({
             slots: slotsRes.rows,
             keywords: keywordsRes.rows,
-            settings: tenantRes.rows[0]?.settings || {}
+            settings: tenantRes.rows[0]?.settings || {},
+            name: tenantRes.rows[0]?.name
         });
     } catch (e) {
         res.status(500).json({ error: e.message });

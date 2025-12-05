@@ -32,8 +32,11 @@ const initDb = async () => {
     await client.query(`
       CREATE TABLE IF NOT EXISTS tenants (
         location_id VARCHAR(255) PRIMARY KEY,
+        name VARCHAR(255),
+        agency_id VARCHAR(255),
+        agency_name VARCHAR(255),
         plan_id INT REFERENCES subscription_plans(id),
-        status VARCHAR(20) DEFAULT 'active', -- 'active', 'suspended', 'trial'
+        status VARCHAR(20) DEFAULT 'active',
         trial_ends_at TIMESTAMP,
         subscription_ends_at TIMESTAMP,
         settings JSONB DEFAULT '{ 
@@ -44,6 +47,7 @@ const initDb = async () => {
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       );
+      CREATE INDEX IF NOT EXISTS idx_tenants_agency ON tenants(agency_id);
     `);
 
     // 3. Tabla Tokens GHL (auth_db)
