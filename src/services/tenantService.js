@@ -55,12 +55,12 @@ async function registerNewTenant(locationId, companyId) {
         // Obtenemos ID del plan trial (asegurate de haber creado el plan en DB init)
         // O hardcodeamos un plan por defecto si no quieres consultar la tabla planes
         const sql = `
-      INSERT INTO tenants (location_id, status, trial_ends_at, plan_id, settings, created_at)
-      VALUES ($1, 'active', $2, $3, $4::jsonb, NOW())
+      INSERT INTO tenants (location_id, status, trial_ends_at, plan_id, settings, created_at, agency_id)
+      VALUES ($1, 'active', $2, $3, $4::jsonb, NOW(), $5)
       ON CONFLICT (location_id) DO UPDATE SET status = 'trial', trial_ends_at = $2, plan_id = $3, settings = $4::jsonb
     `;
 
-        await pool.query(sql, [locationId, trialEnd, planId, JSON.stringify(defaultSettings)]);
+        await pool.query(sql, [locationId, trialEnd, planId, JSON.stringify(defaultSettings), companyId]);
         console.log(`🎉 Nuevo Tenant Registrado: ${locationId} (Trial hasta ${trialEnd.toISOString()})`);
 
     } catch (e) {
