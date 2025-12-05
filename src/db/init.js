@@ -89,6 +89,7 @@ const initDb = async () => {
         priority INT DEFAULT 99,
         tags JSONB DEFAULT '[]',
         updated_at TIMESTAMP DEFAULT NOW(),
+        slot_name VARCHAR(100),
         PRIMARY KEY (location_id, slot_id)
       );
     `);

@@ -396,7 +396,19 @@ async function startWhatsApp(locationId, slotId) {
                 messageForGHL = text;
 
                 if (settings.show_source_label !== false) {
-                    messageForGHL += `\nSource: +${myChannelNumber}`;
+                    let sourceLabel = `+${myChannelNumber}`;
+
+                    try {
+                        const slotRes = await pool.query(
+                            "SELECT slot_name FROM location_slots WHERE location_id=$1 AND phone_number=$2",
+                            [locationId, myChannelNumber]
+                        );
+                        if (slotRes.rows.length > 0 && slotRes.rows[0].slot_name) {
+                            sourceLabel = slotRes.rows[0].slot_name;
+                        }
+                    } catch (err) { console.error("Error fetching slot name:", err); }
+
+                    messageForGHL += `\nSource: ${sourceLabel}`;
                 }
                 direction = "inbound";
             }
@@ -408,7 +420,6 @@ async function startWhatsApp(locationId, slotId) {
             if (transcription) {
                 console.log(`🎤 Enviando transcripción separada para ${clientPhone}`);
 
-                // --- CORRECCIÓN AQUÍ: usamos LET en lugar de CONST ---
                 let transcriptionMsg = `🎤 [Transcripción]:\n"${transcription}"\n\nSource: +${myChannelNumber}`;
 
                 if (isFromMe) {
