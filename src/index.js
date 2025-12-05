@@ -67,6 +67,73 @@ app.use(cors({
 
 app.post("/auth/login", login);
 
+
+// ----------------------------------------------------------------------
+// Endpoint para AGREGAR un nuevo Slot (Protegido)
+// ----------------------------------------------------------------------
+app.post("/agency/add-slot", verifyToken, async (req, res) => {
+    const { locationId } = req.body;
+    try {
+        // 1. Obtener el ID más alto actual para saber cuál sigue
+        const resSlots = await pool.query(
+            "SELECT slot_id FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC",
+            [locationId]
+        );
+
+        const existingIds = resSlots.rows.map(r => r.slot_id);
+
+        // Algoritmo simple para encontrar el primer hueco libre o agregar al final
+        let newSlotId = 1;
+        while (existingIds.includes(newSlotId)) {
+            newSlotId++;
+        }
+
+        // Límite de seguridad (opcional, ej: max 10 slots)
+        if (newSlotId > 10) {
+            return res.status(400).json({ error: "Límite de dispositivos alcanzado" });
+        }
+
+        // 2. Insertar en DB
+        await pool.query(
+            "INSERT INTO location_slots (location_id, slot_id, slot_name, priority) VALUES ($1, $2, $3, $4)",
+            [locationId, newSlotId, `Dispositivo #${newSlotId}`, newSlotId]
+        );
+
+        // Devolver el nuevo slot para actualizar el frontend
+        res.json({ success: true, slot_id: newSlotId, slot_name: `Dispositivo #${newSlotId}` });
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ----------------------------------------------------------------------
+// Endpoint para ELIMINAR un Slot (Protegido)
+// ----------------------------------------------------------------------
+app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) => {
+    const { locationId, slotId } = req.params;
+    try {
+        // 1. Desconectar sesión de WhatsApp si existe
+        await deleteSessionData(locationId, slotId);
+
+        // 2. Borrar de la base de datos
+        // NOTA: deleteSessionData ya hace el DELETE en 'location_slots', 
+        // pero aseguramos por si acaso en deleteSessionData o aquí.
+        // En tu whatsappService.js actual, deleteSessionData YA borra el slot. 
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ----------------------------------------------------------------------
+// Endpoint /config (Público para el index.html)
+// ----------------------------------------------------------------------
+
+
+
 app.post("/ghl/webhook", async (req, res) => {
     try {
         const { locationId, phone, message, type, attachments } = req.body;
@@ -230,10 +297,24 @@ app.get("/config", async (req, res) => {
     try {
         const { locationId } = req.query;
         const tenantStatus = await getTenantConfig(locationId);
+
+        // Obtener los slots reales de la DB
+        const slotsRes = await pool.query(
+            "SELECT slot_id, slot_name, phone_number FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC",
+            [locationId]
+        );
+
+        // Mapeamos para enviar IDs y Nombres
+        const activeSlots = slotsRes.rows.map(s => ({
+            id: s.slot_id,
+            name: s.slot_name,
+            connected: !!s.phone_number
+        }));
+
         res.json({
-            max_slots: 3,
             is_active: tenantStatus.active,
-            reason: tenantStatus.reason
+            reason: tenantStatus.reason,
+            slots: activeSlots // <-- ENVIAMOS LA LISTA REAL, NO UN NÚMERO
         });
     } catch (e) {
         res.status(500).json({ error: "Error interno" });

@@ -276,7 +276,10 @@
 
         loaderView.style.display = "none";
         appView.style.display = "block";
-        renderSlots(conf.max_slots || 3);
+
+        // MODIFICACIÓN: Pasamos la lista de slots real, no un número
+        renderSlots(conf.slots || []);
+
         setInterval(syncAllSlots, 5000);
 
       } catch (e) {
@@ -303,14 +306,24 @@
         </div>`;
     }
 
-    function renderSlots(total) {
+    // MODIFICACIÓN: Recibe array de slots, no un número total
+    function renderSlots(slotsArray) {
       container.innerHTML = "";
-      for (let i = 1; i <= total; i++) {
+
+      if (slotsArray.length === 0) {
+        container.innerHTML = "<p style='text-align:center; color:#6b7280; padding:20px'>No hay dispositivos configurados. Contacte a su administrador o agencia.</p>";
+        return;
+      }
+
+      slotsArray.forEach(slot => {
+        const i = slot.id; // ID real de la base de datos
+        const currentName = slot.name || `Dispositivo #${i}`;
+
         const html = `
-        <div class="slot-card" id="card-${i}">
+        <div class="slot-card" id="card-${i}" data-slot-id="${i}">
           <div class="slot-header">
             <div class="title-wrapper">
-                <div class="slot-title" id="title-text-${i}">Dispositivo #${i}</div>
+                <div class="slot-title" id="title-text-${i}">${currentName}</div>
                 <button class="edit-btn" onclick="editSlotName(${i})" title="Editar nombre">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
                 </button>
@@ -341,11 +354,12 @@
         </div>
       `;
         container.insertAdjacentHTML('beforeend', html);
+
+        // Verificamos estado inicial
         checkStatus(i);
-      }
+      });
     }
 
-    // --- NUEVA FUNCIÓN PARA EDITAR NOMBRE ---
     async function editSlotName(slot) {
       const currentName = document.getElementById(`title-text-${slot}`).textContent;
       const newName = prompt("Ingresa el nombre para este dispositivo (Ej: Ventas, Soporte):", currentName);
@@ -376,10 +390,13 @@
     }
 
     function syncAllSlots() {
-      const slots = document.querySelectorAll('.slot-card');
-      slots.forEach((_, index) => {
-        const slotNum = index + 1;
-        if (!activeConnections.has(slotNum)) checkStatus(slotNum);
+      // MODIFICACIÓN: Buscar por atributo data-slot-id
+      const cards = document.querySelectorAll('.slot-card');
+      cards.forEach(card => {
+        const slotId = card.getAttribute('data-slot-id');
+        if (slotId && !activeConnections.has(parseInt(slotId))) {
+          checkStatus(slotId);
+        }
       });
     }
 
@@ -393,13 +410,15 @@
 
     function updateUI(slot, isConnected, phone, priority, tags, slotName) {
       const badge = document.getElementById(`badge-${slot}`);
+      // Si el elemento no existe (porque se borró en el panel agencia pero el frontend no recargó), salimos
+      if (!badge) return;
+
       const viewCon = document.getElementById(`connected-view-${slot}`);
       const viewDisc = document.getElementById(`disconnected-view-${slot}`);
       const phoneText = document.getElementById(`phone-${slot}`);
       const qrArea = document.getElementById(`qr-area-${slot}`);
       const metaDiv = document.getElementById(`meta-${slot}`);
 
-      // Actualizar nombre si viene del backend
       if (slotName) {
         document.getElementById(`title-text-${slot}`).textContent = slotName;
       }
@@ -424,7 +443,6 @@
         phoneText.textContent = "+" + phone;
       } else {
         metaDiv.style.display = "none";
-        // No reseteamos el nombre aquí para que persista visualmente si se desconecta
 
         if (badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
           badge.className = "badge badge-off";
@@ -454,6 +472,13 @@
         msg.textContent = "Escanea este código con WhatsApp:";
 
         const localInterval = setInterval(async () => {
+          // Verificar si el elemento sigue existiendo
+          if (!document.getElementById(`card-${slot}`)) {
+            clearInterval(localInterval);
+            activeConnections.delete(slot);
+            return;
+          }
+
           const statRes = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
           const statData = await statRes.json();
 
@@ -476,9 +501,11 @@
 
       } catch (e) {
         activeConnections.delete(slot);
-        msg.textContent = "Error al conectar.";
-        msg.style.color = "red";
-        btn.disabled = false;
+        if (msg) {
+          msg.textContent = "Error al conectar.";
+          msg.style.color = "red";
+        }
+        if (btn) btn.disabled = false;
       }
     }
 
@@ -490,7 +517,7 @@
 
       try {
         await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-        updateUI(slot, false, null, undefined, undefined, `Dispositivo #${slot}`); // Resetear nombre al desconectar
+        updateUI(slot, false, null, undefined, undefined, null); // Null en nombre para no resetearlo visualmente
 
         document.getElementById(`btn-${slot}`).disabled = false;
         document.getElementById(`btn-${slot}`).textContent = "Vincular WhatsApp";
