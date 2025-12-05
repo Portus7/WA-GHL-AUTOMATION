@@ -84,6 +84,7 @@ const initDb = async () => {
     await client.query(`
       CREATE TABLE IF NOT EXISTS location_slots (
         location_id VARCHAR(255) REFERENCES tenants(location_id) ON DELETE CASCADE,
+        agency_id VARCHAR(255),
         slot_id INT,
         phone_number VARCHAR(50),
         priority INT DEFAULT 99,
