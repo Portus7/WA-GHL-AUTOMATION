@@ -85,7 +85,7 @@ app.get("/status", async (req, res) => {
     let extra = {};
     try {
         const r = await pool.query(
-            "SELECT priority, tags FROM location_slots WHERE location_id=$1 AND slot_id=$2",
+            "SELECT priority, tags, slot_name FROM location_slots WHERE location_id=$1 AND slot_id=$2",
             [locationId, slot]
         );
         if (r.rows.length) extra = r.rows[0];
@@ -96,8 +96,9 @@ app.get("/status", async (req, res) => {
             myNumber: sess.myNumber,
             priority: extra.priority || 99,
             tags: extra.tags || [],
+            slotName: extra.slot_name || `Dispositivo #${slot}`
         });
-    res.json({ connected: false, priority: extra.priority, tags: extra.tags });
+    res.json({ connected: false, priority: extra.priority, tags: extra.tags, slotName: extra.slot_name || `Dispositivo #${slot}` });
 });
 
 // --- WEBHOOK OUTBOUND CON SPINTAX AVANZADO ---
@@ -291,7 +292,7 @@ app.post("/ghl/webhook", async (req, res) => {
 });
 
 app.post("/config-slot", async (req, res) => {
-    const { locationId, slot, phoneNumber, priority, addTag, removeTag } =
+    const { locationId, slot, phoneNumber, priority, addTag, removeTag, slotName } =
         req.body;
     if (!locationId) return res.status(400).json({ error: "Faltan datos" });
 
@@ -347,6 +348,23 @@ app.post("/config-slot", async (req, res) => {
             "UPDATE location_slots SET tags=$1::jsonb, priority=$2 WHERE location_id=$3 AND slot_id=$4",
             [JSON.stringify(t), finalP, locationId, targetSlot]
         );
+
+        let nameUpdateSQL = "";
+        let params = [JSON.stringify(t), finalP, locationId, targetSlot];
+
+        if (slotName !== undefined) {
+            // Si mandan slotName, actualizamos esa columna también
+            await pool.query(
+                "UPDATE location_slots SET tags=$1::jsonb, priority=$2, slot_name=$3 WHERE location_id=$4 AND slot_id=$5",
+                [JSON.stringify(t), finalP, slotName, locationId, targetSlot]
+            );
+        } else {
+            // Si no, usamos el query original
+            await pool.query(
+                "UPDATE location_slots SET tags=$1::jsonb, priority=$2 WHERE location_id=$3 AND slot_id=$4",
+                params
+            );
+        }
 
         res.json({ success: true });
     } catch (e) {
@@ -429,9 +447,10 @@ app.post("/ghl/app-webhook", async (req, res) => {
             await pool.query("DELETE FROM auth_db WHERE locationid=$1", [
                 evt.locationId,
             ]);
-            await pool.query("UPDATE tenants SET status='inactive' WHERE location_id=$1", [
-                evt.locationId,
-            ]);
+            //Opcional si quieres actualizar el tenant
+            // await pool.query("UPDATE tenants SET status='inactive' WHERE location_id=$1", [
+            //     evt.locationId,
+            // ]);
             return res.json({ ok: true });
         }
         res.json({ ignored: true });

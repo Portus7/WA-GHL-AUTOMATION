@@ -46,10 +46,30 @@
       margin-bottom: 15px;
     }
 
+    /* Title Editable Area */
+    .title-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .slot-title {
       font-weight: 700;
       font-size: 1.1rem;
       color: #374151;
+    }
+
+    .edit-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #9ca3af;
+      padding: 4px;
+      transition: color 0.2s;
+    }
+
+    .edit-btn:hover {
+      color: #4f46e5;
     }
 
     /* Badges & Info */
@@ -160,7 +180,7 @@
       margin-bottom: 5px;
     }
 
-    /* --- ESTILOS DE BLOQUEO --- */
+    /* Blocked Screen */
     .blocked-screen {
       position: fixed;
       top: 0;
@@ -211,10 +231,8 @@
       color: white;
       text-decoration: none;
       display: inline-block;
-    }
-
-    .btn-contact:hover {
-      background: #4338ca;
+      padding: 10px 20px;
+      border-radius: 8px;
     }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -222,7 +240,6 @@
 
 <body>
 
-  <!-- Pantalla de carga inicial -->
   <div id="loader-view" class="container">
     <div style="text-align:center; margin-top: 50px;">
       <div style="margin-bottom: 15px; font-size: 2rem;">⌛</div>
@@ -230,7 +247,6 @@
     </div>
   </div>
 
-  <!-- Contenido Principal (Oculto por defecto) -->
   <div id="app-view" class="container" style="display: none;">
     <h1>Gestión de WhatsApp</h1>
     <div id="slots-container"></div>
@@ -240,80 +256,51 @@
     const params = new URLSearchParams(window.location.search);
     const locationId = params.get("location_id") || params.get("locationId");
 
-    if (!locationId) {
-      document.body.innerHTML = "<h3 style='text-align:center; margin-top:50px; color:red'>Error Fatal: Falta location_id en la URL</h3>";
-    }
+    if (!locationId) document.body.innerHTML = "<h3 style='text-align:center; margin-top:50px; color:red'>Error Fatal: Falta location_id</h3>";
 
     const appView = document.getElementById("app-view");
     const loaderView = document.getElementById("loader-view");
     const container = document.getElementById("slots-container");
-
     const activeConnections = new Set();
 
     async function init() {
       try {
-        // 1. Consultar Configuración y ESTADO
         const confRes = await fetch(`/config?locationId=${locationId}`);
-
         if (!confRes.ok) throw new Error("Error de conexión");
-
         const conf = await confRes.json();
 
-        // --- 🔒 LÓGICA DE BLOQUEO ---
-        // Si el backend dice que NO está activo o no existe
         if (conf.is_active === false) {
           showBlockedScreen(conf.reason);
-          return; // 🛑 DETENER EJECUCIÓN AQUÍ
+          return;
         }
-        // ---------------------------
 
-        const maxSlots = conf.max_slots || 3;
-
-        // Mostrar interfaz normal
         loaderView.style.display = "none";
         appView.style.display = "block";
-
-        renderSlots(maxSlots);
-
-        // Iniciar polling
+        renderSlots(conf.max_slots || 3);
         setInterval(syncAllSlots, 5000);
 
       } catch (e) {
         console.error(e);
-        loaderView.innerHTML = "<h3 style='color:red; text-align:center'>Error al cargar el sistema.<br>Intente recargar.</h3>";
+        loaderView.innerHTML = "<h3 style='color:red; text-align:center'>Error al cargar.</h3>";
       }
     }
 
     function showBlockedScreen(reason) {
       let title = "Cuenta Inactiva";
-      let msg = "Su cuenta no se encuentra activa en este momento.";
+      let msg = "Su cuenta no se encuentra activa.";
       let icon = "🔒";
+      if (reason === "trial_expired") { title = "Periodo de Prueba Finalizado"; msg = "Su trial ha vencido."; icon = "⏳"; }
+      else if (reason === "subscription_inactive") { title = "Servicio Suspendido"; msg = "Problema con la suscripción."; icon = "⛔"; }
 
-      if (reason === "trial_expired") {
-        title = "Periodo de Prueba Finalizado";
-        msg = "Su periodo de prueba de 5 días ha terminado. Para continuar disfrutando del servicio de automatización, por favor actualice su plan.";
-        icon = "⏳";
-      } else if (reason === "subscription_inactive" || reason === "payment_due") {
-        title = "Servicio Suspendido";
-        msg = "Detectamos un problema con su suscripción. Por favor contacte a soporte para reactivar sus servicios.";
-        icon = "⛔";
-      } else if (reason === "not_found") {
-        title = "Cuenta No Encontrada";
-        msg = "Esta subcuenta no está registrada en nuestro sistema de automatización.";
-        icon = "❓";
-      }
-
-      // Reemplazar todo el body con la pantalla de bloqueo
       document.body.innerHTML = `
         <div class="blocked-screen">
             <div class="blocked-card">
                 <div class="icon-lock">${icon}</div>
                 <h2 class="blocked-title">${title}</h2>
                 <p class="blocked-msg">${msg}</p>
-                <a href="https://wa.me/595984756159" target="_blank" class="btn btn-contact">Contactar Soporte</a>
+                <a href="#" class="btn btn-contact">Contactar Soporte</a>
             </div>
-        </div>
-      `;
+        </div>`;
     }
 
     function renderSlots(total) {
@@ -321,9 +308,13 @@
       for (let i = 1; i <= total; i++) {
         const html = `
         <div class="slot-card" id="card-${i}">
-          
           <div class="slot-header">
-            <div class="slot-title">Dispositivo #${i}</div>
+            <div class="title-wrapper">
+                <div class="slot-title" id="title-text-${i}">Dispositivo #${i}</div>
+                <button class="edit-btn" onclick="editSlotName(${i})" title="Editar nombre">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                </button>
+            </div>
             <div id="badge-${i}" class="badge badge-off">Desconectado</div>
           </div>
 
@@ -342,13 +333,11 @@
 
           <div id="disconnected-view-${i}">
              <button id="btn-${i}" class="btn btn-primary" onclick="startConnect(${i})">Vincular WhatsApp</button>
-             
              <div id="qr-area-${i}" class="qr-area">
                 <span id="msg-${i}" class="status-msg">Solicitando código QR...</span>
                 <div id="qr-canvas-${i}" class="qr-canvas"></div>
              </div>
           </div>
-
         </div>
       `;
         container.insertAdjacentHTML('beforeend', html);
@@ -356,13 +345,41 @@
       }
     }
 
+    // --- NUEVA FUNCIÓN PARA EDITAR NOMBRE ---
+    async function editSlotName(slot) {
+      const currentName = document.getElementById(`title-text-${slot}`).textContent;
+      const newName = prompt("Ingresa el nombre para este dispositivo (Ej: Ventas, Soporte):", currentName);
+
+      if (newName && newName.trim() !== "" && newName !== currentName) {
+        try {
+          // Actualización optimista (UI primero)
+          document.getElementById(`title-text-${slot}`).textContent = newName;
+
+          // Guardar en Backend
+          const res = await fetch("/config-slot", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              locationId,
+              slot,
+              slotName: newName
+            })
+          });
+
+          if (!res.ok) throw new Error("Error al guardar");
+
+        } catch (e) {
+          alert("No se pudo guardar el nombre.");
+          document.getElementById(`title-text-${slot}`).textContent = currentName; // Revertir
+        }
+      }
+    }
+
     function syncAllSlots() {
       const slots = document.querySelectorAll('.slot-card');
       slots.forEach((_, index) => {
         const slotNum = index + 1;
-        if (!activeConnections.has(slotNum)) {
-          checkStatus(slotNum);
-        }
+        if (!activeConnections.has(slotNum)) checkStatus(slotNum);
       });
     }
 
@@ -370,17 +387,22 @@
       try {
         const res = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
         const data = await res.json();
-        updateUI(slot, data.connected, data.myNumber, data.priority, data.tags);
-      } catch (e) { console.error(e); }
+        updateUI(slot, data.connected, data.myNumber, data.priority, data.tags, data.slotName);
+      } catch (e) { }
     }
 
-    function updateUI(slot, isConnected, phone, priority, tags) {
+    function updateUI(slot, isConnected, phone, priority, tags, slotName) {
       const badge = document.getElementById(`badge-${slot}`);
       const viewCon = document.getElementById(`connected-view-${slot}`);
       const viewDisc = document.getElementById(`disconnected-view-${slot}`);
       const phoneText = document.getElementById(`phone-${slot}`);
       const qrArea = document.getElementById(`qr-area-${slot}`);
       const metaDiv = document.getElementById(`meta-${slot}`);
+
+      // Actualizar nombre si viene del backend
+      if (slotName) {
+        document.getElementById(`title-text-${slot}`).textContent = slotName;
+      }
 
       if (isConnected) {
         if (priority !== undefined || (tags && tags.length > 0)) {
@@ -400,11 +422,9 @@
           activeConnections.delete(slot);
         }
         phoneText.textContent = "+" + phone;
-
       } else {
         metaDiv.style.display = "none";
-        document.getElementById(`prio-val-${slot}`).textContent = "-";
-        document.getElementById(`tags-list-${slot}`).innerHTML = "";
+        // No reseteamos el nombre aquí para que persista visualmente si se desconecta
 
         if (badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
           badge.className = "badge badge-off";
@@ -440,7 +460,7 @@
           if (statData.connected) {
             clearInterval(localInterval);
             activeConnections.delete(slot);
-            updateUI(slot, true, statData.myNumber, statData.priority, statData.tags);
+            updateUI(slot, true, statData.myNumber, statData.priority, statData.tags, statData.slotName);
             return;
           }
 
@@ -456,26 +476,25 @@
 
       } catch (e) {
         activeConnections.delete(slot);
-        msg.textContent = "Error al conectar. Recarga.";
+        msg.textContent = "Error al conectar.";
         msg.style.color = "red";
         btn.disabled = false;
       }
     }
 
     async function disconnect(slot) {
-      if (!confirm("¿Estás seguro de desconectar este número?")) return;
+      if (!confirm("¿Estás seguro de desconectar?")) return;
       const btn = document.querySelector(`#connected-view-${slot} button`);
       btn.disabled = true;
       btn.textContent = "Desconectando...";
 
       try {
         await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-        updateUI(slot, false, null, undefined, undefined);
+        updateUI(slot, false, null, undefined, undefined, `Dispositivo #${slot}`); // Resetear nombre al desconectar
 
         document.getElementById(`btn-${slot}`).disabled = false;
         document.getElementById(`btn-${slot}`).textContent = "Vincular WhatsApp";
         document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
-
       } catch (e) {
         alert("Error al desconectar");
         btn.disabled = false;
@@ -485,7 +504,6 @@
 
     init();
   </script>
-
 </body>
 
 </html>
