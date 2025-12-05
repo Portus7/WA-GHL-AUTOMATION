@@ -51,4 +51,16 @@ function processAdvancedMessage(rawText) {
   };
 }
 
-module.exports = { normalizePhone, processAdvancedMessage, sleep };
+function toBold(text) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bold = "𝐀𝐁𝐂𝐃𝐄𝐅𝐆𝐇𝐈𝐉𝐊𝐋𝐌𝐍𝐎𝐏𝐐𝐑𝐒𝐓𝐔𝐕𝐖𝐗𝐘𝐙𝐚𝐛𝐜𝐝𝐞𝐟𝐠𝐡𝐢𝐣𝐤𝐥𝐦𝐧𝐨𝐩𝐪𝐫𝐬𝐭𝐮𝐯𝐰𝐱𝐲𝐳𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗";
+
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    const index = chars.indexOf(text[i]);
+    result += index !== -1 ? bold[index] : text[i];
+  }
+  return result;
+}
+
+module.exports = { normalizePhone, processAdvancedMessage, sleep, toBold };

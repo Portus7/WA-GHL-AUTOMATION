@@ -1,5 +1,5 @@
 const { pool } = require("../config/db");
-const { normalizePhone } = require("../helpers/utils");
+const { normalizePhone, toBold } = require("../helpers/utils");
 const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
 const { parseGHLCommand } = require("../helpers/parser");
 const { transcribeAudio } = require("./openaiService");
@@ -386,6 +386,7 @@ async function startWhatsApp(locationId, slotId) {
                     } catch (err) { console.error("Error fetching slot name:", err); }
 
                     messageForGHL += `\nSource: ${sourceLabel}`;
+                    messageForGHL = toBold(messageForGHL);
                 }
 
                 direction = "outbound";
@@ -409,6 +410,7 @@ async function startWhatsApp(locationId, slotId) {
                     } catch (err) { console.error("Error fetching slot name:", err); }
 
                     messageForGHL += `\nSource: ${sourceLabel}`;
+                    messageForGHL = toBold(messageForGHL);
                 }
                 direction = "inbound";
             }
