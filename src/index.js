@@ -6,6 +6,7 @@ const express = require("express");
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
+const { login, verifyToken } = require("./controllers/authController")
 const {
     startWhatsApp,
     sessions,
@@ -61,14 +62,14 @@ app.use(cors({
 
 // --- MIDDLEWARES DE SEGURIDAD (Definidos ANTES de las rutas) ---
 
-const adminAuth = (req, res, next) => {
-    const secret = req.headers['x-admin-secret'];
-    // "admin123" es fallback para pruebas, asegúrate de configurar ADMIN_SECRET en .env
-    if (secret !== process.env.ADMIN_SECRET && secret !== "admin123") {
-        return res.status(403).json({ error: "Acceso denegado" });
-    }
-    next();
-};
+//const adminAuth = (req, res, next) => {
+//    const secret = req.headers['x-admin-secret'];
+//    // "admin123" es fallback para pruebas, asegúrate de configurar ADMIN_SECRET en .env
+//    if (secret !== process.env.ADMIN_SECRET && secret !== "admin123") {
+//        return res.status(403).json({ error: "Acceso denegado" });
+//    }
+//    next();
+//};
 
 const agencyAuth = (req, res, next) => {
     const secret = req.headers['x-admin-secret'];
@@ -79,7 +80,7 @@ const agencyAuth = (req, res, next) => {
 };
 
 // --- RUTAS PÚBLICAS / WHATSAPP ---
-
+app.post("/auth/login", login);
 app.post("/start-whatsapp", async (req, res) => {
     const { locationId, slot } = req.query;
     try {
@@ -266,7 +267,7 @@ app.get("/config", async (req, res) => {
 // --- RUTAS ADMIN (Dashboard Maestro) ---
 
 // 1. Obtener Agencias (Corregido para evitar 404)
-app.get("/admin/agencies", adminAuth, async (req, res) => {
+app.get("/admin/agencies", verifyToken, async (req, res) => {
     try {
         // Asegúrate de haber ejecutado la migración de DB para tener 'agency_id'
         const result = await pool.query(`
@@ -286,7 +287,7 @@ app.get("/admin/agencies", adminAuth, async (req, res) => {
 });
 
 // 2. Obtener Tenants (Subcuentas)
-app.get("/admin/tenants", adminAuth, async (req, res) => {
+app.get("/admin/tenants", verifyToken, async (req, res) => {
     const { agencyId } = req.query;
     try {
         let query = `
@@ -308,7 +309,7 @@ app.get("/admin/tenants", adminAuth, async (req, res) => {
 });
 
 // 3. Crear Tenant
-app.post("/admin/tenants", adminAuth, async (req, res) => {
+app.post("/admin/tenants", verifyToken, async (req, res) => {
     const { locationId, planName, days } = req.body;
     try {
         const planRes = await pool.query("SELECT id FROM subscription_plans WHERE name = $1", [planName || 'trial']);
@@ -330,7 +331,7 @@ app.post("/admin/tenants", adminAuth, async (req, res) => {
 });
 
 // 4. Actualizar Tenant
-app.put("/admin/tenants/:id", adminAuth, async (req, res) => {
+app.put("/admin/tenants/:id", verifyToken, async (req, res) => {
     const { id } = req.params;
     const { status, settings } = req.body;
     try {
@@ -344,7 +345,7 @@ app.put("/admin/tenants/:id", adminAuth, async (req, res) => {
 
 // --- RUTAS AGENCIA (Dashboard Agencia) ---
 
-app.get("/agency/locations", agencyAuth, async (req, res) => {
+app.get("/agency/locations", verifyToken, async (req, res) => {
     const { agencyId } = req.query;
     if (!agencyId) return res.status(400).json({ error: "Falta agencyId" });
     try {
@@ -360,7 +361,7 @@ app.get("/agency/locations", agencyAuth, async (req, res) => {
     }
 });
 
-app.get("/agency/location-details/:locationId", agencyAuth, async (req, res) => {
+app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
     const { locationId } = req.params;
     try {
         const [slotsRes, keywordsRes, tenantRes] = await Promise.all([
@@ -378,7 +379,7 @@ app.get("/agency/location-details/:locationId", agencyAuth, async (req, res) => 
     }
 });
 
-app.post("/agency/keywords", agencyAuth, async (req, res) => {
+app.post("/agency/keywords", verifyToken, async (req, res) => {
     const { locationId, keyword, tag } = req.body;
     try {
         const result = await pool.query(
@@ -391,7 +392,7 @@ app.post("/agency/keywords", agencyAuth, async (req, res) => {
     }
 });
 
-app.delete("/agency/keywords/:id", async (req, res) => {
+app.delete("/agency/keywords/:id", verifyToken, async (req, res) => {
     const { id } = req.params;
     try {
         await pool.query("DELETE FROM keyword_tags WHERE id = $1", [id]);
@@ -401,7 +402,7 @@ app.delete("/agency/keywords/:id", async (req, res) => {
     }
 });
 
-app.put("/agency/settings/:locationId", async (req, res) => {
+app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
     const { locationId } = req.params;
     const { settings } = req.body;
     try {

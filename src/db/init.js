@@ -1,4 +1,5 @@
 const { pool } = require("../config/db");
+const bcrypt = require("bcryptjs");
 
 const initDb = async () => {
   const client = await pool.connect();
@@ -105,6 +106,28 @@ const initDb = async () => {
         created_at TIMESTAMP DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_keyword_tags_location ON keyword_tags(location_id);
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(50) DEFAULT 'admin', -- admin, agency
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+
+    // CREAR USUARIO ADMIN POR DEFECTO (Si no existe)
+    // Email: admin@clicandapp.com
+    // Pass: admin123 (Se guardará encriptada)
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash("admin123", salt);
+
+    await client.query(`
+      INSERT INTO users (email, password_hash, role)
+      VALUES ('admin@clicandapp.com', '${hashedPassword}', 'admin')
+      ON CONFLICT (email) DO NOTHING;
     `);
 
     console.log("✅ Base de Datos SaaS verificada y lista.");
