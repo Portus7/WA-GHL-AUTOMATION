@@ -6,7 +6,10 @@ const express = require("express");
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
-const { login, verifyToken } = require("./controllers/authController")
+
+// 👇 Importamos el controlador de Auth (Asegúrate de haber creado este archivo)
+const { login, verifyToken } = require("./controllers/authController");
+
 const {
     startWhatsApp,
     sessions,
@@ -30,7 +33,7 @@ const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/uti
 const { parseGHLCommand } = require("./helpers/parser");
 const axios = require("axios");
 
-// Parche crypto
+// Parche crypto para Baileys
 if (!globalThis.crypto) {
     globalThis.crypto = require("crypto").webcrypto;
 }
@@ -50,37 +53,114 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 app.use(express.static(PUBLIC_DIR));
+
+// Configuración CORS
 app.use(cors({
     origin: [
-        //"https://admin.clicandapp.com",           // Tu dominio final
-        "http://localhost:5173",                  // Tu local
-        "https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host" // EasyPanel
+        "http://localhost:5173",
+        "https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host",
+        // Agrega aquí tu dominio final si lo tienes
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-admin-secret"]
+    allowedHeaders: ["Content-Type", "Authorization"] // 'x-admin-secret' ya no es necesario
 }));
 
-// --- MIDDLEWARES DE SEGURIDAD (Definidos ANTES de las rutas) ---
+// ==========================================
+// 🔓 RUTAS PÚBLICAS (Sin Login)
+// ==========================================
 
-//const adminAuth = (req, res, next) => {
-//    const secret = req.headers['x-admin-secret'];
-//    // "admin123" es fallback para pruebas, asegúrate de configurar ADMIN_SECRET en .env
-//    if (secret !== process.env.ADMIN_SECRET && secret !== "admin123") {
-//        return res.status(403).json({ error: "Acceso denegado" });
-//    }
-//    next();
-//};
-
-const agencyAuth = (req, res, next) => {
-    const secret = req.headers['x-admin-secret'];
-    if (secret === (process.env.ADMIN_SECRET || "admin123")) {
-        return next();
-    }
-    return res.status(403).json({ error: "Acceso denegado a panel de agencia" });
-};
-
-// --- RUTAS PÚBLICAS / WHATSAPP ---
+// 1. Login (Genera el Token JWT)
 app.post("/auth/login", login);
+
+// 2. Webhooks y Configuración WA
+app.post("/ghl/webhook", async (req, res) => {
+    try {
+        const { locationId, phone, message, type, attachments } = req.body;
+        if (!locationId || !phone || (!message && !attachments))
+            return res.json({ ignored: true });
+
+        if (message && message.includes("[Enviado desde otro dispositivo]"))
+            return res.json({ ignored: true });
+
+        if (type === "Outbound" || type === "SMS") {
+            let finalMessage = message || "";
+            let messageDelay = 0;
+
+            if (finalMessage) {
+                const processed = processAdvancedMessage(finalMessage);
+                finalMessage = processed.text;
+                messageDelay = processed.delay;
+
+                if (messageDelay > 0) {
+                    console.log(`⏳ Delay: ${messageDelay}ms para ${phone}...`);
+                    await sleep(messageDelay);
+                }
+            }
+
+            const clientPhone = normalizePhone(phone);
+            let dbConfigs = await getLocationSlotsConfig(locationId);
+
+            let availableCandidates = dbConfigs
+                .map((conf) => ({
+                    slot: conf.slot_id,
+                    priority: conf.priority,
+                    tags: conf.tags || [],
+                    myNumber: conf.phone_number,
+                    session: sessions.get(`${locationId}_slot${conf.slot_id}`),
+                }))
+                .filter((c) => c.session && c.session.isConnected);
+
+            if (availableCandidates.length === 0)
+                return res.status(200).json({ error: "No connected devices" });
+
+            // Lógica de selección simple (puedes restaurar la compleja si la necesitas)
+            let selectedCandidate = availableCandidates[0];
+
+            const sessionToUse = selectedCandidate.session;
+            const jid = clientPhone.replace(/\D/g, "").replace("+", "") + "@s.whatsapp.net";
+
+            try {
+                await waitForSocketOpen(sessionToUse.sock);
+
+                if (attachments && attachments.length > 0) {
+                    for (const url of attachments) {
+                        let content = { image: { url: url }, caption: finalMessage || "" };
+                        if (url.endsWith(".mp4")) content = { video: { url: url }, caption: finalMessage || "" };
+                        else if (url.endsWith(".pdf")) content = { document: { url: url }, mimetype: "application/pdf", fileName: "archivo.pdf", caption: finalMessage || "" };
+
+                        const sent = await sessionToUse.sock.sendMessage(jid, content);
+                        if (sent?.key?.id) {
+                            botMessageIds.add(sent.key.id);
+                            setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
+                        }
+                    }
+                } else {
+                    const sent = await sessionToUse.sock.sendMessage(jid, { text: finalMessage });
+                    if (sent?.key?.id) {
+                        botMessageIds.add(sent.key.id);
+                        setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
+                    }
+                }
+
+                const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
+                if (contact && contact.id) {
+                    await processKeywordTags(locationId, contact.id, finalMessage, false);
+                }
+                await saveRouting(clientPhone.replace("+", ""), locationId, null, selectedCandidate.myNumber);
+
+                return res.json({ ok: true });
+            } catch (e) {
+                console.error(`❌ Error envío: ${e.message}`);
+                return res.status(500).json({ error: "Send failed" });
+            }
+        }
+        res.json({ ignored: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Error" });
+    }
+});
+
 app.post("/start-whatsapp", async (req, res) => {
     const { locationId, slot } = req.query;
     try {
@@ -121,112 +201,16 @@ app.get("/status", async (req, res) => {
     res.json({ connected: false, priority: extra.priority, tags: extra.tags, slotName: extra.slot_name || `Dispositivo #${slot}` });
 });
 
-// --- WEBHOOK GHL ---
-app.post("/ghl/webhook", async (req, res) => {
-    try {
-        const { locationId, phone, message, type, attachments } = req.body;
-        if (!locationId || !phone || (!message && !attachments))
-            return res.json({ ignored: true });
-
-        if (message && message.includes("[Enviado desde otro dispositivo]"))
-            return res.json({ ignored: true });
-
-        if (type === "Outbound" || type === "SMS") {
-            let finalMessage = message || "";
-            let messageDelay = 0;
-
-            if (finalMessage) {
-                const processed = processAdvancedMessage(finalMessage);
-                finalMessage = processed.text;
-                messageDelay = processed.delay;
-
-                if (messageDelay > 0) {
-                    console.log(`⏳ Delay: ${messageDelay}ms para ${phone}...`);
-                    await sleep(messageDelay);
-                }
-            }
-
-            const clientPhone = normalizePhone(phone);
-            let dbConfigs = await getLocationSlotsConfig(locationId);
-
-            // Lógica de selección de slot (simplificada para brevedad, mantén tu lógica original aquí si es extensa)
-            let availableCandidates = dbConfigs
-                .map((conf) => ({
-                    slot: conf.slot_id,
-                    priority: conf.priority,
-                    tags: conf.tags || [],
-                    myNumber: conf.phone_number,
-                    session: sessions.get(`${locationId}_slot${conf.slot_id}`),
-                }))
-                .filter((c) => c.session && c.session.isConnected);
-
-            if (availableCandidates.length === 0)
-                return res.status(200).json({ error: "No connected devices" });
-
-            // (Tu lógica de selección de candidato NIVEL 1, 2, 3, 4 va aquí...)
-            // Asumimos candidato 0 por defecto si no hay lógica compleja:
-            let selectedCandidate = availableCandidates[0];
-            // NOTA: Asegúrate de que tu lógica de selección completa esté aquí si la copiaste del archivo anterior.
-
-            const sessionToUse = selectedCandidate.session;
-            const jid = clientPhone.replace(/\D/g, "").replace("+", "") + "@s.whatsapp.net";
-
-            try {
-                await waitForSocketOpen(sessionToUse.sock);
-
-                // Enviar mensaje (media o texto)
-                if (attachments && attachments.length > 0) {
-                    for (const url of attachments) {
-                        let content = { image: { url: url }, caption: finalMessage || "" };
-                        if (url.endsWith(".mp4")) content = { video: { url: url }, caption: finalMessage || "" };
-                        else if (url.endsWith(".pdf")) content = { document: { url: url }, mimetype: "application/pdf", fileName: "archivo.pdf", caption: finalMessage || "" };
-
-                        const sent = await sessionToUse.sock.sendMessage(jid, content);
-                        if (sent?.key?.id) {
-                            botMessageIds.add(sent.key.id);
-                            setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
-                        }
-                    }
-                } else {
-                    const sent = await sessionToUse.sock.sendMessage(jid, { text: finalMessage });
-                    if (sent?.key?.id) {
-                        botMessageIds.add(sent.key.id);
-                        setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
-                    }
-                }
-
-                // Log a GHL
-                const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
-                if (contact && contact.id) {
-                    await processKeywordTags(locationId, contact.id, finalMessage, false);
-                }
-                await saveRouting(clientPhone.replace("+", ""), locationId, null, selectedCandidate.myNumber);
-
-                return res.json({ ok: true });
-            } catch (e) {
-                console.error(`❌ Error envío: ${e.message}`);
-                return res.status(500).json({ error: "Send failed" });
-            }
-        }
-        res.json({ ignored: true });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Error" });
-    }
-});
-
-// --- RUTAS CONFIGURACIÓN ---
-
 app.post("/config-slot", async (req, res) => {
-    // ... (Tu código original de config-slot) ...
-    // He omitido el cuerpo para no hacer esto muy largo, pero MANTÉN TU CÓDIGO AQUÍ
-    // Simplemente asegúrate de que el handler esté presente.
-    const { locationId, slot, phoneNumber, priority, addTag, removeTag, slotName } = req.body;
-    // ... lógica de update DB ...
-    // (Usa tu código original para esta función)
+    const { locationId, slot, slotName } = req.body;
     try {
-        // Mock rápido para que funcione el ejemplo si no copiaste todo
-        await pool.query("UPDATE location_slots SET slot_name=$1 WHERE location_id=$2 AND slot_id=$3", [slotName, locationId, slot]);
+        // Upsert simple para el nombre del slot
+        await pool.query(`
+            INSERT INTO location_slots (location_id, slot_id, slot_name)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (location_id, slot_id) 
+            DO UPDATE SET slot_name = EXCLUDED.slot_name
+        `, [locationId, slot, slotName]);
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }) }
 });
@@ -264,12 +248,28 @@ app.get("/config", async (req, res) => {
     }
 });
 
-// --- RUTAS ADMIN (Dashboard Maestro) ---
+app.post("/ghl/app-webhook", async (req, res) => {
+    try {
+        const evt = req.body;
+        if (evt.type === "INSTALL") {
+            await registerNewTenant(evt.locationId, evt.companyId);
+            return res.json({ ok: true });
+        }
+        res.json({ ignored: true });
+    } catch (e) {
+        res.status(500).json({ error: "Error" });
+    }
+});
 
-// 1. Obtener Agencias (Corregido para evitar 404)
+// ==========================================
+// 🔒 RUTAS PROTEGIDAS (Requieren Login)
+// ==========================================
+
+// --- ADMIN PANEL ---
+
+// 1. Obtener Agencias
 app.get("/admin/agencies", verifyToken, async (req, res) => {
     try {
-        // Asegúrate de haber ejecutado la migración de DB para tener 'agency_id'
         const result = await pool.query(`
             SELECT 
                 agency_id, 
@@ -286,7 +286,7 @@ app.get("/admin/agencies", verifyToken, async (req, res) => {
     }
 });
 
-// 2. Obtener Tenants (Subcuentas)
+// 2. Obtener Tenants
 app.get("/admin/tenants", verifyToken, async (req, res) => {
     const { agencyId } = req.query;
     try {
@@ -343,7 +343,7 @@ app.put("/admin/tenants/:id", verifyToken, async (req, res) => {
     }
 });
 
-// --- RUTAS AGENCIA (Dashboard Agencia) ---
+// --- AGENCY PANEL ---
 
 app.get("/agency/locations", verifyToken, async (req, res) => {
     const { agencyId } = req.query;
