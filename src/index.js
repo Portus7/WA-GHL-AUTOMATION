@@ -55,7 +55,7 @@ app.use(express.static(PUBLIC_DIR));
 app.use(cors({
     origin: [
         "http://localhost:5173",
-        "[https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host](https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host)",
+        "https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host",
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
