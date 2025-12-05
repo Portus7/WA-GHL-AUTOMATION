@@ -38,7 +38,7 @@ async function getTenantConfig(locationId) {
 }
 
 // 2. Registrar un nuevo cliente con TRIAL (Se usa al instalar la App)
-async function registerNewTenant(locationId) {
+async function registerNewTenant(locationId, companyId) {
     try {
         const trialDays = 5; // Configurable
         const trialEnd = new Date();

@@ -397,9 +397,9 @@ app.post("/ghl/app-webhook", async (req, res) => {
         const evt = req.body;
         if (evt.type === "INSTALL") {
             console.log(`📦 Instalación detectada: ${evt.locationId}`);
-
+            console.log("Registrando tenant para agencia...", evt.companyId);
             // 1. REGISTRO SAAS (TRIAL) - 🔥 AGREGAR ESTO
-            await registerNewTenant(evt.locationId);
+            await registerNewTenant(evt.locationId, evt.companyId);
 
             const at = await ensureAgencyToken();
             const ats = await getTokens(AGENCY_ROW_ID);
@@ -579,6 +579,98 @@ app.put("/admin/tenants/:id", adminAuth, async (req, res) => {
             // Reemplazamos el JSON completo con lo que manda el front (merge lo hace el front)
             await pool.query("UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2", [JSON.stringify(settings), id]);
         }
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- RUTAS PARA EL PANEL DE AGENCIA ---
+
+// 1. Obtener todas las locations de una Agencia
+app.get("/agency/locations", async (req, res) => {
+    const { agencyId } = req.query;
+    if (!agencyId) return res.status(400).json({ error: "Falta agencyId" });
+
+    try {
+        // Obtenemos los tenants que pertenecen a esta agencia
+        const result = await pool.query(`
+            SELECT t.location_id, t.status, t.settings, 
+                   (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
+            FROM tenants t 
+            WHERE t.agency_id = $1
+        `, [agencyId]);
+
+        res.json(result.rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 2. Obtener detalles completos de una Location (Slots + Keywords)
+app.get("/agency/location-details/:locationId", async (req, res) => {
+    const { locationId } = req.params;
+    try {
+        // A. Obtener Slots
+        const slotsRes = await pool.query(
+            "SELECT slot_id, phone_number, priority, slot_name, tags FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC",
+            [locationId]
+        );
+
+        // B. Obtener Keywords (La tabla que creamos antes)
+        const keywordsRes = await pool.query(
+            "SELECT id, keyword, tag FROM keyword_tags WHERE location_id = $1 ORDER BY created_at DESC",
+            [locationId]
+        );
+
+        // C. Obtener Settings generales
+        const tenantRes = await pool.query("SELECT settings FROM tenants WHERE location_id = $1", [locationId]);
+        const settings = tenantRes.rows[0]?.settings || {};
+
+        res.json({
+            slots: slotsRes.rows,
+            keywords: keywordsRes.rows,
+            settings: settings
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 3. Crear Nueva Palabra Clave (Auto-Tagging)
+app.post("/agency/keywords", async (req, res) => {
+    const { locationId, keyword, tag } = req.body;
+    try {
+        const result = await pool.query(
+            "INSERT INTO keyword_tags (location_id, keyword, tag) VALUES ($1, $2, $3) RETURNING *",
+            [locationId, keyword.toLowerCase(), tag]
+        );
+        res.json(result.rows[0]);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 4. Eliminar Palabra Clave
+app.delete("/agency/keywords/:id", async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.query("DELETE FROM keyword_tags WHERE id = $1", [id]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 5. Actualizar Settings de una Location específica
+app.put("/agency/settings/:locationId", async (req, res) => {
+    const { locationId } = req.params;
+    const { settings } = req.body;
+    try {
+        await pool.query(
+            "UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2",
+            [JSON.stringify(settings), locationId]
+        );
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
