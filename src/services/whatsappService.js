@@ -75,12 +75,49 @@ async function processKeywordTags(locationId, contactId, text, isMobileContext =
 async function deleteSessionData(locationId, slot) {
     const sessionId = `${locationId}_slot${slot}`;
     const session = sessions.get(sessionId);
-    if (session && session.sock) {
-        try { session.sock.end(undefined); session.sock.ws.close(); } catch (e) { }
+
+    if (session) {
+        // 1. IMPORTANTE: Marcamos que estamos destruyendo la sesión intencionalmente.
+        // Esto sirve para que la lógica de reconexión en startWhatsApp sepa que NO debe reconectar.
+        session.isDestroying = true;
+
+        if (session.sock) {
+            try {
+                // 2. Verificar si está conectado antes de intentar logout
+                if (session.isConnected) {
+                    console.log(`🚪 Cerrando sesión en WhatsApp para ${sessionId}...`);
+                    await session.sock.logout(); // Cierra la sesión en el servidor de WhatsApp
+                }
+            } catch (e) {
+                console.warn(`⚠️ No se pudo enviar logout a WhatsApp (quizás ya estaba desconectado): ${e.message}`);
+            } finally {
+                // 3. Forzar cierre de socket si quedó abierto
+                try {
+                    session.sock.end(undefined);
+                    if (session.sock.ws) session.sock.ws.close();
+                } catch (ignore) { }
+            }
+        }
     }
+
+    // 4. Limpiar memoria
     sessions.delete(sessionId);
-    try { await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]); } catch (e) { }
-    try { await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]); } catch (e) { }
+
+    // 5. Limpiar Base de Datos (Auth)
+    try {
+        await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
+        console.log(`🗑️ Credenciales eliminadas de DB: ${sessionId}`);
+    } catch (e) {
+        console.error("Error borrando auth DB:", e.message);
+    }
+
+    // 6. Limpiar Base de Datos (Slots)
+    try {
+        await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
+        console.log(`🗑️ Slot eliminado de DB: ${locationId} slot ${slot}`);
+    } catch (e) {
+        console.error("Error borrando slot DB:", e.message);
+    }
 }
 
 async function syncSlotInfo(locationId, slotId, phoneNumber) {
@@ -196,7 +233,7 @@ async function startWhatsApp(locationId, slotId) {
     const existing = sessions.get(sessionId);
     if (existing && existing.sock && existing.isConnected) return existing;
 
-    const sessionData = { sock: null, qr: null, isConnected: false, myNumber: null };
+    const sessionData = { sock: null, qr: null, isConnected: false, myNumber: null, isDestroying: false };
     sessions.set(sessionId, sessionData);
 
     console.log(`▶ Iniciando: ${sessionId}`);
@@ -276,9 +313,15 @@ async function startWhatsApp(locationId, slotId) {
 
         if (connection === "close") {
             const code = lastDisconnect?.error?.output?.statusCode;
-            sessionData.isConnected = false; sessionData.sock = null;
-            if (code !== 401 && code !== 403 && code !== 440) setTimeout(() => startWhatsApp(locationId, slotId), 3000);
-            else sessions.delete(sessionId);
+
+            // Verificar si la desconexión fue accidental O si es porque estamos borrando
+            const shouldReconnect = (code !== 401 && code !== 403 && code !== 440) && !sessionData.isDestroying;
+
+            if (shouldReconnect) {
+                setTimeout(() => startWhatsApp(locationId, slotId), 3000);
+            } else {
+                sessions.delete(sessionId);
+            }
         }
     });
 
