@@ -3,11 +3,13 @@ const fs = require("fs");
 const cors = require("cors");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const express = require("express");
+const bcrypt = require("bcryptjs"); // ✅ Nuevo import para registro
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
 
-const { login, verifyToken } = require("./controllers/authController");
+// ✅ Importamos requireRole
+const { login, verifyToken, requireRole } = require("./controllers/authController");
 
 const {
     startWhatsApp,
@@ -67,6 +69,33 @@ app.use(cors({
 
 app.post("/auth/login", login);
 
+// ✅ NUEVA RUTA: Registro de usuarios (Agencias)
+app.post("/auth/register", async (req, res) => {
+    const { email, password, agencyName, role } = req.body;
+
+    if (!email || !password) return res.status(400).json({ error: "Datos incompletos" });
+
+    try {
+        const salt = await bcrypt.genSalt(10);
+        const hash = await bcrypt.hash(password, salt);
+
+        // Si el rol es 'agency', generamos un ID único para ella.
+        // Si es admin, agency_id queda en null (tiene acceso a todo).
+        const userRole = role || 'agency';
+        const agencyId = userRole === 'agency' ? `AG-${Date.now()}` : null;
+
+        const newUser = await pool.query(
+            "INSERT INTO users (email, password_hash, role, agency_id) VALUES ($1, $2, $3, $4) RETURNING id, email, role, agency_id",
+            [email, hash, userRole, agencyId]
+        );
+
+        res.json({ success: true, user: newUser.rows[0] });
+    } catch (e) {
+        if (e.code === '23505') return res.status(400).json({ error: "El email ya existe" });
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // ----------------------------------------------------------------------
 // Endpoint para AGREGAR un nuevo Slot (Protegido)
@@ -118,10 +147,6 @@ app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) =>
         await deleteSessionData(locationId, slotId);
 
         // 2. Borrar de la base de datos
-        // NOTA: deleteSessionData ya hace el DELETE en 'location_slots', 
-        // pero aseguramos por si acaso en deleteSessionData o aquí.
-        // En tu whatsappService.js actual, deleteSessionData YA borra el slot. 
-
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -131,8 +156,6 @@ app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) =>
 // ----------------------------------------------------------------------
 // Endpoint /config (Público para el index.html)
 // ----------------------------------------------------------------------
-
-
 
 app.post("/ghl/webhook", async (req, res) => {
     try {
@@ -298,13 +321,11 @@ app.get("/config", async (req, res) => {
         const { locationId } = req.query;
         const tenantStatus = await getTenantConfig(locationId);
 
-        // Obtener los slots reales de la DB
         const slotsRes = await pool.query(
             "SELECT slot_id, slot_name, phone_number FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC",
             [locationId]
         );
 
-        // Mapeamos para enviar IDs y Nombres
         const activeSlots = slotsRes.rows.map(s => ({
             id: s.slot_id,
             name: s.slot_name,
@@ -314,7 +335,7 @@ app.get("/config", async (req, res) => {
         res.json({
             is_active: tenantStatus.active,
             reason: tenantStatus.reason,
-            slots: activeSlots // <-- ENVIAMOS LA LISTA REAL, NO UN NÚMERO
+            slots: activeSlots
         });
     } catch (e) {
         res.status(500).json({ error: "Error interno" });
@@ -325,8 +346,6 @@ app.post("/ghl/app-webhook", async (req, res) => {
     try {
         const evt = req.body;
         if (evt.type === "INSTALL") {
-            // Nota: Podríamos intentar obtener el nombre aquí si GHL enviara más datos,
-            // pero usualmente solo manda IDs. La actualización de nombre sería mejor manual o via otro endpoint.
             await registerNewTenant(evt.locationId, evt.companyId);
             return res.json({ ok: true });
         }
@@ -337,18 +356,19 @@ app.post("/ghl/app-webhook", async (req, res) => {
 });
 
 // ==========================================
-// 🔒 RUTAS PROTEGIDAS (Requieren Login)
+// 🔒 RUTAS PROTEGIDAS (Requieren Login y Roles)
 // ==========================================
 
-// --- ADMIN PANEL ---
+// --- ADMIN PANEL (Solo para el Admin) ---
 
-// 1. Obtener Agencias (Actualizado para devolver nombre)
-app.get("/admin/agencies", verifyToken, async (req, res) => {
+// 1. Obtener Agencias
+// ✅ Protegido con requireRole('admin')
+app.get("/admin/agencies", verifyToken, requireRole('admin'), async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT 
                 agency_id,
-                MAX(agency_name) as agency_name, -- Obtenemos el nombre si existe
+                MAX(agency_name) as agency_name,
                 COUNT(*) as total_subaccounts,
                 SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_subaccounts
             FROM tenants 
@@ -362,8 +382,9 @@ app.get("/admin/agencies", verifyToken, async (req, res) => {
     }
 });
 
-// 2. Obtener Tenants (Actualizado para devolver nombre)
-app.get("/admin/tenants", verifyToken, async (req, res) => {
+// 2. Obtener Tenants
+// ✅ Protegido con requireRole('admin')
+app.get("/admin/tenants", verifyToken, requireRole('admin'), async (req, res) => {
     const { agencyId } = req.query;
     try {
         let query = `
@@ -384,8 +405,9 @@ app.get("/admin/tenants", verifyToken, async (req, res) => {
     }
 });
 
-// 3. Crear Tenant (Ahora acepta NOMBRES)
-app.post("/admin/tenants", verifyToken, async (req, res) => {
+// 3. Crear Tenant
+// ✅ Protegido con requireRole('admin')
+app.post("/admin/tenants", verifyToken, requireRole('admin'), async (req, res) => {
     const { locationId, planName, days, name, agencyId, agencyName } = req.body;
     try {
         const planRes = await pool.query("SELECT id FROM subscription_plans WHERE name = $1", [planName || 'trial']);
@@ -416,7 +438,8 @@ app.post("/admin/tenants", verifyToken, async (req, res) => {
 });
 
 // 4. Actualizar Tenant
-app.put("/admin/tenants/:id", verifyToken, async (req, res) => {
+// ✅ Protegido con requireRole('admin')
+app.put("/admin/tenants/:id", verifyToken, requireRole('admin'), async (req, res) => {
     const { id } = req.params;
     const { status, settings, name, agencyName } = req.body;
     try {
@@ -424,7 +447,6 @@ app.put("/admin/tenants/:id", verifyToken, async (req, res) => {
 
         if (settings) await pool.query("UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2", [JSON.stringify(settings), id]);
 
-        // Permitir actualizar nombres
         if (name) await pool.query("UPDATE tenants SET name = $1, updated_at = NOW() WHERE location_id = $2", [name, id]);
         if (agencyName) await pool.query("UPDATE tenants SET agency_name = $1, updated_at = NOW() WHERE location_id = $2", [agencyName, id]);
 
@@ -434,10 +456,32 @@ app.put("/admin/tenants/:id", verifyToken, async (req, res) => {
     }
 });
 
-// --- AGENCY PANEL ---
+// --- AGENCY PANEL (Para Agencias y Admin) ---
 
+// 5. Obtener Locations (Subcuentas)
+// ✅ Implementa Lógica de Jerarquía
 app.get("/agency/locations", verifyToken, async (req, res) => {
     const { agencyId } = req.query;
+
+    // CASO 1: Si el usuario es una AGENCIA, ignoramos el queryParam y usamos su ID del token
+    if (req.user.role === 'agency') {
+        const myAgencyId = req.user.agencyId;
+        if (!myAgencyId) return res.status(403).json({ error: "Agencia no identificada" });
+
+        try {
+            const result = await pool.query(`
+                SELECT t.location_id, t.name, t.status, t.settings, 
+                       (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
+                FROM tenants t 
+                WHERE t.agency_id = $1
+            `, [myAgencyId]);
+            return res.json(result.rows);
+        } catch (e) {
+            return res.status(500).json({ error: e.message });
+        }
+    }
+
+    // CASO 2: Si es ADMIN, puede consultar cualquier agencia por ID
     if (!agencyId) return res.status(400).json({ error: "Falta agencyId" });
     try {
         const result = await pool.query(`
@@ -452,7 +496,6 @@ app.get("/agency/locations", verifyToken, async (req, res) => {
     }
 });
 
-// ... (El resto de rutas de agency/* se mantienen igual) ...
 app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
     const { locationId } = req.params;
     try {
