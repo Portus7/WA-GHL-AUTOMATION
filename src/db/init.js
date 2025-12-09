@@ -117,6 +117,7 @@ const initDb = async () => {
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
+        agency_id VARCHAR(255),
         role VARCHAR(50) DEFAULT 'admin', -- admin, agency
         created_at TIMESTAMP DEFAULT NOW()
       );

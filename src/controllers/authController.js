@@ -18,11 +18,12 @@ async function login(req, res) {
         if (!validPass) return res.status(400).json({ error: "Contraseña incorrecta" });
 
         // Crear Token
-        const token = jwt.sign({ id: user.id, role: user.role, email: user.email }, JWT_SECRET, {
+        const token = jwt.sign({ id: user.id, role: user.role, email: user.email, agencyId: user.agency_id }, JWT_SECRET, {
             expiresIn: "24h" // El token dura 1 día
         });
 
-        res.json({ token, role: user.role, email: user.email });
+        res.json({ token, role: user.role, agencyId: user.agency_id, email: user.email });
+
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -45,4 +46,15 @@ const verifyToken = (req, res, next) => {
     }
 };
 
-module.exports = { login, verifyToken };
+const requireRole = (role) => {
+    return (req, res, next) => {
+        if (!req.user) return res.status(401).json({ error: "No autenticado" });
+        if (req.user.role !== role && req.user.role !== 'admin') {
+            // Admin siempre tiene permiso, si no, debe coincidir el rol
+            return res.status(403).json({ error: "Acceso denegado: Permisos insuficientes" });
+        }
+        next();
+    };
+};
+
+module.exports = { login, verifyToken, requireRole };
