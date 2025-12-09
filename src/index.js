@@ -254,18 +254,18 @@ app.post("/agency/sync-ghl", verifyToken, async (req, res) => {
 
     try {
         // 1. Buscar el Tenant instalado
-        const tenantRes = await pool.query("SELECT agency_id FROM tenants WHERE location_id = $1", [locationIdToVerify]);
+        //const tenantRes = await pool.query("SELECT agency_id FROM tenants WHERE location_id = $1", [locationIdToVerify]);
 
-        if (tenantRes.rows.length === 0) {
-            return res.status(404).json({ error: "Subcuenta no encontrada. Instálala primero en GHL." });
-        }
+        //if (tenantRes.rows.length === 0) {
+        //    return res.status(404).json({ error: "Subcuenta no encontrada. Instálala primero en GHL." });
+        //}
 
-        const realGhlCompanyId = tenantRes.rows[0].agency_id;
+        //const realGhlCompanyId = tenantRes.rows[0].agency_id;
 
         // 2. Actualizar Usuario con ID Real
-        await pool.query("UPDATE users SET agency_id = $1 WHERE id = $2", [realGhlCompanyId, userId]);
+        await pool.query("UPDATE users SET agency_id = $1 WHERE id = $2", [locationIdToVerify, userId]);
 
-        res.json({ success: true, newAgencyId: realGhlCompanyId });
+        res.json({ success: true, newAgencyId: locationIdToVerify });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
