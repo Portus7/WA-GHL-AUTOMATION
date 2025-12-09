@@ -149,12 +149,13 @@ app.post("/ghl/app-webhook", async (req, res) => {
                         allowMicrophone: false,
                         // 🔴 CORRECCIÓN 2: Objeto Icon requerido
                         icon: {
-                            name: "whatsapp", // Nombre del ícono (font-awesome)
+                            name: "yin-yang", // Nombre del ícono (font-awesome)
                             fontFamily: "fab" // Familia (Brands)
                         }
                     }
+                }).then((res) => {
+                    console.log("✅ Custom Menu creado exitosamente", res);
                 }).catch((err) => {
-                    // Si falla el menú, logueamos pero NO detenemos el registro
                     console.error("⚠️ Error creando Custom Menu:", err.response?.data || err.message);
                 });
 
