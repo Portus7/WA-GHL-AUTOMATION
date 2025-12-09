@@ -392,7 +392,7 @@ app.get("/status", async (req, res) => {
     res.json({ connected: s?.isConnected || false, myNumber: s?.myNumber, slotName: extra.slot_name });
 });
 
-app.post("/config-slot", verifyToken, async (req, res) => {
+app.post("/config-slot", async (req, res) => {
     try {
         await pool.query(`INSERT INTO location_slots (location_id, slot_id, slot_name) VALUES ($1, $2, $3) ON CONFLICT (location_id, slot_id) DO UPDATE SET slot_name = EXCLUDED.slot_name`, [req.body.locationId, req.body.slot, req.body.slotName]);
         res.json({ success: true });
