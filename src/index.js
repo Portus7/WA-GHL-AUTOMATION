@@ -3,12 +3,12 @@ const fs = require("fs");
 const cors = require("cors");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const express = require("express");
-const bcrypt = require("bcryptjs"); // ✅ Nuevo import para registro
+const bcrypt = require("bcryptjs"); // ✅ IMPORTANTE: Para el registro de usuarios
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
 
-// ✅ Importamos requireRole
+// ✅ Importamos requireRole para proteger rutas de admin
 const { login, verifyToken, requireRole } = require("./controllers/authController");
 
 const {
@@ -23,6 +23,7 @@ const {
     processKeywordTags,
     sendButtons
 } = require("./services/whatsappService");
+
 const {
     saveTokens,
     getTokens,
@@ -30,6 +31,7 @@ const {
     callGHLWithAgency,
     findOrCreateGHLContact
 } = require("./services/ghlService");
+
 const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/utils");
 const { parseGHLCommand } = require("./helpers/parser");
 const axios = require("axios");
@@ -64,12 +66,12 @@ app.use(cors({
 }));
 
 // ==========================================
-// 🔓 RUTAS PÚBLICAS
+// 🔓 RUTAS PÚBLICAS (Login, Registro, Webhooks)
 // ==========================================
 
 app.post("/auth/login", login);
 
-// ✅ NUEVA RUTA: Registro de usuarios (Agencias)
+// ✅ RUTA DE REGISTRO (Para nuevas Agencias)
 app.post("/auth/register", async (req, res) => {
     const { email, password, agencyName, role } = req.body;
 
@@ -79,9 +81,10 @@ app.post("/auth/register", async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hash = await bcrypt.hash(password, salt);
 
-        // Si el rol es 'agency', generamos un ID único para ella.
-        // Si es admin, agency_id queda en null (tiene acceso a todo).
         const userRole = role || 'agency';
+        // Generamos un ID de agencia. 
+        // NOTA: Para que la vinculación automática funcione, este ID debería coincidir con el Company ID de GHL.
+        // Si es un registro manual, se genera uno nuevo.
         const agencyId = userRole === 'agency' ? `AG-${Date.now()}` : null;
 
         const newUser = await pool.query(
@@ -97,72 +100,38 @@ app.post("/auth/register", async (req, res) => {
     }
 });
 
-// ----------------------------------------------------------------------
-// Endpoint para AGREGAR un nuevo Slot (Protegido)
-// ----------------------------------------------------------------------
-app.post("/agency/add-slot", verifyToken, async (req, res) => {
-    const { locationId } = req.body;
+// ✅ WEBHOOK DE INSTALACIÓN (GHL Marketplace)
+// Vincula la subcuenta (Location) con la Agencia (Company) automáticamente
+app.post("/ghl/app-webhook", async (req, res) => {
     try {
-        // 1. Obtener el ID más alto actual para saber cuál sigue
-        const resSlots = await pool.query(
-            "SELECT slot_id FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC",
-            [locationId]
-        );
+        const evt = req.body;
+        console.log("🔔 Webhook App recibido:", JSON.stringify(evt));
 
-        const existingIds = resSlots.rows.map(r => r.slot_id);
-
-        // Algoritmo simple para encontrar el primer hueco libre o agregar al final
-        let newSlotId = 1;
-        while (existingIds.includes(newSlotId)) {
-            newSlotId++;
+        if (evt.type === "INSTALL") {
+            await registerNewTenant(evt.locationId, evt.companyId);
+            return res.json({ ok: true });
+        }
+        if (evt.type === "UNINSTALL") {
+            console.log(`🗑️ Desinstalación detectada: ${evt.locationId}`);
+            await pool.query("UPDATE tenants SET status = 'cancelled' WHERE location_id = $1", [evt.locationId]);
+            return res.json({ ok: true });
         }
 
-        // Límite de seguridad (opcional, ej: max 10 slots)
-        if (newSlotId > 10) {
-            return res.status(400).json({ error: "Límite de dispositivos alcanzado" });
-        }
-
-        // 2. Insertar en DB
-        await pool.query(
-            "INSERT INTO location_slots (location_id, slot_id, slot_name, priority) VALUES ($1, $2, $3, $4)",
-            [locationId, newSlotId, `Dispositivo #${newSlotId}`, newSlotId]
-        );
-
-        // Devolver el nuevo slot para actualizar el frontend
-        res.json({ success: true, slot_id: newSlotId, slot_name: `Dispositivo #${newSlotId}` });
-
+        res.json({ ignored: true });
     } catch (e) {
-        console.error(e);
-        res.status(500).json({ error: e.message });
+        console.error("Error en app-webhook:", e);
+        res.status(500).json({ error: "Error procesando webhook" });
     }
 });
 
-// ----------------------------------------------------------------------
-// Endpoint para ELIMINAR un Slot (Protegido)
-// ----------------------------------------------------------------------
-app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) => {
-    const { locationId, slotId } = req.params;
-    try {
-        // 1. Desconectar sesión de WhatsApp si existe
-        await deleteSessionData(locationId, slotId);
-
-        // 2. Borrar de la base de datos
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// ----------------------------------------------------------------------
-// Endpoint /config (Público para el index.html)
-// ----------------------------------------------------------------------
-
+// ✅ WEBHOOK MENSAJERÍA (Outbound GHL -> WhatsApp)
 app.post("/ghl/webhook", async (req, res) => {
     try {
         const { locationId, phone, message, type, attachments } = req.body;
         if (!locationId || !phone || (!message && !attachments))
             return res.json({ ignored: true });
 
+        // Evitar bucles infinitos si nosotros mismos enviamos el mensaje
         if (message && message.includes("[Enviado desde otro dispositivo]"))
             return res.json({ ignored: true });
 
@@ -184,6 +153,7 @@ app.post("/ghl/webhook", async (req, res) => {
             const clientPhone = normalizePhone(phone);
             let dbConfigs = await getLocationSlotsConfig(locationId);
 
+            // Buscar un slot conectado
             let availableCandidates = dbConfigs
                 .map((conf) => ({
                     slot: conf.slot_id,
@@ -197,8 +167,7 @@ app.post("/ghl/webhook", async (req, res) => {
             if (availableCandidates.length === 0)
                 return res.status(200).json({ error: "No connected devices" });
 
-            let selectedCandidate = availableCandidates[0];
-
+            let selectedCandidate = availableCandidates[0]; // Simple: elige el primero disponible
             const sessionToUse = selectedCandidate.session;
             const jid = clientPhone.replace(/\D/g, "").replace("+", "") + "@s.whatsapp.net";
 
@@ -225,6 +194,7 @@ app.post("/ghl/webhook", async (req, res) => {
                     }
                 }
 
+                // Registrar contacto y tags
                 const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
                 if (contact && contact.id) {
                     await processKeywordTags(locationId, contact.id, finalMessage, false);
@@ -243,6 +213,149 @@ app.post("/ghl/webhook", async (req, res) => {
         res.status(500).json({ error: "Error" });
     }
 });
+
+// ==========================================
+// 🔐 RUTAS PROTEGIDAS (Panel de Agencia / Admin)
+// ==========================================
+
+// 1. Obtener Subcuentas (Con filtro de Jerarquía)
+app.get("/agency/locations", verifyToken, async (req, res) => {
+    const { agencyId } = req.query;
+
+    // Si es AGENCIA, forzamos su ID (evitamos ver datos ajenos)
+    if (req.user.role === 'agency') {
+        const myAgencyId = req.user.agencyId;
+        if (!myAgencyId) return res.status(403).json({ error: "Agencia no identificada" });
+
+        try {
+            const result = await pool.query(`
+                SELECT t.location_id, t.name, t.status, t.settings, 
+                       (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
+                FROM tenants t 
+                WHERE t.agency_id = $1
+            `, [myAgencyId]);
+            return res.json(result.rows);
+        } catch (e) {
+            return res.status(500).json({ error: e.message });
+        }
+    }
+
+    // Si es ADMIN, puede ver lo que quiera (si envía el query param)
+    if (!agencyId) return res.status(400).json({ error: "Falta agencyId" });
+    try {
+        const result = await pool.query(`
+            SELECT t.location_id, t.name, t.status, t.settings, 
+                   (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
+            FROM tenants t 
+            WHERE t.agency_id = $1
+        `, [agencyId]);
+        res.json(result.rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 2. Agregar Slot
+app.post("/agency/add-slot", verifyToken, async (req, res) => {
+    const { locationId } = req.body;
+    try {
+        const resSlots = await pool.query(
+            "SELECT slot_id FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC",
+            [locationId]
+        );
+
+        const existingIds = resSlots.rows.map(r => r.slot_id);
+        let newSlotId = 1;
+        while (existingIds.includes(newSlotId)) {
+            newSlotId++;
+        }
+
+        if (newSlotId > 10) {
+            return res.status(400).json({ error: "Límite de dispositivos alcanzado" });
+        }
+
+        await pool.query(
+            "INSERT INTO location_slots (location_id, slot_id, slot_name, priority) VALUES ($1, $2, $3, $4)",
+            [locationId, newSlotId, `Dispositivo #${newSlotId}`, newSlotId]
+        );
+
+        res.json({ success: true, slot_id: newSlotId, slot_name: `Dispositivo #${newSlotId}` });
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 3. Eliminar Slot
+app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) => {
+    const { locationId, slotId } = req.params;
+    try {
+        await deleteSessionData(locationId, slotId);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 4. Detalles de Location (Configuración, Keywords, Slots)
+app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
+    const { locationId } = req.params;
+    try {
+        const [slotsRes, keywordsRes, tenantRes] = await Promise.all([
+            pool.query("SELECT * FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC", [locationId]),
+            pool.query("SELECT * FROM keyword_tags WHERE location_id = $1 ORDER BY created_at DESC", [locationId]),
+            pool.query("SELECT settings, name FROM tenants WHERE location_id = $1", [locationId])
+        ]);
+        res.json({
+            slots: slotsRes.rows,
+            keywords: keywordsRes.rows,
+            settings: tenantRes.rows[0]?.settings || {},
+            name: tenantRes.rows[0]?.name
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post("/agency/keywords", verifyToken, async (req, res) => {
+    const { locationId, keyword, tag } = req.body;
+    try {
+        const result = await pool.query(
+            "INSERT INTO keyword_tags (location_id, keyword, tag) VALUES ($1, $2, $3) RETURNING *",
+            [locationId, keyword.toLowerCase(), tag]
+        );
+        res.json(result.rows[0]);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete("/agency/keywords/:id", verifyToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.query("DELETE FROM keyword_tags WHERE id = $1", [id]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
+    const { locationId } = req.params;
+    const { settings } = req.body;
+    try {
+        await pool.query(
+            "UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2",
+            [JSON.stringify(settings), locationId]
+        );
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- RUTAS PÚBLICAS/OPERATIVAS (Para Iframe o Frontend sin auth directa en endpoints específicos) ---
 
 app.post("/start-whatsapp", async (req, res) => {
     const { locationId, slot } = req.query;
@@ -342,27 +455,10 @@ app.get("/config", async (req, res) => {
     }
 });
 
-app.post("/ghl/app-webhook", async (req, res) => {
-    try {
-        const evt = req.body;
-        if (evt.type === "INSTALL") {
-            await registerNewTenant(evt.locationId, evt.companyId);
-            return res.json({ ok: true });
-        }
-        res.json({ ignored: true });
-    } catch (e) {
-        res.status(500).json({ error: "Error" });
-    }
-});
-
 // ==========================================
-// 🔒 RUTAS PROTEGIDAS (Requieren Login y Roles)
+// 🔐 RUTAS ADMIN PANEL (Solo Admin)
 // ==========================================
 
-// --- ADMIN PANEL (Solo para el Admin) ---
-
-// 1. Obtener Agencias
-// ✅ Protegido con requireRole('admin')
 app.get("/admin/agencies", verifyToken, requireRole('admin'), async (req, res) => {
     try {
         const result = await pool.query(`
@@ -382,8 +478,6 @@ app.get("/admin/agencies", verifyToken, requireRole('admin'), async (req, res) =
     }
 });
 
-// 2. Obtener Tenants
-// ✅ Protegido con requireRole('admin')
 app.get("/admin/tenants", verifyToken, requireRole('admin'), async (req, res) => {
     const { agencyId } = req.query;
     try {
@@ -405,8 +499,6 @@ app.get("/admin/tenants", verifyToken, requireRole('admin'), async (req, res) =>
     }
 });
 
-// 3. Crear Tenant
-// ✅ Protegido con requireRole('admin')
 app.post("/admin/tenants", verifyToken, requireRole('admin'), async (req, res) => {
     const { locationId, planName, days, name, agencyId, agencyName } = req.body;
     try {
@@ -437,115 +529,15 @@ app.post("/admin/tenants", verifyToken, requireRole('admin'), async (req, res) =
     }
 });
 
-// 4. Actualizar Tenant
-// ✅ Protegido con requireRole('admin')
 app.put("/admin/tenants/:id", verifyToken, requireRole('admin'), async (req, res) => {
     const { id } = req.params;
     const { status, settings, name, agencyName } = req.body;
     try {
         if (status) await pool.query("UPDATE tenants SET status = $1, updated_at = NOW() WHERE location_id = $2", [status, id]);
-
         if (settings) await pool.query("UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2", [JSON.stringify(settings), id]);
-
         if (name) await pool.query("UPDATE tenants SET name = $1, updated_at = NOW() WHERE location_id = $2", [name, id]);
         if (agencyName) await pool.query("UPDATE tenants SET agency_name = $1, updated_at = NOW() WHERE location_id = $2", [agencyName, id]);
 
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// --- AGENCY PANEL (Para Agencias y Admin) ---
-
-// 5. Obtener Locations (Subcuentas)
-// ✅ Implementa Lógica de Jerarquía
-app.get("/agency/locations", verifyToken, async (req, res) => {
-    const { agencyId } = req.query;
-
-    // CASO 1: Si el usuario es una AGENCIA, ignoramos el queryParam y usamos su ID del token
-    if (req.user.role === 'agency') {
-        const myAgencyId = req.user.agencyId;
-        if (!myAgencyId) return res.status(403).json({ error: "Agencia no identificada" });
-
-        try {
-            const result = await pool.query(`
-                SELECT t.location_id, t.name, t.status, t.settings, 
-                       (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
-                FROM tenants t 
-                WHERE t.agency_id = $1
-            `, [myAgencyId]);
-            return res.json(result.rows);
-        } catch (e) {
-            return res.status(500).json({ error: e.message });
-        }
-    }
-
-    // CASO 2: Si es ADMIN, puede consultar cualquier agencia por ID
-    if (!agencyId) return res.status(400).json({ error: "Falta agencyId" });
-    try {
-        const result = await pool.query(`
-            SELECT t.location_id, t.name, t.status, t.settings, 
-                   (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
-            FROM tenants t 
-            WHERE t.agency_id = $1
-        `, [agencyId]);
-        res.json(result.rows);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
-    const { locationId } = req.params;
-    try {
-        const [slotsRes, keywordsRes, tenantRes] = await Promise.all([
-            pool.query("SELECT * FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC", [locationId]),
-            pool.query("SELECT * FROM keyword_tags WHERE location_id = $1 ORDER BY created_at DESC", [locationId]),
-            pool.query("SELECT settings, name FROM tenants WHERE location_id = $1", [locationId])
-        ]);
-        res.json({
-            slots: slotsRes.rows,
-            keywords: keywordsRes.rows,
-            settings: tenantRes.rows[0]?.settings || {},
-            name: tenantRes.rows[0]?.name
-        });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post("/agency/keywords", verifyToken, async (req, res) => {
-    const { locationId, keyword, tag } = req.body;
-    try {
-        const result = await pool.query(
-            "INSERT INTO keyword_tags (location_id, keyword, tag) VALUES ($1, $2, $3) RETURNING *",
-            [locationId, keyword.toLowerCase(), tag]
-        );
-        res.json(result.rows[0]);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.delete("/agency/keywords/:id", verifyToken, async (req, res) => {
-    const { id } = req.params;
-    try {
-        await pool.query("DELETE FROM keyword_tags WHERE id = $1", [id]);
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
-    const { locationId } = req.params;
-    const { settings } = req.body;
-    try {
-        await pool.query(
-            "UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2",
-            [JSON.stringify(settings), locationId]
-        );
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });

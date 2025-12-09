@@ -1,11 +1,10 @@
-// src/controllers/authController.js
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const { pool } = require("../config/db");
 
 const JWT_SECRET = process.env.JWT_SECRET || "secreto_super_seguro_cambiar_en_env";
 
-// 1. Función de Login
+// 1. Login
 async function login(req, res) {
     const { email, password } = req.body;
     try {
@@ -17,40 +16,58 @@ async function login(req, res) {
         const validPass = await bcrypt.compare(password, user.password_hash);
         if (!validPass) return res.status(400).json({ error: "Contraseña incorrecta" });
 
-        // Crear Token
-        const token = jwt.sign({ id: user.id, role: user.role, email: user.email, agencyId: user.agency_id }, JWT_SECRET, {
-            expiresIn: "24h" // El token dura 1 día
+        // Incluimos agencyId en el token
+        const tokenPayload = {
+            id: user.id,
+            role: user.role,
+            email: user.email,
+            agencyId: user.agency_id
+        };
+
+        const token = jwt.sign(tokenPayload, JWT_SECRET, {
+            expiresIn: "24h"
         });
 
-        res.json({ token, role: user.role, agencyId: user.agency_id, email: user.email });
+        // Devolvemos agencyId para el Frontend
+        res.json({
+            token,
+            role: user.role,
+            email: user.email,
+            agencyId: user.agency_id
+        });
 
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 }
 
-// 2. Middleware de Verificación (Reemplaza a tu adminAuth antiguo)
+// 2. Middleware Verificar Token
 const verifyToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    // El header viene como "Bearer eyJhbGci..."
     const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) return res.status(401).json({ error: "Acceso denegado. Token faltante." });
 
     try {
         const verified = jwt.verify(token, JWT_SECRET);
-        req.user = verified; // Guardamos los datos del usuario en la petición
+        req.user = verified;
         next();
     } catch (error) {
         res.status(403).json({ error: "Token inválido o expirado" });
     }
 };
 
+// 3. Middleware Roles
 const requireRole = (role) => {
     return (req, res, next) => {
         if (!req.user) return res.status(401).json({ error: "No autenticado" });
-        if (req.user.role !== role && req.user.role !== 'admin') {
-            // Admin siempre tiene permiso, si no, debe coincidir el rol
+
+        if (req.user.role === 'admin') {
+            next();
+            return;
+        }
+
+        if (req.user.role !== role) {
             return res.status(403).json({ error: "Acceso denegado: Permisos insuficientes" });
         }
         next();

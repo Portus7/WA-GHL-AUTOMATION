@@ -6,19 +6,19 @@ const initDb = async () => {
   try {
     console.log("🛠️ Inicializando Base de Datos SaaS...");
 
-    // 1. Tabla de PLANES (Para gestionar qué ofreces)
+    // 1. Tabla de PLANES
     await client.query(`
       CREATE TABLE IF NOT EXISTS subscription_plans (
         id SERIAL PRIMARY KEY,
-        name VARCHAR(50) NOT NULL UNIQUE, -- 'free_trial', 'basic', 'pro'
+        name VARCHAR(50) NOT NULL UNIQUE,
         price DECIMAL(10, 2) DEFAULT 0,
-        limits JSONB DEFAULT '{}', -- { "max_slots": 1, "monthly_msgs": 1000 }
-        features JSONB DEFAULT '{}', -- { "white_label": false, "transcription": true }
+        limits JSONB DEFAULT '{}',
+        features JSONB DEFAULT '{}',
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    // Inserción de planes por defecto (Seed)
+    // Seed de planes
     await client.query(`
       INSERT INTO subscription_plans (name, price, features) 
       VALUES 
@@ -27,8 +27,7 @@ const initDb = async () => {
       ON CONFLICT (name) DO NOTHING;
     `);
 
-    // 2. Tabla de CLIENTES (TENANTS) - El corazón de tu SaaS
-    // Aquí guardamos la configuración específica de cada Location
+    // 2. Tabla de CLIENTES (TENANTS) - Con soporte para Agency ID
     await client.query(`
       CREATE TABLE IF NOT EXISTS tenants (
         location_id VARCHAR(255) PRIMARY KEY,
@@ -51,7 +50,6 @@ const initDb = async () => {
     `);
 
     // 3. Tabla Tokens GHL (auth_db)
-    // Nota: Podrías fusionarla con tenants, pero mantenerla separada es más seguro/limpio
     await client.query(`
       CREATE TABLE IF NOT EXISTS auth_db (
         locationid VARCHAR(255) PRIMARY KEY REFERENCES tenants(location_id) ON DELETE CASCADE,
@@ -100,7 +98,7 @@ const initDb = async () => {
       );
     `);
 
-    // 7. Tabla Keywords (Tags Automáticos)
+    // 7. Tabla Keywords
     await client.query(`
       CREATE TABLE IF NOT EXISTS keyword_tags (
         id SERIAL PRIMARY KEY,
@@ -112,20 +110,20 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_keyword_tags_location ON keyword_tags(location_id);
     `);
 
+    // 8. Tabla de USUARIOS (Con agency_id para jerarquía)
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
-        agency_id VARCHAR(255),
         role VARCHAR(50) DEFAULT 'admin', -- admin, agency
+        agency_id VARCHAR(255),           -- ID de la Agencia (GHL Company ID)
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    // CREAR USUARIO ADMIN POR DEFECTO (Si no existe)
-    // Email: admin@clicandapp.com
-    // Pass: admin123 (Se guardará encriptada)
+
+    // CREAR USUARIO ADMIN POR DEFECTO
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash("admin123", salt);
 

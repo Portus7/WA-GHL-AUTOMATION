@@ -8,70 +8,74 @@ async function getTenantConfig(locationId) {
             [locationId]
         );
 
-        // Si no existe, asumimos que es nuevo o hubo un error de registro
         if (res.rows.length === 0) return { active: false, reason: "not_found", settings: {} };
 
         const tenant = res.rows[0];
         const now = new Date();
 
-        // Lógica de Bloqueo por Trial Vencido
+        // Lógica de Bloqueo
         if (tenant.status === 'trial' && new Date(tenant.trial_ends_at) < now) {
-            // Opcional: Actualizar DB a 'suspended'
-            const update = "UPDATE tenants SET status = 'suspended' WHERE location_id = $1";
-            await pool.query(update, [locationId]);
+            await pool.query("UPDATE tenants SET status = 'suspended' WHERE location_id = $1", [locationId]);
             return { active: false, reason: "trial_expired", settings: tenant.settings };
         }
 
-        // Lógica de Bloqueo por Falta de Pago (Suspended)
         if (tenant.status === 'suspended' || tenant.status === 'cancelled') {
             return { active: false, reason: "subscription_inactive", settings: tenant.settings };
         }
 
-        // Si pasa todo, está activo
         return { active: true, settings: tenant.settings || {} };
 
     } catch (e) {
         console.error(`❌ Error obteniendo tenant ${locationId}:`, e.message);
-        // En caso de error de DB, mejor denegar acceso por seguridad o permitir con defaults
         return { active: false, reason: "db_error", settings: {} };
     }
 }
 
-// 2. Registrar un nuevo cliente con TRIAL (Se usa al instalar la App)
+// 2. Registrar un nuevo cliente (Webhook INSTALL)
+// Se llama cuando alguien instala la app desde el Marketplace
 async function registerNewTenant(locationId, companyId) {
     try {
-        const trialDays = 5; // Configurable
+        console.log(`📥 Procesando instalación para Location: ${locationId}, Agency: ${companyId}`);
+
+        const trialDays = 14; // Damos 14 días de prueba
         const trialEnd = new Date();
-        const planId = 1;
         trialEnd.setDate(trialEnd.getDate() + trialDays);
 
-        // Configuración por defecto (Features iniciales)
+        // Asignamos plan por defecto (asegurarse que ID 1 exista en subscription_plans)
+        const planId = 1;
+
+        // Feature flags por defecto
         const defaultSettings = {
-            show_source_label: true,        // Mostrar "Source: +1234"
-            create_unknown_contacts: true,  // Crear contactos nuevos
-            transcribe_audio: true          // Permitir IA
+            show_source_label: true,
+            create_unknown_contacts: true,
+            transcribe_audio: true
         };
 
-        // Obtenemos ID del plan trial (asegurate de haber creado el plan en DB init)
-        // O hardcodeamos un plan por defecto si no quieres consultar la tabla planes
+        // UPSERT: Si ya existe, actualizamos para reactivarlo o extender trial
+        // IMPORTANTE: Guardamos companyId como agency_id para vincularlo al dueño
         const sql = `
-      INSERT INTO tenants (location_id, status, trial_ends_at, plan_id, settings, created_at, agency_id)
-      VALUES ($1, 'active', $2, $3, $4::jsonb, NOW(), $5)
-      ON CONFLICT (location_id) DO UPDATE SET status = 'trial', trial_ends_at = $2, plan_id = $3, settings = $4::jsonb
-    `;
+            INSERT INTO tenants (location_id, status, trial_ends_at, plan_id, settings, created_at, agency_id)
+            VALUES ($1, 'active', $2, $3, $4::jsonb, NOW(), $5)
+            ON CONFLICT (location_id) 
+            DO UPDATE SET 
+                status = 'active', -- Reactivamos si estaba inactivo
+                agency_id = EXCLUDED.agency_id, -- Actualizamos agencia por si cambió
+                updated_at = NOW()
+        `;
 
         await pool.query(sql, [locationId, trialEnd, planId, JSON.stringify(defaultSettings), companyId]);
-        console.log(`🎉 Nuevo Tenant Registrado: ${locationId} (Trial hasta ${trialEnd.toISOString()})`);
+
+        console.log(`🎉 Tenant Registrado/Actualizado: ${locationId} (Vinculado a Agencia: ${companyId})`);
 
     } catch (e) {
-        console.error("❌ Error registrando tenant:", e.message);
+        console.error("❌ Error registrando tenant en DB:", e.message);
+        throw e;
     }
 }
 
-// 3. Actualizar configuraciones (Para tu futuro Frontend de usuario)
+// 3. Actualizar configuraciones
 async function updateTenantSettings(locationId, newSettings) {
-    // Implementarás esto cuando hagas tu panel de control
-    // UPDATE tenants SET settings = ...
+    // Implementación futura
 }
 
 module.exports = {
