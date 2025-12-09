@@ -1,193 +1,536 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
   <meta charset="UTF-8" />
-  <title>Conectar WhatsApp</title>
+  <title>WhatsApp Multi-Device</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-  <!-- Estilos ultra simples -->
   <style>
     body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f5f5f5;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f3f4f6;
       display: flex;
+      flex-direction: column;
       align-items: center;
-      justify-content: center;
-      height: 100vh;
+      padding: 20px;
       margin: 0;
+      min-height: 100vh;
     }
 
-    .card {
-      background: white;
-      padding: 24px;
-      border-radius: 16px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
-      text-align: center;
+    .container {
       width: 100%;
-      max-width: 360px;
+      max-width: 600px;
     }
 
     h1 {
-      font-size: 1.3rem;
-      margin-bottom: 12px;
+      text-align: center;
+      color: #1f2937;
+      margin-bottom: 20px;
+      font-size: 1.5rem;
     }
 
-    p {
-      font-size: 0.9rem;
-      color: #555;
-      margin-bottom: 16px;
+    /* Cards */
+    .slot-card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+      border: 1px solid #e5e7eb;
     }
 
-    button {
+    .slot-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    /* Title Editable Area */
+    .title-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .slot-title {
+      font-weight: 700;
+      font-size: 1.1rem;
+      color: #374151;
+    }
+
+    .edit-btn {
+      background: none;
       border: none;
-      padding: 10px 18px;
-      border-radius: 999px;
-      font-size: 0.95rem;
       cursor: pointer;
-      background: #2563eb;
-      color: white;
+      color: #9ca3af;
+      padding: 4px;
+      transition: color 0.2s;
+    }
+
+    .edit-btn:hover {
+      color: #4f46e5;
+    }
+
+    /* Badges & Info */
+    .badge {
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .badge-off {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .badge-on {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .meta-info {
+      font-size: 0.85rem;
+      color: #6b7280;
+      margin-bottom: 15px;
+      background: #f9fafb;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #f3f4f6;
+      display: none;
+    }
+
+    .tag {
+      background: #e0f2fe;
+      color: #0369a1;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-right: 5px;
+      font-size: 0.75rem;
+      border: 1px solid #bae6fd;
       font-weight: 600;
     }
 
-    button:disabled {
+    /* Buttons */
+    .btn {
+      width: 100%;
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: #25D366;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #1da851;
+    }
+
+    .btn-danger {
+      background: #fff;
+      color: #ef4444;
+      border: 1px solid #fecaca;
+      margin-top: 10px;
+    }
+
+    .btn-danger:hover {
+      background: #fef2f2;
+      border-color: #ef4444;
+    }
+
+    .btn:disabled {
       opacity: 0.6;
-      cursor: default;
+      cursor: not-allowed;
     }
 
-    #message {
-      margin-top: 12px;
-      font-size: 0.85rem;
-      color: #444;
-      min-height: 1em;
-    }
-
-    #qr {
-      margin-top: 16px;
+    /* QR Area */
+    .qr-area {
+      margin-top: 15px;
       display: flex;
+      flex-direction: column;
+      align-items: center;
+      display: none;
+    }
+
+    .qr-area.active {
+      display: flex;
+    }
+
+    .qr-canvas {
+      margin: 15px 0;
+      border: 4px solid #fff;
+      padding: 10px;
+      border-radius: 12px;
+      background: white;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+
+    .status-msg {
+      font-size: 0.9rem;
+      color: #4b5563;
+      margin-bottom: 5px;
+    }
+
+    /* Blocked Screen */
+    .blocked-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #f3f4f6;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
       justify-content: center;
+      padding: 20px;
+    }
+
+    .blocked-card {
+      background: white;
+      max-width: 450px;
+      width: 100%;
+      padding: 40px;
+      border-radius: 16px;
+      text-align: center;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      border: 1px solid #e5e7eb;
+    }
+
+    .icon-lock {
+      font-size: 3rem;
+      margin-bottom: 20px;
+      display: block;
+    }
+
+    .blocked-title {
+      font-size: 1.5rem;
+      font-weight: 800;
+      color: #1f2937;
+      margin: 0 0 10px 0;
+    }
+
+    .blocked-msg {
+      color: #6b7280;
+      font-size: 1rem;
+      line-height: 1.5;
+      margin-bottom: 25px;
+    }
+
+    .btn-contact {
+      background: #4f46e5;
+      color: white;
+      text-decoration: none;
+      display: inline-block;
+      padding: 10px 20px;
+      border-radius: 8px;
     }
   </style>
-
-  <!-- Librería pequeña para generar QR en el navegador -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
+
 <body>
-  <div class="card">
-    <h1>Conectar WhatsApp</h1>
-    <p>
-      Haz clic en el botón para iniciar la conexión y generar el código QR.
-      Luego escanéalo con la app de WhatsApp.
-    </p>
 
-    <!-- ÚNICO BOTÓN -->
-    <button id="btn-connect">Conectar WhatsApp</button>
-
-    <div id="message"></div>
-    <div id="qr"></div>
+  <div id="loader-view" class="container">
+    <div style="text-align:center; margin-top: 50px;">
+      <div style="margin-bottom: 15px; font-size: 2rem;">⌛</div>
+      <div style="color:#6b7280;">Verificando suscripción...</div>
+    </div>
   </div>
 
-<script>
-  const btn = document.getElementById("btn-connect");
-  const msg = document.getElementById("message");
-  const qrContainer = document.getElementById("qr");
+  <div id="app-view" class="container" style="display: none;">
+    <h1>Gestión de WhatsApp</h1>
+    <div id="slots-container"></div>
+  </div>
 
-  let qrPolling = null;
-  let statusPolling = null;
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const locationId = params.get("location_id") || params.get("locationId");
 
-  btn.addEventListener("click", async () => {
-    // limpiar estado anterior
-    qrContainer.innerHTML = "";
-    msg.textContent = "";
+    if (!locationId) document.body.innerHTML = "<h3 style='text-align:center; margin-top:50px; color:red'>Error Fatal: Falta location_id</h3>";
 
-    if (qrPolling) {
-      clearInterval(qrPolling);
-      qrPolling = null;
-    }
-    if (statusPolling) {
-      clearInterval(statusPolling);
-      statusPolling = null;
-    }
+    const appView = document.getElementById("app-view");
+    const loaderView = document.getElementById("loader-view");
+    const container = document.getElementById("slots-container");
+    const activeConnections = new Set();
 
-    btn.disabled = true;
-    msg.textContent = "Iniciando conexión con WhatsApp...";
+    async function init() {
+      try {
+        const confRes = await fetch(`/config?locationId=${locationId}`);
+        if (!confRes.ok) throw new Error("Error de conexión");
+        const conf = await confRes.json();
 
-    try {
-      const res = await fetch("/start-whatsapp", {
-        method: "POST",
-      });
-      if (!res.ok) {
-        throw new Error("No se pudo iniciar la conexión");
+        if (conf.is_active === false) {
+          showBlockedScreen(conf.reason);
+          return;
+        }
+
+        loaderView.style.display = "none";
+        appView.style.display = "block";
+
+        // MODIFICACIÓN: Pasamos la lista de slots real, no un número
+        renderSlots(conf.slots || []);
+
+        setInterval(syncAllSlots, 5000);
+
+      } catch (e) {
+        console.error(e);
+        loaderView.innerHTML = "<h3 style='color:red; text-align:center'>Error al cargar.</h3>";
       }
-
-      msg.textContent = "Conexión iniciada. Esperando código QR...";
-
-      // 🔁 Consultar cada 3s el QR
-      qrPolling = setInterval(checkQR, 3000);
-
-      // 🔁 Consultar estado de conexión
-      statusPolling = setInterval(checkStatus, 3000);
-    } catch (err) {
-      console.error(err);
-      msg.textContent =
-        "Error iniciando la conexión. Revisa la consola del servidor.";
-      btn.disabled = false;
     }
-  });
 
-  async function checkQR() {
-    try {
-      // 👇 bust de caché en el navegador
-      const res = await fetch("/qr?ts=" + Date.now(), {
-        cache: "no-store",
-      });
+    function showBlockedScreen(reason) {
+      let title = "Cuenta Inactiva";
+      let msg = "Su cuenta no se encuentra activa.";
+      let icon = "🔒";
+      if (reason === "trial_expired") { title = "Periodo de Prueba Finalizado"; msg = "Su trial ha vencido."; icon = "⏳"; }
+      else if (reason === "subscription_inactive") { title = "Servicio Suspendido"; msg = "Problema con la suscripción."; icon = "⛔"; }
 
-      if (!res.ok) {
-        // 404 => aún no hay QR o se limpió al conectar
+      document.body.innerHTML = `
+        <div class="blocked-screen">
+            <div class="blocked-card">
+                <div class="icon-lock">${icon}</div>
+                <h2 class="blocked-title">${title}</h2>
+                <p class="blocked-msg">${msg}</p>
+                <a href="#" class="btn btn-contact">Contactar Soporte</a>
+            </div>
+        </div>`;
+    }
+
+    // MODIFICACIÓN: Recibe array de slots, no un número total
+    function renderSlots(slotsArray) {
+      container.innerHTML = "";
+
+      if (slotsArray.length === 0) {
+        container.innerHTML = "<p style='text-align:center; color:#6b7280; padding:20px'>No hay dispositivos configurados. Contacte a su administrador o agencia.</p>";
         return;
       }
 
-      const data = await res.json();
-      const qrText = data.qr;
+      slotsArray.forEach(slot => {
+        const i = slot.id; // ID real de la base de datos
+        const currentName = slot.name || `Dispositivo #${i}`;
 
-      console.log("QR recibido desde backend:", qrText.substring(0, 20) + "...");
+        const html = `
+        <div class="slot-card" id="card-${i}" data-slot-id="${i}">
+          <div class="slot-header">
+            <div class="title-wrapper">
+                <div class="slot-title" id="title-text-${i}">${currentName}</div>
+                <button class="edit-btn" onclick="editSlotName(${i})" title="Editar nombre">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                </button>
+            </div>
+            <div id="badge-${i}" class="badge badge-off">Desconectado</div>
+          </div>
 
-      // Redibujar siempre el QR actual
-      qrContainer.innerHTML = "";
-      new QRCode(qrContainer, {
-        text: qrText,
-        width: 256,
-        height: 256,
+          <div id="meta-${i}" class="meta-info">
+             <div>Prioridad: <strong id="prio-val-${i}">-</strong></div>
+             <div style="margin-top:5px">Tags: <span id="tags-list-${i}"></span></div>
+          </div>
+
+          <div id="connected-view-${i}" style="display:none">
+             <div style="text-align:center; margin: 20px 0;">
+               <div style="font-size: 1.3rem; font-weight:bold; color:#111827" id="phone-${i}">...</div>
+               <small style="color:#059669">● Sincronizado</small>
+             </div>
+             <button class="btn btn-danger" onclick="disconnect(${i})">Cerrar Sesión</button>
+          </div>
+
+          <div id="disconnected-view-${i}">
+             <button id="btn-${i}" class="btn btn-primary" onclick="startConnect(${i})">Vincular WhatsApp</button>
+             <div id="qr-area-${i}" class="qr-area">
+                <span id="msg-${i}" class="status-msg">Solicitando código QR...</span>
+                <div id="qr-canvas-${i}" class="qr-canvas"></div>
+             </div>
+          </div>
+        </div>
+      `;
+        container.insertAdjacentHTML('beforeend', html);
+
+        // Verificamos estado inicial
+        checkStatus(i);
       });
-
-      msg.textContent = "Escanea este código QR con la app de WhatsApp.";
-    } catch (err) {
-      console.error(err);
     }
-  }
 
-  async function checkStatus() {
-    try {
-      const res = await fetch("/status", { cache: "no-store" });
-      if (!res.ok) return;
+    async function editSlotName(slot) {
+      const currentName = document.getElementById(`title-text-${slot}`).textContent;
+      const newName = prompt("Ingresa el nombre para este dispositivo (Ej: Ventas, Soporte):", currentName);
 
-      const data = await res.json();
-      if (data.whatsappConnected) {
-        console.log(data)
-        msg.textContent = "✅ WhatsApp conectado.";
-        if (qrPolling) clearInterval(qrPolling);
-        if (statusPolling) clearInterval(statusPolling);
-        qrPolling = null;
-        statusPolling = null;
-        btn.disabled = false;
+      if (newName && newName.trim() !== "" && newName !== currentName) {
+        try {
+          // Actualización optimista (UI primero)
+          document.getElementById(`title-text-${slot}`).textContent = newName;
 
-        // opcional: limpiar el QR cuando ya está conectado
-        qrContainer.innerHTML = "";
+          // Guardar en Backend
+          const res = await fetch("/config-slot", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              locationId,
+              slot,
+              slotName: newName
+            })
+          });
+
+          if (!res.ok) throw new Error("Error al guardar");
+
+        } catch (e) {
+          alert("No se pudo guardar el nombre.");
+          document.getElementById(`title-text-${slot}`).textContent = currentName; // Revertir
+        }
       }
-    } catch (err) {
-      console.error(err);
     }
-  }
-</script>
 
+    function syncAllSlots() {
+      // MODIFICACIÓN: Buscar por atributo data-slot-id
+      const cards = document.querySelectorAll('.slot-card');
+      cards.forEach(card => {
+        const slotId = card.getAttribute('data-slot-id');
+        if (slotId && !activeConnections.has(parseInt(slotId))) {
+          checkStatus(slotId);
+        }
+      });
+    }
+
+    async function checkStatus(slot) {
+      try {
+        const res = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
+        const data = await res.json();
+        updateUI(slot, data.connected, data.myNumber, data.priority, data.tags, data.slotName);
+      } catch (e) { }
+    }
+
+    function updateUI(slot, isConnected, phone, priority, tags, slotName) {
+      const badge = document.getElementById(`badge-${slot}`);
+      // Si el elemento no existe (porque se borró en el panel agencia pero el frontend no recargó), salimos
+      if (!badge) return;
+
+      const viewCon = document.getElementById(`connected-view-${slot}`);
+      const viewDisc = document.getElementById(`disconnected-view-${slot}`);
+      const phoneText = document.getElementById(`phone-${slot}`);
+      const qrArea = document.getElementById(`qr-area-${slot}`);
+      const metaDiv = document.getElementById(`meta-${slot}`);
+
+      if (slotName) {
+        document.getElementById(`title-text-${slot}`).textContent = slotName;
+      }
+
+      if (isConnected) {
+        if (priority !== undefined || (tags && tags.length > 0)) {
+          metaDiv.style.display = "block";
+          document.getElementById(`prio-val-${slot}`).textContent = priority ?? "Auto";
+          document.getElementById(`tags-list-${slot}`).innerHTML = (tags && tags.length) ? tags.map(t => `<span class="tag">${t}</span>`).join("") : "<em style='color:#9ca3af'>Sin tags</em>";
+        } else {
+          metaDiv.style.display = "none";
+        }
+
+        if (badge.textContent !== "ACTIVO") {
+          badge.className = "badge badge-on";
+          badge.textContent = "ACTIVO";
+          viewCon.style.display = "block";
+          viewDisc.style.display = "none";
+          qrArea.classList.remove("active");
+          activeConnections.delete(slot);
+        }
+        phoneText.textContent = "+" + phone;
+      } else {
+        metaDiv.style.display = "none";
+
+        if (badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
+          badge.className = "badge badge-off";
+          badge.textContent = "INACTIVO";
+          viewCon.style.display = "none";
+          viewDisc.style.display = "block";
+        }
+      }
+    }
+
+    async function startConnect(slot) {
+      activeConnections.add(slot);
+      const btn = document.getElementById(`btn-${slot}`);
+      const qrArea = document.getElementById(`qr-area-${slot}`);
+      const msg = document.getElementById(`msg-${slot}`);
+      const qrCanvas = document.getElementById(`qr-canvas-${slot}`);
+
+      btn.disabled = true;
+      btn.textContent = "Generando sesión...";
+      qrArea.classList.add("active");
+      qrCanvas.innerHTML = "";
+
+      try {
+        const res = await fetch(`/start-whatsapp?locationId=${locationId}&slot=${slot}`, { method: "POST" });
+        if (!res.ok) throw new Error("Error de inicio");
+
+        msg.textContent = "Escanea este código con WhatsApp:";
+
+        const localInterval = setInterval(async () => {
+          // Verificar si el elemento sigue existiendo
+          if (!document.getElementById(`card-${slot}`)) {
+            clearInterval(localInterval);
+            activeConnections.delete(slot);
+            return;
+          }
+
+          const statRes = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
+          const statData = await statRes.json();
+
+          if (statData.connected) {
+            clearInterval(localInterval);
+            activeConnections.delete(slot);
+            updateUI(slot, true, statData.myNumber, statData.priority, statData.tags, statData.slotName);
+            return;
+          }
+
+          const qrRes = await fetch(`/qr?locationId=${locationId}&slot=${slot}`);
+          if (qrRes.ok) {
+            const qrData = await qrRes.json();
+            if (qrData.qr && qrCanvas.innerHTML === "") {
+              new QRCode(qrCanvas, { text: qrData.qr, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.L });
+              btn.textContent = "Esperando escaneo...";
+            }
+          }
+        }, 2000);
+
+      } catch (e) {
+        activeConnections.delete(slot);
+        if (msg) {
+          msg.textContent = "Error al conectar.";
+          msg.style.color = "red";
+        }
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function disconnect(slot) {
+      if (!confirm("¿Estás seguro de desconectar?")) return;
+      const btn = document.querySelector(`#connected-view-${slot} button`);
+      btn.disabled = true;
+      btn.textContent = "Desconectando...";
+
+      try {
+        await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
+        updateUI(slot, false, null, undefined, undefined, null); // Null en nombre para no resetearlo visualmente
+
+        document.getElementById(`btn-${slot}`).disabled = false;
+        document.getElementById(`btn-${slot}`).textContent = "Vincular WhatsApp";
+        document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
+      } catch (e) {
+        alert("Error al desconectar");
+        btn.disabled = false;
+        btn.textContent = "Cerrar Sesión";
+      }
+    }
+
+    init();
+  </script>
 </body>
+
 </html>

@@ -1,434 +1,538 @@
-// src/index.js
 const path = require("path");
+const fs = require("fs");
+const cors = require("cors");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const express = require("express");
-const pino = require("pino");
-const qrcodeTerminal = require("qrcode-terminal");
-const { webcrypto } = require("crypto");
-const fs = require("fs");
+const { initDb } = require("./db/init");
+const { pool } = require("./config/db");
+const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
 
-// 🔹 SDK oficial HighLevel
-const { HighLevel, GHLError } = require("@gohighlevel/api-client");
+const { login, verifyToken } = require("./controllers/authController");
 
-// -----------------------------
-// Config & estado
-// -----------------------------
+const {
+    startWhatsApp,
+    sessions,
+    botMessageIds,
+    deleteSessionData,
+    saveRouting,
+    getRoutingForPhone,
+    getLocationSlotsConfig,
+    waitForSocketOpen,
+    processKeywordTags,
+    sendButtons
+} = require("./services/whatsappService");
+const {
+    saveTokens,
+    getTokens,
+    ensureAgencyToken,
+    callGHLWithAgency,
+    findOrCreateGHLContact
+} = require("./services/ghlService");
+const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/utils");
+const { parseGHLCommand } = require("./helpers/parser");
+const axios = require("axios");
 
-let isConnected = false;
-
-// HighLevel (via SDK)
-const GHL_PIT = process.env.GHL_PIT;               // Private Integration Token
-const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
-const GHL_API_VERSION = process.env.GHL_API_VERSION;
-
-// Instancia del SDK
-const ghl = new HighLevel({
-  privateIntegrationToken: GHL_PIT,
-  apiVersion: GHL_API_VERSION, // VER PARA AUTOMATIZAR
-});
-
-// Parche crypto para Baileys en Node
 if (!globalThis.crypto) {
-  globalThis.crypto = webcrypto;
+    globalThis.crypto = require("crypto").webcrypto;
 }
 
-// Express
+const PORT = process.env.PORT || 5000;
+const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
+const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "[https://wa.clicandapp.com](https://wa.clicandapp.com)";
+const AGENCY_ROW_ID = "__AGENCY__";
+const PUBLIC_DIR = path.join(__dirname, "..", "public");
+const MEDIA_DIR = path.join(PUBLIC_DIR, "media");
+
+if (!fs.existsSync(MEDIA_DIR)) {
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
+}
+
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
+app.use(express.static(PUBLIC_DIR));
 
-const PORT = process.env.PORT || 3000;
+app.use(cors({
+    origin: [
+        "http://localhost:5173",
+        "https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host",
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
+}));
 
-// Baileys
-let sock = null;
-let baileysLoaded = false;
-let currentQR = null;
+// ==========================================
+// 🔓 RUTAS PÚBLICAS
+// ==========================================
 
-// -----------------------------
-// Helpers
-// -----------------------------
+app.post("/auth/login", login);
 
-function extractPhoneFromJid(jid) {
-  return jid.split("@")[0];
-}
 
-function loadNumbersDb() {
-  try {
-    const raw = fs.readFileSync("./numbers.json", "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
+// ----------------------------------------------------------------------
+// Endpoint para AGREGAR un nuevo Slot (Protegido)
+// ----------------------------------------------------------------------
+app.post("/agency/add-slot", verifyToken, async (req, res) => {
+    const { locationId } = req.body;
+    try {
+        // 1. Obtener el ID más alto actual para saber cuál sigue
+        const resSlots = await pool.query(
+            "SELECT slot_id FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC",
+            [locationId]
+        );
 
-function savePhoneForLocation(locationId, phone) {
-  const db = loadNumbersDb();
-  db[locationId] = phone;
-  fs.writeFileSync("./numbers.json", JSON.stringify(db, null, 2));
-}
+        const existingIds = resSlots.rows.map(r => r.slot_id);
 
-// Enviar mensaje de WhatsApp a un número en formato internacional (+569..., +52..., etc.)
-async function sendWhatsAppMessage(phone, text) {
-  if (!sock || !isConnected) {
-    console.error("⚠️ WhatsApp no está conectado, no se puede enviar mensaje.");
-    return;
-  }
+        // Algoritmo simple para encontrar el primer hueco libre o agregar al final
+        let newSlotId = 1;
+        while (existingIds.includes(newSlotId)) {
+            newSlotId++;
+        }
 
-  // Normalizar: quitar espacios, guiones, etc.
-  const numericPhone = phone.replace(/[^\d+]/g, "");
+        // Límite de seguridad (opcional, ej: max 10 slots)
+        if (newSlotId > 10) {
+            return res.status(400).json({ error: "Límite de dispositivos alcanzado" });
+        }
 
-  // Si viene sin "+", le añadimos (ajusta si tus números vienen de otra forma)
-  const waPhone = numericPhone.startsWith("+") ? numericPhone : `+${numericPhone}`;
+        // 2. Insertar en DB
+        await pool.query(
+            "INSERT INTO location_slots (location_id, slot_id, slot_name, priority) VALUES ($1, $2, $3, $4)",
+            [locationId, newSlotId, `Dispositivo #${newSlotId}`, newSlotId]
+        );
 
-  // JID de WhatsApp
-  const jid = waPhone.replace("+", "") + "@s.whatsapp.net";
+        // Devolver el nuevo slot para actualizar el frontend
+        res.json({ success: true, slot_id: newSlotId, slot_name: `Dispositivo #${newSlotId}` });
 
-  try {
-    await sock.sendMessage(jid, { text });
-    console.log(`📤 WhatsApp enviado a ${waPhone}: ${text}`);
-  } catch (err) {
-    console.error("Error enviando mensaje de WhatsApp:", err);
-  }
-}
-
-// ------------------------------------------------------------
-// 🔥 findOrCreateGHLContact (YA ACTUALIZADO PARA GUARDAR NOMBRE)
-// ------------------------------------------------------------
-async function findOrCreateGHLContact(phone, waName = "WhatsApp Lead") {
-  if (!GHL_PIT || !GHL_LOCATION_ID) {
-    console.error("⚠️ Faltan GHL_PIT o GHL_LOCATION_ID en .env");
-    return null;
-  }
-
-  const normalizedPhone = phone.startsWith("+") ? phone : `+${phone}`;
-
-  // 1) lookup por teléfono
-  try {
-    const lookupRes = await ghl.request({
-      method: "GET",
-      url: "/contacts/lookup",
-      params: {
-        locationId: GHL_LOCATION_ID,
-        phone: normalizedPhone,
-      },
-    });
-
-    if (lookupRes.data && lookupRes.data.contact) {
-      console.log("🔍 Contacto encontrado (lookup):", lookupRes.data.contact.id);
-      return lookupRes.data.contact;
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
     }
-  } catch (err) {
-    // Si es 404, no pasa nada: significa que no existe aún.
-    if (err instanceof GHLError) {
-      if (err.statusCode !== 404) {
-        console.error("Error buscando contacto:", err.statusCode, err.response);
-      }
-    } else {
-      console.error("Error buscando contacto (desconocido):", err);
-    }
-  }
-
-  // 2) crear contacto si no existe
-  try {
-    const created = await ghl.contacts.createContact({
-      locationId: GHL_LOCATION_ID,
-      phone: normalizedPhone,
-      firstName: waName,
-      source: "WhatsApp Baileys",
-    });
-
-    console.log("👤 Contacto creado:", created.contact?.id || created.id);
-    return created.contact || created;
-  } catch (err) {
-    // 💥 AQUÍ MANEJAMOS DUPLICADOS DE VERDAD
-    if (err instanceof GHLError) {
-      const statusCode = err.statusCode;
-      const body = err.response; // normalmente aquí viene { message, meta, ... }
-
-      console.error("Error creando contacto (GHL):", statusCode, body);
-
-      // caso: "Esta localizacion no permite duplicados" con meta.contactId
-      const msg = body?.message || err.message;
-
-      if (
-        statusCode === 400 &&
-        body?.meta?.contactId // más fiable que matchear el texto del mensaje
-      ) {
-        console.log("ℹ️ Contacto ya existía (desde error 400):", body.meta.contactId);
-        return { id: body.meta.contactId, phone: normalizedPhone };
-      }
-    } else {
-      console.error("Error creando contacto (desconocido):", err);
-    }
-
-    return null;
-  }
-}
-
-
-// ------------------------------------------------------------
-// Crear mensaje INBOUND (WhatsApp ➜ GHL) como SMS
-// ------------------------------------------------------------
-async function sendMessageToGHLConversation(contactId, text) {
-  if (!GHL_PIT || !GHL_LOCATION_ID) {
-    console.error("⚠️ Faltan GHL_PIT o GHL_LOCATION_ID en .env");
-    return;
-  }
-
-  try {
-    const res = await ghl.request({
-      method: "POST",
-      url: "/conversations/messages/inbound",
-      data: {
-        type: "SMS",
-        contactId,
-        locationId: GHL_LOCATION_ID,
-        message: text,
-        direction: "inbound",
-      },
-    });
-
-    console.log("📨 Mensaje INBOUND creado en GHL:", res.data);
-  } catch (err) {
-    if (err instanceof GHLError) {
-      console.error("Error GHL (inbound):", err.statusCode, err.response);
-    } else {
-      console.error("Error enviando inbound:", err);
-    }
-  }
-}
-
-async function sendMessageToGHLConversationOutbound(contactId, text) {
-  if (!GHL_PIT || !GHL_LOCATION_ID) {
-    console.error("⚠️ Faltan GHL_PIT o GHL_LOCATION_ID en .env");
-    return;
-  }
-
-  try {
-    const res = await ghl.request({
-      method: "POST",
-      url: "/conversations/messages",
-      data: {
-        type: "SMS",            // O "WHATSAPP" si tu custom provider lo soporta
-        contactId,
-        locationId: GHL_LOCATION_ID,
-        message: text,
-        direction: "outbound",
-      },
-    });
-
-    console.log("📤 Mensaje OUTBOUND enviado desde GHL:", res.data);
-    return res.data;
-  } catch (err) {
-    if (err instanceof GHLError) {
-      console.error("Error GHL (outbound):", err.statusCode, err.response);
-    } else {
-      console.error("Error enviando outbound:", err);
-    }
-  }
-}
-
-async function getGHLContactById(contactId) {
-  try {
-    const res = await ghl.request({
-      method: "GET",
-      url: `/contacts/${contactId}`,
-    });
-
-    return res.data?.contact || res.data;
-  } catch (err) {
-    if (err instanceof GHLError) {
-      console.error("Error GHL (get contact):", err.statusCode, err.response);
-    } else {
-      console.error("Error obteniendo contacto:", err);
-    }
-    return null;
-  }
-}
-// -----------------------------
-// Arranque de WhatsApp / Baileys
-// -----------------------------
-async function startWhatsApp() {
-  if (baileysLoaded && sock) return;
-
-  // Un solo import de Baileys
-  const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    fetchLatestBaileysVersion,
-  } = await import("@whiskeysockets/baileys");
-
-  baileysLoaded = true;
-
-  const { version } = await fetchLatestBaileysVersion();
-  console.log("▶ Usando versión WA:", version);
-
-  // Usa la misma carpeta que vas a montar como volumen
-  const authDir = process.env.BAILEYS_AUTH_DIR || "sessions/default";
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
-
-  // IMPORTANTE: asigna al sock GLOBAL
-  sock = makeWASocket({
-    version,
-    logger: pino({ level: "info" }),
-    auth: state,
-    browser: ["Windows", "Chrome", "10.0"],
-  });
-
-  sock.ev.on("creds.update", saveCreds);
-
-  sock.ev.on("connection.update", (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      console.log("\n📌 Escanea este QR con WhatsApp:\n");
-      qrcodeTerminal.generate(qr, { small: true });
-      currentQR = qr;
-      isConnected = false;
-    }
-
-    if (connection === "open") {
-      console.log("✅ WhatsApp conectado");
-      isConnected = true;
-      currentQR = null;
-
-      const waId = sock?.user?.id || null;
-      if (waId) {
-        const myNumber = waId.split("@")[0].split(":")[0];
-        console.log("📞 Número conectado:", myNumber);
-        savePhoneForLocation(GHL_LOCATION_ID, myNumber);
-      }
-    }
-
-    if (connection === "close") {
-      isConnected = false;
-      currentQR = null;
-
-      const statusCode =
-        lastDisconnect?.error?.output?.statusCode ||
-        lastDisconnect?.error?.code;
-
-      console.log("❌ Conexión cerrada:", statusCode);
-
-      if (statusCode === 440) {
-        console.log("⚠️ Sesión en uso por otro cliente.");
-        sock = null;
-        baileysLoaded = false;
-        return;
-      }
-
-      console.log("🔁 Reintentando...");
-      sock = null;
-      baileysLoaded = false;
-      setTimeout(startWhatsApp, 3000);
-    }
-  });
-
-  // 👇 Mantén aquí tus listeners de mensajes (ya los tienes):
-  sock.ev.on("messages.upsert", async (msg) => {
-    const m = msg.messages[0];
-    if (!m?.message || m.key.fromMe) return;
-
-    const from = m.key.remoteJid;
-    const text =
-      m.message.conversation || m.message.extendedTextMessage?.text;
-
-    const waName =
-      m.pushName ||
-      sock?.contacts?.[from]?.name ||
-      sock?.contacts?.[from]?.notify ||
-      "WhatsApp Lead";
-
-    console.log("📩 Recibido de", waName, ":", text);
-
-    const phone = extractPhoneFromJid(from);
-    const contact = await findOrCreateGHLContact(phone, waName);
-    if (!contact?.id) return;
-
-    await sendMessageToGHLConversation(contact.id, text);
-  });
-}
-
-// (opcional) Arranque automático
-if (process.env.AUTO_START_WHATSAPP === "true") {
-  startWhatsApp().catch(console.error);
-}
-
-// -----------------------------
-// Endpoints HTTP
-// -----------------------------
-app.post("/start-whatsapp", async (req, res) => {
-  try {
-    await startWhatsApp();
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: "No se pudo iniciar WhatsApp" });
-  }
 });
 
-// 🔥 Webhook desde GoHighLevel -> enviar mensaje por WhatsApp
-//    https://express.clicandapp.com/ghl/webhook   
+// ----------------------------------------------------------------------
+// Endpoint para ELIMINAR un Slot (Protegido)
+// ----------------------------------------------------------------------
+app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) => {
+    const { locationId, slotId } = req.params;
+    try {
+        // 1. Desconectar sesión de WhatsApp si existe
+        await deleteSessionData(locationId, slotId);
+
+        // 2. Borrar de la base de datos
+        // NOTA: deleteSessionData ya hace el DELETE en 'location_slots', 
+        // pero aseguramos por si acaso en deleteSessionData o aquí.
+        // En tu whatsappService.js actual, deleteSessionData YA borra el slot. 
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ----------------------------------------------------------------------
+// Endpoint /config (Público para el index.html)
+// ----------------------------------------------------------------------
+
+
+
 app.post("/ghl/webhook", async (req, res) => {
-  try {
-    console.log("📩 Webhook GHL recibido:", req.body);
+    try {
+        const { locationId, phone, message, type, attachments } = req.body;
+        if (!locationId || !phone || (!message && !attachments))
+            return res.json({ ignored: true });
 
-    const {
-      userId,       // <-- clave para evitar loop
-      contactId,
-      locationId,
-      phone,
-      message,
-      type
-    } = req.body;
+        if (message && message.includes("[Enviado desde otro dispositivo]"))
+            return res.json({ ignored: true });
 
-    // 1) SI EL WEBHOOK PROVIENE DE TU PROPIO MENSAJE OUTBOUND, IGNÓRALO
-    if (!userId) {
-      console.log("⏭️ Ignorando mensaje OUTBOUND generado por API (evita loop)");
-      return res.status(200).json({ ignored: true });
+        if (type === "Outbound" || type === "SMS") {
+            let finalMessage = message || "";
+            let messageDelay = 0;
+
+            if (finalMessage) {
+                const processed = processAdvancedMessage(finalMessage);
+                finalMessage = processed.text;
+                messageDelay = processed.delay;
+
+                if (messageDelay > 0) {
+                    console.log(`⏳ Delay: ${messageDelay}ms para ${phone}...`);
+                    await sleep(messageDelay);
+                }
+            }
+
+            const clientPhone = normalizePhone(phone);
+            let dbConfigs = await getLocationSlotsConfig(locationId);
+
+            let availableCandidates = dbConfigs
+                .map((conf) => ({
+                    slot: conf.slot_id,
+                    priority: conf.priority,
+                    tags: conf.tags || [],
+                    myNumber: conf.phone_number,
+                    session: sessions.get(`${locationId}_slot${conf.slot_id}`),
+                }))
+                .filter((c) => c.session && c.session.isConnected);
+
+            if (availableCandidates.length === 0)
+                return res.status(200).json({ error: "No connected devices" });
+
+            let selectedCandidate = availableCandidates[0];
+
+            const sessionToUse = selectedCandidate.session;
+            const jid = clientPhone.replace(/\D/g, "").replace("+", "") + "@s.whatsapp.net";
+
+            try {
+                await waitForSocketOpen(sessionToUse.sock);
+
+                if (attachments && attachments.length > 0) {
+                    for (const url of attachments) {
+                        let content = { image: { url: url }, caption: finalMessage || "" };
+                        if (url.endsWith(".mp4")) content = { video: { url: url }, caption: finalMessage || "" };
+                        else if (url.endsWith(".pdf")) content = { document: { url: url }, mimetype: "application/pdf", fileName: "archivo.pdf", caption: finalMessage || "" };
+
+                        const sent = await sessionToUse.sock.sendMessage(jid, content);
+                        if (sent?.key?.id) {
+                            botMessageIds.add(sent.key.id);
+                            setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
+                        }
+                    }
+                } else {
+                    const sent = await sessionToUse.sock.sendMessage(jid, { text: finalMessage });
+                    if (sent?.key?.id) {
+                        botMessageIds.add(sent.key.id);
+                        setTimeout(() => botMessageIds.delete(sent.key.id), 15000);
+                    }
+                }
+
+                const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
+                if (contact && contact.id) {
+                    await processKeywordTags(locationId, contact.id, finalMessage, false);
+                }
+                await saveRouting(clientPhone.replace("+", ""), locationId, null, selectedCandidate.myNumber);
+
+                return res.json({ ok: true });
+            } catch (e) {
+                console.error(`❌ Error envío: ${e.message}`);
+                return res.status(500).json({ error: "Send failed" });
+            }
+        }
+        res.json({ ignored: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Error" });
     }
-
-    // 2) Validaciones normales
-    if (!contactId || !phone || !message) {
-      console.warn("⚠️ Webhook incompleto");
-      return res.status(200).json({ ignored: true });
-    }
-
-    // 3) Solo filtrar por location si quieres
-    if (locationId && GHL_LOCATION_ID && locationId !== GHL_LOCATION_ID) {
-      console.log("➡️ Webhook de otra location, se ignora.");
-      return res.status(200).json({ ignored: true });
-    }
-
-    // 4) Enviar mensaje a WhatsApp
-    await sendWhatsAppMessage(phone, message);
-
-    // 5) Registrar OUTBOUND en GHL para mostrarlo en conversacion
-    // await sendMessageToGHLConversationOutbound(contactId, message);
-
-    res.status(200).json({ ok: true });
-
-  } catch (err) {
-    console.error("Error en webhook /ghl/webhook:", err);
-    res.status(500).json({ error: "Error interno en webhook" });
-  }
 });
 
-
+app.post("/start-whatsapp", async (req, res) => {
+    const { locationId, slot } = req.query;
+    try {
+        await startWhatsApp(locationId, slot);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: "Error" });
+    }
+});
 
 app.get("/qr", (req, res) => {
-  if (!currentQR) {
-    return res.status(404).json({ error: "QR no disponible aún" });
-  }
-  res.json({ qr: currentQR });
+    const { locationId, slot } = req.query;
+    const sess = sessions.get(`${locationId}_slot${slot}`);
+    if (!sess || !sess.qr) return res.status(404).json({ error: "No QR" });
+    res.json({ qr: sess.qr });
 });
 
-app.get("/status", (req, res) => {
-  res.json({ status: "ok", whatsappConnected: isConnected });
+app.get("/status", async (req, res) => {
+    const { locationId, slot } = req.query;
+    const sess = sessions.get(`${locationId}_slot${slot}`);
+    let extra = {};
+    try {
+        const r = await pool.query(
+            "SELECT priority, tags, slot_name FROM location_slots WHERE location_id=$1 AND slot_id=$2",
+            [locationId, slot]
+        );
+        if (r.rows.length) extra = r.rows[0];
+    } catch (e) { }
+
+    if (sess && sess.isConnected)
+        return res.json({
+            connected: true,
+            myNumber: sess.myNumber,
+            priority: extra.priority || 99,
+            tags: extra.tags || [],
+            slotName: extra.slot_name || `Dispositivo #${slot}`
+        });
+    res.json({ connected: false, priority: extra.priority, tags: extra.tags, slotName: extra.slot_name || `Dispositivo #${slot}` });
 });
 
-// -----------------------------
-// Arrancar servidor HTTP
-// -----------------------------
-app.listen(PORT, () =>
-  console.log(`API escuchando en http://localhost:${PORT}`)
-);
+app.post("/config-slot", verifyToken, async (req, res) => {
+    const { locationId, slot, slotName } = req.body;
+    try {
+        await pool.query(`
+            INSERT INTO location_slots (location_id, slot_id, slot_name)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (location_id, slot_id) 
+            DO UPDATE SET slot_name = EXCLUDED.slot_name
+        `, [locationId, slot, slotName]);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }) }
+});
+
+app.get("/get-info", async (req, res) => {
+    try {
+        const { locationId, slot } = req.query;
+        const slots = await getLocationSlotsConfig(locationId, slot);
+        return res.json({ slots });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post("/remove-slot", verifyToken, async (req, res) => {
+    try {
+        await deleteSessionData(req.query.locationId, req.query.slot);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get("/config", async (req, res) => {
+    try {
+        const { locationId } = req.query;
+        const tenantStatus = await getTenantConfig(locationId);
+
+        // Obtener los slots reales de la DB
+        const slotsRes = await pool.query(
+            "SELECT slot_id, slot_name, phone_number FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC",
+            [locationId]
+        );
+
+        // Mapeamos para enviar IDs y Nombres
+        const activeSlots = slotsRes.rows.map(s => ({
+            id: s.slot_id,
+            name: s.slot_name,
+            connected: !!s.phone_number
+        }));
+
+        res.json({
+            is_active: tenantStatus.active,
+            reason: tenantStatus.reason,
+            slots: activeSlots // <-- ENVIAMOS LA LISTA REAL, NO UN NÚMERO
+        });
+    } catch (e) {
+        res.status(500).json({ error: "Error interno" });
+    }
+});
+
+app.post("/ghl/app-webhook", async (req, res) => {
+    try {
+        const evt = req.body;
+        if (evt.type === "INSTALL") {
+            // Nota: Podríamos intentar obtener el nombre aquí si GHL enviara más datos,
+            // pero usualmente solo manda IDs. La actualización de nombre sería mejor manual o via otro endpoint.
+            await registerNewTenant(evt.locationId, evt.companyId);
+            return res.json({ ok: true });
+        }
+        res.json({ ignored: true });
+    } catch (e) {
+        res.status(500).json({ error: "Error" });
+    }
+});
+
+// ==========================================
+// 🔒 RUTAS PROTEGIDAS (Requieren Login)
+// ==========================================
+
+// --- ADMIN PANEL ---
+
+// 1. Obtener Agencias (Actualizado para devolver nombre)
+app.get("/admin/agencies", verifyToken, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                agency_id,
+                MAX(agency_name) as agency_name, -- Obtenemos el nombre si existe
+                COUNT(*) as total_subaccounts,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_subaccounts
+            FROM tenants 
+            WHERE agency_id IS NOT NULL
+            GROUP BY agency_id
+        `);
+        res.json(result.rows);
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 2. Obtener Tenants (Actualizado para devolver nombre)
+app.get("/admin/tenants", verifyToken, async (req, res) => {
+    const { agencyId } = req.query;
+    try {
+        let query = `
+            SELECT t.*, p.name as plan_name 
+            FROM tenants t 
+            LEFT JOIN subscription_plans p ON t.plan_id = p.id 
+        `;
+        const params = [];
+        if (agencyId) {
+            query += " WHERE t.agency_id = $1";
+            params.push(agencyId);
+        }
+        query += " ORDER BY t.created_at DESC";
+        const result = await pool.query(query, params);
+        res.json(result.rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 3. Crear Tenant (Ahora acepta NOMBRES)
+app.post("/admin/tenants", verifyToken, async (req, res) => {
+    const { locationId, planName, days, name, agencyId, agencyName } = req.body;
+    try {
+        const planRes = await pool.query("SELECT id FROM subscription_plans WHERE name = $1", [planName || 'trial']);
+        const planId = planRes.rows[0]?.id;
+        const trialEnd = new Date();
+        trialEnd.setDate(trialEnd.getDate() + (days || 5));
+        const defaultSettings = { show_source_label: true, create_unknown_contacts: true, transcribe_audio: true };
+
+        await pool.query(`
+            INSERT INTO tenants (
+                location_id, name, agency_id, agency_name, 
+                plan_id, status, trial_ends_at, settings, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, 'active', $6, $7::jsonb, NOW())
+            ON CONFLICT (location_id) 
+            DO UPDATE SET 
+                name = EXCLUDED.name, 
+                agency_id = EXCLUDED.agency_id,
+                agency_name = EXCLUDED.agency_name,
+                plan_id = EXCLUDED.plan_id,
+                trial_ends_at = EXCLUDED.trial_ends_at
+        `, [locationId, name, agencyId, agencyName, planId, trialEnd, JSON.stringify(defaultSettings)]);
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 4. Actualizar Tenant
+app.put("/admin/tenants/:id", verifyToken, async (req, res) => {
+    const { id } = req.params;
+    const { status, settings, name, agencyName } = req.body;
+    try {
+        if (status) await pool.query("UPDATE tenants SET status = $1, updated_at = NOW() WHERE location_id = $2", [status, id]);
+
+        if (settings) await pool.query("UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2", [JSON.stringify(settings), id]);
+
+        // Permitir actualizar nombres
+        if (name) await pool.query("UPDATE tenants SET name = $1, updated_at = NOW() WHERE location_id = $2", [name, id]);
+        if (agencyName) await pool.query("UPDATE tenants SET agency_name = $1, updated_at = NOW() WHERE location_id = $2", [agencyName, id]);
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- AGENCY PANEL ---
+
+app.get("/agency/locations", verifyToken, async (req, res) => {
+    const { agencyId } = req.query;
+    if (!agencyId) return res.status(400).json({ error: "Falta agencyId" });
+    try {
+        const result = await pool.query(`
+            SELECT t.location_id, t.name, t.status, t.settings, 
+                   (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
+            FROM tenants t 
+            WHERE t.agency_id = $1
+        `, [agencyId]);
+        res.json(result.rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ... (El resto de rutas de agency/* se mantienen igual) ...
+app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
+    const { locationId } = req.params;
+    try {
+        const [slotsRes, keywordsRes, tenantRes] = await Promise.all([
+            pool.query("SELECT * FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC", [locationId]),
+            pool.query("SELECT * FROM keyword_tags WHERE location_id = $1 ORDER BY created_at DESC", [locationId]),
+            pool.query("SELECT settings, name FROM tenants WHERE location_id = $1", [locationId])
+        ]);
+        res.json({
+            slots: slotsRes.rows,
+            keywords: keywordsRes.rows,
+            settings: tenantRes.rows[0]?.settings || {},
+            name: tenantRes.rows[0]?.name
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post("/agency/keywords", verifyToken, async (req, res) => {
+    const { locationId, keyword, tag } = req.body;
+    try {
+        const result = await pool.query(
+            "INSERT INTO keyword_tags (location_id, keyword, tag) VALUES ($1, $2, $3) RETURNING *",
+            [locationId, keyword.toLowerCase(), tag]
+        );
+        res.json(result.rows[0]);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete("/agency/keywords/:id", verifyToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+        await pool.query("DELETE FROM keyword_tags WHERE id = $1", [id]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
+    const { locationId } = req.params;
+    const { settings } = req.body;
+    try {
+        await pool.query(
+            "UPDATE tenants SET settings = $1::jsonb, updated_at = NOW() WHERE location_id = $2",
+            [JSON.stringify(settings), locationId]
+        );
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- ARRANQUE ---
+
+async function restoreSessions() {
+    try {
+        const res = await pool.query("SELECT DISTINCT session_id FROM baileys_auth");
+        for (const row of res.rows) {
+            const parts = row.session_id.split("_slot");
+            if (parts.length === 2)
+                startWhatsApp(parts[0], parts[1]).catch(console.error);
+        }
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+(async () => {
+    try {
+        await initDb();
+        app.listen(PORT, async () => {
+            console.log(`API OK ${PORT}`);
+            await restoreSessions();
+        });
+    } catch (e) {
+        console.error("❌ Error fatal al iniciar:", e);
+        process.exit(1);
+    }
+})();
