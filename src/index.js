@@ -380,6 +380,28 @@ app.post("/start-whatsapp", async (req, res) => {
     try { await startWhatsApp(req.query.locationId, req.query.slot); res.json({ success: true }); } catch (e) { res.status(500).json({ error: "Error" }); }
 });
 
+app.post("/remove-slot", async (req, res) => {
+    try {
+        // El frontend envía los datos en la URL (query params)
+        const locationId = req.query.locationId;
+        const slot = req.query.slot;
+
+        if (!locationId || !slot) {
+            return res.status(400).json({ error: "Faltan parámetros: locationId o slot" });
+        }
+
+        console.log(`🔌 Solicitud de desconexión recibida para ${locationId} slot ${slot}`);
+
+        // Llamamos a la función que ya mejoraste para hacer logout real
+        await deleteSessionData(locationId, slot);
+
+        res.json({ success: true });
+    } catch (e) {
+        console.error("❌ Error en /remove-slot:", e.message);
+        res.status(500).json({ error: "Error al desconectar" });
+    }
+});
+
 app.get("/qr", (req, res) => {
     const s = sessions.get(`${req.query.locationId}_slot${req.query.slot}`);
     if (s && s.qr) res.json({ qr: s.qr }); else res.status(404).json({ error: "No QR" });
