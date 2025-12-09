@@ -109,7 +109,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
 
         if (evt.type === "INSTALL") {
             try {
-                // 1. Obtener Tokens de GHL (OAuth)
+                // 1. Obtener Tokens de GHL (OAuth) para la location
                 const at = await ensureAgencyToken();
                 const ats = await getTokens(AGENCY_ROW_ID);
 
@@ -132,14 +132,13 @@ app.post("/ghl/app-webhook", async (req, res) => {
                 // Guardar tokens de la location
                 await saveTokens(evt.locationId, { ...ats, locationAccess: lr.data });
 
-                // 2. Crear Custom Menu (Iframe) con la URL correcta
-                // Esto soluciona el problema de "location_id=null" porque inyectamos el ID explícitamente aquí.
+                // 2. Crear Custom Menu (Iframe) con la URL correcta y el ICONO REQUERIDO
                 await callGHLWithAgency({
                     method: "post",
                     url: "https://services.leadconnectorhq.com/custom-menus/",
                     data: {
                         title: "WhatsApp - Clic&App",
-                        url: `${CUSTOM_MENU_URL_WA}?location_id=${evt.locationId}`, // <-- AQUÍ LA MAGIA 
+                        url: `${CUSTOM_MENU_URL_WA}?location_id=${evt.locationId}`,
                         showOnCompany: false,
                         showOnLocation: true,
                         showToAllLocations: false,
@@ -147,15 +146,20 @@ app.post("/ghl/app-webhook", async (req, res) => {
                         openMode: "iframe",
                         userRole: "all",
                         allowCamera: false,
-                        allowMicrophone: false
+                        allowMicrophone: false,
+                        // 🔴 CORRECCIÓN 2: Objeto Icon requerido
+                        icon: {
+                            name: "whatsapp", // Nombre del ícono (font-awesome)
+                            fontFamily: "fab" // Familia (Brands)
+                        }
                     }
                 }).catch((err) => {
+                    // Si falla el menú, logueamos pero NO detenemos el registro
                     console.error("⚠️ Error creando Custom Menu:", err.response?.data || err.message);
                 });
 
             } catch (errGHL) {
                 console.error("❌ Error en flujo OAuth GHL:", errGHL.message);
-                // No detenemos el proceso, intentamos registrar en BD local de todos modos
             }
 
             // 3. Registrar/Vincular en DB Local (Jerarquía)
