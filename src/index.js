@@ -108,7 +108,59 @@ app.post("/ghl/app-webhook", async (req, res) => {
         console.log("🔔 Webhook App recibido:", JSON.stringify(evt));
 
         if (evt.type === "INSTALL") {
+            try {
+                // 1. Obtener Tokens de GHL (OAuth)
+                const at = await ensureAgencyToken();
+                const ats = await getTokens(AGENCY_ROW_ID);
+
+                const lr = await axios.post(
+                    "https://services.leadconnectorhq.com/oauth/locationToken",
+                    new URLSearchParams({
+                        companyId: evt.companyId,
+                        locationId: evt.locationId
+                    }).toString(),
+                    {
+                        headers: {
+                            Authorization: `Bearer ${at}`,
+                            Version: GHL_API_VERSION,
+                            "Content-Type": "application/x-www-form-urlencoded",
+                            Accept: "application/json"
+                        }
+                    }
+                );
+
+                // Guardar tokens de la location
+                await saveTokens(evt.locationId, { ...ats, locationAccess: lr.data });
+
+                // 2. Crear Custom Menu (Iframe) con la URL correcta
+                // Esto soluciona el problema de "location_id=null" porque inyectamos el ID explícitamente aquí.
+                await callGHLWithAgency({
+                    method: "post",
+                    url: "https://services.leadconnectorhq.com/custom-menus/",
+                    data: {
+                        title: "WhatsApp - Clic&App",
+                        url: `${CUSTOM_MENU_URL_WA}?location_id=${evt.locationId}`, // <-- AQUÍ LA MAGIA 
+                        showOnCompany: false,
+                        showOnLocation: true,
+                        showToAllLocations: false,
+                        locations: [evt.locationId],
+                        openMode: "iframe",
+                        userRole: "all",
+                        allowCamera: false,
+                        allowMicrophone: false
+                    }
+                }).catch((err) => {
+                    console.error("⚠️ Error creando Custom Menu:", err.response?.data || err.message);
+                });
+
+            } catch (errGHL) {
+                console.error("❌ Error en flujo OAuth GHL:", errGHL.message);
+                // No detenemos el proceso, intentamos registrar en BD local de todos modos
+            }
+
+            // 3. Registrar/Vincular en DB Local (Jerarquía)
             await registerNewTenant(evt.locationId, evt.companyId);
+
             return res.json({ ok: true });
         }
         if (evt.type === "UNINSTALL") {
