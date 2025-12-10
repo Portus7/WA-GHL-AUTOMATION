@@ -21,7 +21,9 @@ const {
     getLocationSlotsConfig,
     waitForSocketOpen,
     processKeywordTags,
-    sendButtons
+    sendButtons,
+    SUPPORT_LOC_ID, // <--- NUEVO
+    SUPPORT_SLOT_ID // <--- NUEVO
 } = require("./services/whatsappService");
 
 const {
@@ -372,6 +374,59 @@ app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
         await pool.query("UPDATE tenants SET settings=$1::jsonb WHERE location_id=$2", [JSON.stringify(req.body.settings), req.params.locationId]);
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ==========================================
+// 🛠️ RUTAS GESTIÓN BOT DE SOPORTE (ADMIN)
+// ==========================================
+
+// 1. Iniciar/Reiniciar Bot de Soporte (Generar QR)
+app.post("/admin/support/start", verifyToken, requireRole('admin'), async (req, res) => {
+    try {
+        await startWhatsApp(SUPPORT_LOC_ID, SUPPORT_SLOT_ID);
+        res.json({ success: true, message: "Iniciando proceso de conexión..." });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 2. Obtener QR del Soporte
+app.get("/admin/support/qr", verifyToken, requireRole('admin'), (req, res) => {
+    const session = sessions.get(`${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`);
+    if (session && session.qr) {
+        res.json({ qr: session.qr });
+    } else {
+        res.status(404).json({ error: "QR no disponible o ya conectado" });
+    }
+});
+
+// 3. Estado del Soporte
+app.get("/admin/support/status", verifyToken, requireRole('admin'), async (req, res) => {
+    const session = sessions.get(`${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`);
+    let dbInfo = {};
+    try {
+        const r = await pool.query(
+            "SELECT phone_number FROM location_slots WHERE location_id=$1 AND slot_id=$2",
+            [SUPPORT_LOC_ID, SUPPORT_SLOT_ID]
+        );
+        if (r.rows.length) dbInfo = r.rows[0];
+    } catch (e) { }
+
+    res.json({
+        connected: session?.isConnected || false,
+        myNumber: session?.myNumber || dbInfo.phone_number,
+        is_active: true
+    });
+});
+
+// 4. Desconectar Soporte
+app.delete("/admin/support/disconnect", verifyToken, requireRole('admin'), async (req, res) => {
+    try {
+        await deleteSessionData(SUPPORT_LOC_ID, SUPPORT_SLOT_ID);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // --- RUTAS PÚBLICAS QR/STATUS (Para Iframe) ---
