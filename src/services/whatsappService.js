@@ -1,5 +1,6 @@
 const { pool } = require("../config/db");
-const { normalizePhone, toBol, sleep } = require("../helpers/utils");
+// ✅ AGREGADO: Importamos 'sleep' para la pausa táctica
+const { normalizePhone, toBold, sleep } = require("../helpers/utils");
 const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
 const { parseGHLCommand } = require("../helpers/parser");
 const { transcribeAudio } = require("./openaiService");
@@ -78,15 +79,16 @@ async function processKeywordTags(locationId, contactId, text, isMobileContext =
     }
 }
 
-// ✅ ENVIAR ALERTAS (Soporte) - Con validación de existencia
+// ✅ ENVIAR ALERTAS (Soporte) - Con Delay Estratégico y Validación
 async function sendSupportAlert(message, targetPhoneOverride = null) {
     try {
         const targetPhone = targetPhoneOverride || process.env.SUPPORT_ALERT_RECIPIENT;
 
-        if (!targetPhone) {
-            console.warn("⚠️ No hay destinatario para la alerta de soporte.");
-            return;
-        }
+        if (!targetPhone) return;
+
+        // ⏳ DELAY CRÍTICO: Esperamos 3 segundos para que WhatsApp procese 
+        // la desconexión del usuario antes de intentar escribirle.
+        // Esto evita el error "not-acceptable" por conflicto de sesiones.
         await sleep(3000);
 
         const sessionId = `${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`;
@@ -94,25 +96,38 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
 
         if (session && session.isConnected && session.sock) {
             const jid = targetPhone.replace(/\D/g, "") + "@s.whatsapp.net";
-            console.log(`targetPhone: ${targetPhone}`);
-            console.log(`jid: ${jid}`);
-            // 1. VERIFICAR SI EL NÚMERO EXISTE EN WHATSAPP
-            const [result] = await session.sock.onWhatsApp(jid);
 
-            if (result?.exists) {
-                // 2. Si existe, enviamos (usamos el JID real que nos devuelve WhatsApp para asegurar formato)
-                console.log(`🔔 Alerta enviada a ${targetPhone}`, result.jid);
-                await session.sock.sendMessage(result.jid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
+            // 1. VERIFICAR SI EL NÚMERO EXISTE (Evita errores rojos en consola)
+            let exists = false;
+            let realJid = jid;
+
+            try {
+                const [result] = await session.sock.onWhatsApp(jid);
+                if (result?.exists) {
+                    exists = true;
+                    realJid = result.jid;
+                }
+            } catch (err) {
+                // Si falla onWhatsApp (rate limit), asumimos que existe y probamos enviar
+                exists = true;
+            }
+
+            if (exists) {
+                console.log(`🔔 Enviando alerta a ${targetPhone}...`);
+                await session.sock.sendMessage(realJid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
+                console.log(`✅ Alerta entregada.`);
             } else {
                 console.warn(`⚠️ No se envió alerta a ${targetPhone}: El número no está registrado en WhatsApp.`);
             }
         } else {
-            console.warn("⚠️ El Bot de Soporte NO está conectado.");
+            console.warn("⚠️ El Bot de Soporte NO está conectado. No se pudo enviar la alerta.");
         }
     } catch (e) {
-        // Ignoramos errores de "no existe" para no ensuciar el log, pero logueamos otros graves
-        if (e?.data?.status !== 406) {
+        // Ignoramos errores de "no existe" para no ensuciar el log
+        if (e?.data?.status !== 406 && e?.output?.statusCode !== 406) {
             console.error("Error enviando alerta de soporte:", e.message);
+        } else {
+            console.warn(`⚠️ Envío rechazado por WhatsApp (406). El usuario ${targetPhoneOverride} aún no está listo para recibir mensajes.`);
         }
     }
 }
@@ -123,7 +138,7 @@ async function deleteSessionData(locationId, slot, shouldDeleteSlot = false) {
     const session = sessions.get(sessionId);
 
     if (session) {
-        // Bloqueo de seguridad
+        // Bloqueo de seguridad para evitar reconexiones zombies
         session.isDestroying = true;
 
         if (session.sock) {
@@ -165,7 +180,7 @@ async function deleteSessionData(locationId, slot, shouldDeleteSlot = false) {
                 "UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2",
                 [locationId, slot]
             );
-            console.log(`mn Slot liberado (desvinculado) en DB: ${locationId} slot ${slot}`);
+            console.log(`✅ Slot liberado (desvinculado) en DB: ${locationId} slot ${slot}`);
         }
     } catch (e) {
         console.error("Error gestionando slot DB:", e.message);
@@ -210,7 +225,6 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
     try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { console.error("Error fetching location slots config:", e); return []; }
 }
 
-// ✅ FUNCIÓN INTERACTIVA (Faltaba antes)
 async function sendInteractiveMessage(sock, jid, parsedData) {
     const { title, body, image, buttons } = parsedData;
     let header = { title: title, subtitle: "", hasMediaAttachment: false };
@@ -356,18 +370,15 @@ async function startWhatsApp(locationId, slotId) {
 
     sessionData.sock = sock;
 
-    // ✅ EVITAR GUARDAR SI ESTÁ DESTRUYENDO
+    // ✅ CRÍTICO: Actualizar número si llega en creds
     sock.ev.on("creds.update", async (creds) => {
         if (!sessionData.isDestroying) {
             await saveCreds(creds);
 
-            // 🔥 CORRECCIÓN: Capturar número si llega en la actualización de credenciales
             if (creds.me) {
                 const myPhone = normalizePhone(creds.me.id.split(":")[0]);
                 sessionData.myNumber = myPhone;
-                console.log(`🔄 Número actualizado desde creds: ${myPhone}`);
-                // Sincronizar con DB para asegurar que no esté NULL
-                syncSlotInfo(locationId, slotId, myPhone).catch(e => console.error(e));
+                syncSlotInfo(locationId, slotId, myPhone).catch(() => { });
             }
         }
     });
@@ -397,9 +408,7 @@ async function startWhatsApp(locationId, slotId) {
             } else {
                 console.log(`🛑 Sesión cerrada definitivamente: ${sessionId} (Código: ${code})`);
 
-                // ✅ ACTIVAR BLOQUEO INMEDIATAMENTE
                 sessionData.isDestroying = true;
-
                 sessionData.isConnected = false;
                 sessionData.sock = null;
                 sessions.delete(sessionId);
@@ -415,12 +424,12 @@ async function startWhatsApp(locationId, slotId) {
                     }
 
                     try {
-                        // Limpieza en DB (Logout manual del cliente)
+                        // Limpieza DB
                         await pool.query("UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2", [locationId, slotId]);
                         await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
                     } catch (dbErr) { console.error("Error cleanup DB:", dbErr); }
 
-                    // Enviar alerta al cliente
+                    // Enviar Alerta
                     if (clientPhone && clientPhone !== "Desconocido") {
                         const alertMsg = `⚠️ *DESCONEXIÓN DETECTADA*\n\nHola, detectamos que tu número vinculado a la subagencia *${locationId}* (Slot ${slotId}) se ha desconectado.\n\nPor favor, ingresa al panel y vuelve a escanear el código QR para reactivar el servicio.`;
                         await sendSupportAlert(alertMsg, clientPhone);
@@ -517,6 +526,7 @@ async function startWhatsApp(locationId, slotId) {
                 direction = "outbound";
                 await processKeywordTags(locationId, contact.id, text, true);
             } else {
+                if (messageNumber === 1) promo = true;
                 messageForGHL = text;
                 if (settings.show_source_label !== false) {
                     let sourceLabel = `+${myChannelNumber}`;
