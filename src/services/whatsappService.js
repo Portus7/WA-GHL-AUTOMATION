@@ -479,9 +479,13 @@ async function startWhatsApp(locationId, slotId) {
                 if (mediaData) {
                     attachments.push(mediaData.url);
                     if (!text) text = `[Archivo: ${msgType}]`;
-                    if (msgType === 'audioMessage') {
+
+                    if (msgType === 'audioMessage' && settings.transcribe_audio !== false) {
+                        console.log(`🎙️ Transcribiendo audio para ${locationId}...`);
                         const transcriptText = await transcribeAudio(mediaData.filePath);
                         if (transcriptText) transcription = transcriptText;
+                    } else if (msgType === 'audioMessage') {
+                        console.log(`lx️ Transcripción omitida por configuración para ${locationId}`);
                     }
                 }
             }
