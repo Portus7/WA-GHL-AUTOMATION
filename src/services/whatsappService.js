@@ -84,7 +84,7 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
         const targetPhone = targetPhoneOverride || process.env.SUPPORT_ALERT_RECIPIENT;
 
         if (!targetPhone) {
-            // console.warn("⚠️ No hay destinatario para la alerta de soporte.");
+            console.warn("⚠️ No hay destinatario para la alerta de soporte.");
             return;
         }
         await sleep(3000);
