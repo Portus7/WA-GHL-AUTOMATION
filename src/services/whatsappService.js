@@ -92,6 +92,7 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
         const session = sessions.get(sessionId);
 
         if (session && session.isConnected && session.sock) {
+            console.log(`🔔 Enviando alerta a ${targetPhone}`);
             const jid = targetPhone.replace(/\D/g, "") + "@s.whatsapp.net";
             await session.sock.sendMessage(jid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
             console.log(`🔔 Alerta enviada a ${targetPhone}`);
