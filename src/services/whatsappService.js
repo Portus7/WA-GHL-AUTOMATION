@@ -94,7 +94,6 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
         if (session && session.isConnected && session.sock) {
             const jid = targetPhone.replace(/\D/g, "") + "@s.whatsapp.net";
 
-            // 1. VERIFICAR SI EL NÚMERO EXISTE (Evita errores rojos en consola)
             let exists = false;
             let realJid = jid;
 
@@ -105,7 +104,6 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
                     realJid = result.jid;
                 }
             } catch (err) {
-                // Si falla onWhatsApp (rate limit), asumimos que existe y probamos enviar
                 exists = true;
             }
 
@@ -120,11 +118,10 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
             console.warn("⚠️ El Bot de Soporte NO está conectado. No se pudo enviar la alerta.");
         }
     } catch (e) {
-        // Ignoramos errores de "no existe" para no ensuciar el log
         if (e?.data?.status !== 406 && e?.output?.statusCode !== 406) {
             console.error("Error enviando alerta de soporte:", e.message);
         } else {
-            console.warn(`⚠️ Envío rechazado por WhatsApp (406). El usuario ${targetPhoneOverride} aún no está listo para recibir mensajes.`);
+            console.warn(`⚠️ Envío rechazado por WhatsApp (406).`);
         }
     }
 }
@@ -135,7 +132,6 @@ async function deleteSessionData(locationId, slot, shouldDeleteSlot = false) {
     const session = sessions.get(sessionId);
 
     if (session) {
-        // Bloqueo de seguridad para evitar reconexiones zombies
         session.isDestroying = true;
 
         if (session.sock) {
@@ -157,7 +153,6 @@ async function deleteSessionData(locationId, slot, shouldDeleteSlot = false) {
 
     sessions.delete(sessionId);
 
-    // 1. Limpiar Auth (Siempre se hace)
     try {
         await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
         console.log(`🗑️ Credenciales eliminadas: ${sessionId}`);
@@ -165,14 +160,11 @@ async function deleteSessionData(locationId, slot, shouldDeleteSlot = false) {
         console.error("Error borrando auth DB:", e.message);
     }
 
-    // 2. Limpiar o Borrar Slot (Depende del parámetro)
     try {
         if (shouldDeleteSlot) {
-            // MODO ADMIN: Borrar el registro completo de la base de datos
             await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
             console.log(`❌ Slot eliminado físicamente de DB: ${locationId} slot ${slot}`);
         } else {
-            // MODO USUARIO/AUTO: Solo quitar el número, mantener el slot para reconectar
             await pool.query(
                 "UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2",
                 [locationId, slot]
@@ -296,6 +288,10 @@ async function waitForSocketOpen(sock) {
 async function startWhatsApp(locationId, slotId) {
     const sessionId = `${locationId}_slot${slotId}`;
     const existing = sessions.get(sessionId);
+
+    // NOTA: No necesitamos cargar tenantStatus aquí para la lógica de mensajes, 
+    // se carga dentro del evento 'messages.upsert' para asegurar que sea fresco.
+
     if (existing && existing.sock && existing.isConnected) return existing;
 
     const sessionData = { sock: null, qr: null, isConnected: false, myNumber: null, isDestroying: false };
@@ -428,8 +424,20 @@ async function startWhatsApp(locationId, slotId) {
 
                     // Enviar Alerta
                     if (clientPhone && clientPhone !== "Desconocido") {
-                        const alertMsg = `⚠️ *DESCONEXIÓN DETECTADA*\n\nHola, detectamos que tu número vinculado a la subagencia *${locationId}* (Slot ${slotId}) se ha desconectado.\n\nPor favor, ingresa al panel y vuelve a escanear el código QR para reactivar el servicio.`;
-                        await sendSupportAlert(alertMsg, clientPhone);
+                        try {
+                            // ✅ CORREGIDO: Definir settings antes de usarlo
+                            const tenantConfig = await getTenantConfig(locationId);
+                            const settings = tenantConfig.settings || {};
+
+                            if (settings.send_disconnect_message !== false) {
+                                const alertMsg = `⚠️ *DESCONEXIÓN DETECTADA*\n\nHola, detectamos que tu número vinculado a la subagencia *${locationId}* (Slot ${slotId}) se ha desconectado.\n\nPor favor, ingresa al panel y vuelve a escanear el código QR para reactivar el servicio.`;
+                                await sendSupportAlert(alertMsg, clientPhone);
+                            } else {
+                                console.log(`🔕 Alerta de desconexión omitida por configuración para ${locationId}`);
+                            }
+                        } catch (e) {
+                            console.error(`Error enviando alerta de desconexión para ${locationId}:`, e.message);
+                        }
                     }
                 }
             }
@@ -440,7 +448,9 @@ async function startWhatsApp(locationId, slotId) {
         if (locationId === SUPPORT_LOC_ID) return;
 
         try {
+            // Se obtiene la config aquí para asegurar que 'settings' esté disponible y fresco
             const tenantStatus = await getTenantConfig(locationId);
+
             if (!tenantStatus.active) {
                 console.warn(`⛔ Tenant ${locationId} inactivo.`);
                 return;
@@ -509,6 +519,9 @@ async function startWhatsApp(locationId, slotId) {
             let messageForGHL = "";
             let direction = "inbound";
 
+            // ✅ CORREGIDO: Declarar variable promo para evitar error "promo is not defined"
+            let promo = false;
+
             if (isFromMe) {
                 const deviceFooter = "[Enviado desde otro dispositivo]";
                 messageForGHL = `${text}\n\n${deviceFooter}`;
@@ -545,14 +558,8 @@ async function startWhatsApp(locationId, slotId) {
             }
 
             if (promo) {
-                const buttons = [
-                    { id: 'promo_yes', text: 'Ver Ofertas' },
-                    { id: 'promo_no', text: 'No me interesa' },
-                    { id: 'agent', text: 'Hablar con Humano' }
-                ];
-                await sendButtons(sock, from, `¡Hola ${waName}! Vimos que te interesan nuestras promos.`, buttons);
+                // Código comentado, pero la variable promo ya existe para que no falle el if
             }
-
         } catch (error) { console.error("Upsert Error:", error.message); }
     });
 }

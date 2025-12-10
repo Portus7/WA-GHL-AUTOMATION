@@ -48,7 +48,8 @@ async function registerNewTenant(locationId, companyId) {
         const defaultSettings = {
             show_source_label: true,
             create_unknown_contacts: true,
-            transcribe_audio: true
+            transcribe_audio: true,
+            send_disconnect_message: true
         };
 
         // UPSERT: Si ya existe, actualizamos para reactivarlo o extender trial
