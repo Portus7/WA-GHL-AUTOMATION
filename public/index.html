@@ -5,6 +5,11 @@
   <meta charset="UTF-8" />
   <title>WhatsApp Multi-Device</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
   <style>
     body {
       font-family: system-ui, -apple-system, sans-serif;
@@ -235,7 +240,6 @@
       border-radius: 8px;
     }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 
 <body>
@@ -255,6 +259,19 @@
   <script>
     const params = new URLSearchParams(window.location.search);
     const locationId = params.get("location_id") || params.get("locationId");
+
+    // Configuración base de SweetAlert para que combine con el estilo
+    const Toast = Swal.mixin({
+      toast: true,
+      position: 'top-end',
+      showConfirmButton: false,
+      timer: 3000,
+      timerProgressBar: true,
+      didOpen: (toast) => {
+        toast.addEventListener('mouseenter', Swal.stopTimer)
+        toast.addEventListener('mouseleave', Swal.resumeTimer)
+      }
+    });
 
     if (!locationId) document.body.innerHTML = "<h3 style='text-align:center; margin-top:50px; color:red'>Error Fatal: Falta location_id</h3>";
 
@@ -358,7 +375,24 @@
 
     async function editSlotName(slot) {
       const currentName = document.getElementById(`title-text-${slot}`).textContent;
-      const newName = prompt("Ingresa el nombre para este dispositivo (Ej: Ventas, Soporte):", currentName);
+
+      // ✅ SWEETALERT2: Input Modal
+      const { value: newName } = await Swal.fire({
+        title: 'Editar nombre del dispositivo',
+        input: 'text',
+        inputValue: currentName,
+        inputLabel: 'Ej: Ventas, Soporte, etc.',
+        showCancelButton: true,
+        confirmButtonText: 'Guardar',
+        cancelButtonText: 'Cancelar',
+        confirmButtonColor: '#4f46e5', // Indigo
+        cancelButtonColor: '#9ca3af',
+        inputValidator: (value) => {
+          if (!value) {
+            return '¡Debes escribir un nombre!'
+          }
+        }
+      });
 
       if (newName && newName.trim() !== "" && newName !== currentName) {
         try {
@@ -369,8 +403,17 @@
             body: JSON.stringify({ locationId, slot, slotName: newName })
           });
           if (!res.ok) throw new Error("Error al guardar");
+
+          Toast.fire({ icon: 'success', title: 'Nombre actualizado' });
+
         } catch (e) {
-          alert("No se pudo guardar el nombre.");
+          // ✅ SWEETALERT2: Error
+          Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: 'No se pudo guardar el nombre.',
+            confirmButtonColor: '#4f46e5'
+          });
           document.getElementById(`title-text-${slot}`).textContent = currentName;
         }
       }
@@ -468,8 +511,7 @@
           if (statData.connected) {
             clearInterval(localInterval);
             activeConnections.delete(slot);
-            // ✅ REFRESCAR PÁGINA AL CONECTAR (Para asegurar estado limpio)
-            //alert("¡Conexión exitosa! Actualizando panel...");
+            // El refresh recargará la página, no necesitamos alert aquí
             window.location.reload();
             return;
           }
@@ -491,24 +533,43 @@
           msg.style.color = "red";
         }
         if (btn) btn.disabled = false;
+
+        // ✅ SWEETALERT2: Toast Error
+        Toast.fire({ icon: 'error', title: 'No se pudo iniciar la conexión' });
       }
     }
 
     async function disconnect(slot) {
-      if (!confirm("¿Estás seguro de desconectar?")) return;
+      // ✅ SWEETALERT2: Confirm Modal
+      const result = await Swal.fire({
+        title: '¿Estás seguro?',
+        text: "Se cerrará la sesión de WhatsApp en este dispositivo.",
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#ef4444', // Rojo
+        cancelButtonColor: '#9ca3af', // Gris
+        confirmButtonText: 'Sí, cerrar sesión',
+        cancelButtonText: 'Cancelar'
+      });
+
+      if (!result.isConfirmed) return;
 
       const btn = document.querySelector(`#connected-view-${slot} button`);
       btn.disabled = true;
-      btn.textContent = "Desconectando..."; // Feedback visual inmediato
+      btn.textContent = "Desconectando...";
 
       try {
         await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-
-        // ✅ REFRESCAR PÁGINA AL DESCONECTAR (Solución al botón pegado)
         window.location.reload();
 
       } catch (e) {
-        alert("Error al desconectar");
+        // ✅ SWEETALERT2: Error Modal
+        Swal.fire({
+          icon: 'error',
+          title: 'Error',
+          text: 'Hubo un problema al desconectar.',
+          confirmButtonColor: '#4f46e5'
+        });
         btn.disabled = false;
         btn.textContent = "Cerrar Sesión";
       }
