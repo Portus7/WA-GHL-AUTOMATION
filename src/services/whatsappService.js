@@ -1,5 +1,5 @@
 const { pool } = require("../config/db");
-const { normalizePhone, toBold } = require("../helpers/utils");
+const { normalizePhone, toBol, sleep } = require("../helpers/utils");
 const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
 const { parseGHLCommand } = require("../helpers/parser");
 const { transcribeAudio } = require("./openaiService");
@@ -87,6 +87,7 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
             // console.warn("⚠️ No hay destinatario para la alerta de soporte.");
             return;
         }
+        await sleep(3000);
 
         const sessionId = `${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`;
         const session = sessions.get(sessionId);
