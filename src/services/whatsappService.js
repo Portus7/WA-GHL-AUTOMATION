@@ -13,7 +13,7 @@ const mime = require("mime-types");
 const sessions = new Map();
 const botMessageIds = new Set();
 
-// ✅ CONSTANTES PARA EL BOT DE SOPORTE (Uso Interno)
+// ✅ CONSTANTES PARA EL BOT DE SOPORTE
 const SUPPORT_LOC_ID = "__SYSTEM_SUPPORT__";
 const SUPPORT_SLOT_ID = "1";
 
@@ -39,7 +39,6 @@ async function sendButtons(sock, jid, text, buttons) {
 
 // 🔥 FUNCIÓN CENTRALIZADA PARA ETIQUETAS
 async function processKeywordTags(locationId, contactId, text, isMobileContext = false) {
-    // Ignorar etiquetas para el bot de soporte
     if (locationId === SUPPORT_LOC_ID) return;
 
     try {
@@ -79,42 +78,38 @@ async function processKeywordTags(locationId, contactId, text, isMobileContext =
     }
 }
 
-// ✅ FUNCIÓN CORREGIDA: Enviar alertas (Soporta destinatario dinámico)
+// ✅ ENVIAR ALERTAS (Soporte)
 async function sendSupportAlert(message, targetPhoneOverride = null) {
     try {
-        // 1. Si pasamos un número específico (el del cliente), usamos ese.
-        // 2. Si no, usamos el del admin definido en .env como fallback.
         const targetPhone = targetPhoneOverride || process.env.SUPPORT_ALERT_RECIPIENT;
 
         if (!targetPhone) {
-            console.warn("⚠️ No hay destinatario para la alerta de soporte (ni cliente ni admin).");
+            console.warn("⚠️ No hay destinatario para la alerta de soporte.");
             return;
         }
 
-        // Buscamos la sesión del sistema reservada
         const sessionId = `${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`;
         const session = sessions.get(sessionId);
 
-        // Verificamos si el bot de soporte está vivo
         if (session && session.isConnected && session.sock) {
             const jid = targetPhone.replace(/\D/g, "") + "@s.whatsapp.net";
-
-            // Enviamos el mensaje
             await session.sock.sendMessage(jid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
             console.log(`🔔 Alerta enviada a ${targetPhone}`);
         } else {
-            console.warn("⚠️ El Bot de Soporte NO está conectado. Ve al Panel Admin para vincularlo.");
+            console.warn("⚠️ El Bot de Soporte NO está conectado.");
         }
     } catch (e) {
         console.error("Error enviando alerta de soporte:", e.message);
     }
 }
 
+// ✅ ELIMINAR SESIÓN (CORREGIDA)
 async function deleteSessionData(locationId, slot) {
     const sessionId = `${locationId}_slot${slot}`;
     const session = sessions.get(sessionId);
 
     if (session) {
+        // 🔒 BLOQUEO CRÍTICO: Evita que Baileys guarde nada más en la BD
         session.isDestroying = true;
 
         if (session.sock) {
@@ -136,8 +131,10 @@ async function deleteSessionData(locationId, slot) {
 
     sessions.delete(sessionId);
 
+    // Limpieza agresiva de la BD
     try {
         await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
+        console.log(`🗑️ Credenciales eliminadas: ${sessionId}`);
     } catch (e) {
         console.error("Error borrando auth DB:", e.message);
     }
@@ -187,15 +184,13 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
     try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { console.error("Error fetching location slots config:", e); return []; }
 }
 
-// ✅ AGREGADA: Función para mensajes interactivos (Faltaba en tu versión anterior)
+// ✅ FUNCIÓN INTERACTIVA (Faltaba antes)
 async function sendInteractiveMessage(sock, jid, parsedData) {
     const { title, body, image, buttons } = parsedData;
     let header = { title: title, subtitle: "", hasMediaAttachment: false };
-
     if (image) {
         header = { hasMediaAttachment: true, imageMessage: { url: image } };
     }
-
     const msgPayload = {
         viewOnceMessage: {
             message: {
@@ -208,7 +203,6 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
             }
         }
     };
-
     await sock.sendMessage(jid, msgPayload);
 }
 
@@ -285,6 +279,9 @@ async function startWhatsApp(locationId, slotId) {
         };
         const writeData = async (key, data) => {
             try {
+                // ✅ BLOQUEO DE ESCRITURA SI ESTAMOS DESTRUYENDO
+                if (sessionData.isDestroying) return;
+
                 const jsonData = JSON.stringify(data, BufferJSON.replacer);
                 const sql = `INSERT INTO baileys_auth (session_id, key_id, data, updated_at) VALUES ($1, $2, $3::jsonb, NOW()) ON CONFLICT (session_id, key_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`;
                 await pool.query(sql, [id, key, jsonData]);
@@ -303,6 +300,9 @@ async function startWhatsApp(locationId, slotId) {
                         return data;
                     },
                     set: async (data) => {
+                        // ✅ BLOQUEO TAMBIÉN EN KEYS
+                        if (sessionData.isDestroying) return;
+
                         const tasks = [];
                         for (const cat in data) { for (const id in data[cat]) { const val = data[cat][id]; const key = `${cat}-${id}`; if (val) tasks.push(writeData(key, val)); } }
                         await Promise.all(tasks);
@@ -329,7 +329,11 @@ async function startWhatsApp(locationId, slotId) {
     });
 
     sessionData.sock = sock;
-    sock.ev.on("creds.update", saveCreds);
+
+    // ✅ EVITAR GUARDAR SI ESTÁ DESTRUYENDO
+    sock.ev.on("creds.update", async (creds) => {
+        if (!sessionData.isDestroying) await saveCreds(creds);
+    });
 
     sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
@@ -355,47 +359,34 @@ async function startWhatsApp(locationId, slotId) {
                 setTimeout(() => startWhatsApp(locationId, slotId), 3000);
             } else {
                 console.log(`🛑 Sesión cerrada definitivamente: ${sessionId} (Código: ${code})`);
+
+                // ✅ ACTIVAR BLOQUEO INMEDIATAMENTE
+                sessionData.isDestroying = true;
+
                 sessionData.isConnected = false;
                 sessionData.sock = null;
                 sessions.delete(sessionId);
 
-                // ✅ LÓGICA DE ALERTA AL CLIENTE
-                if (isLogout && !sessionData.isDestroying) {
-
-                    // 1. OBTENER EL NÚMERO DEL CLIENTE ANTES DE BORRARLO
+                if (isLogout) {
                     let clientPhone = sessionData.myNumber;
 
-                    // Si por alguna razón no está en memoria (ej: reinicio de servidor), lo buscamos en DB
                     if (!clientPhone || clientPhone === "Desconocido") {
                         try {
-                            const res = await pool.query(
-                                "SELECT phone_number FROM location_slots WHERE location_id = $1 AND slot_id = $2",
-                                [locationId, slotId]
-                            );
-                            if (res.rows.length > 0) {
-                                clientPhone = res.rows[0].phone_number;
-                            }
-                        } catch (e) { console.error("Error buscando fono cliente:", e); }
+                            const res = await pool.query("SELECT phone_number FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slotId]);
+                            if (res.rows.length > 0) clientPhone = res.rows[0].phone_number;
+                        } catch (e) { }
                     }
 
-                    // A) Actualizar DB (Borrar número)
                     try {
-                        await pool.query(
-                            "UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2",
-                            [locationId, slotId]
-                        );
+                        // Limpieza en DB (Logout manual del cliente)
+                        await pool.query("UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2", [locationId, slotId]);
                         await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
                     } catch (dbErr) { console.error("Error cleanup DB:", dbErr); }
 
-                    // B) Enviar Alerta DIRECTAMENTE AL CLIENTE
-                    // Si tenemos su número, usamos el bot de soporte para avisarle a ÉL/ELLA.
+                    // Enviar alerta al cliente
                     if (clientPhone && clientPhone !== "Desconocido") {
                         const alertMsg = `⚠️ *DESCONEXIÓN DETECTADA*\n\nHola, detectamos que tu número vinculado a la subagencia *${locationId}* (Slot ${slotId}) se ha desconectado.\n\nPor favor, ingresa al panel y vuelve a escanear el código QR para reactivar el servicio.`;
-
-                        // Pasamos clientPhone como segundo argumento
                         await sendSupportAlert(alertMsg, clientPhone);
-                    } else {
-                        console.warn("⚠️ No se pudo enviar alerta al cliente: Número desconocido.");
                     }
                 }
             }
@@ -403,7 +394,6 @@ async function startWhatsApp(locationId, slotId) {
     });
 
     sock.ev.on("messages.upsert", async (msg) => {
-        // El bot de soporte NO procesa mensajes entrantes de clientes, solo envía alertas.
         if (locationId === SUPPORT_LOC_ID) return;
 
         try {
@@ -420,7 +410,6 @@ async function startWhatsApp(locationId, slotId) {
             const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
             if (!from || from.includes("status@") || from.includes("@newsletter")) return;
 
-            // ... (Resto de tu lógica normal) ...
             const msgType = Object.keys(m.message)[0];
             let text = "";
             let attachments = [];
@@ -535,7 +524,7 @@ module.exports = {
     waitForSocketOpen,
     sendButtons,
     parseGHLCommand,
-    sendInteractiveMessage, // ✅ AHORA SÍ ESTÁ DEFINIDA Y EXPORTADA
+    sendInteractiveMessage,
     processKeywordTags,
     findOrCreateGHLContact,
     SUPPORT_LOC_ID,
