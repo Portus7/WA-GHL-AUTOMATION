@@ -86,10 +86,7 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
 
         if (!targetPhone) return;
 
-        // ⏳ DELAY CRÍTICO: Esperamos 3 segundos para que WhatsApp procese 
-        // la desconexión del usuario antes de intentar escribirle.
-        // Esto evita el error "not-acceptable" por conflicto de sesiones.
-        await sleep(3000);
+        await sleep(8000);
 
         const sessionId = `${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`;
         const session = sessions.get(sessionId);
@@ -113,7 +110,7 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
             }
 
             if (exists) {
-                console.log(`🔔 Enviando alerta a ${targetPhone}...`);
+                console.log(`🔔 Enviando alerta a ${targetPhone}...`, realJid, jid, exists);
                 await session.sock.sendMessage(realJid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
                 console.log(`✅ Alerta entregada.`);
             } else {
