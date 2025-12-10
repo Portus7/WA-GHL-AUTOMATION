@@ -278,9 +278,10 @@ app.post("/agency/add-slot", verifyToken, async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 3. Borrar Slot (Ruta Admin)
 app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) => {
     try {
-        await deleteSessionData(req.params.locationId, req.params.slotId);
+        await deleteSessionData(req.params.locationId, req.params.slotId, true);
         res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });

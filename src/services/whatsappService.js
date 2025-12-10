@@ -104,13 +104,13 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
     }
 }
 
-// ✅ ELIMINAR SESIÓN (CORREGIDA)
-async function deleteSessionData(locationId, slot) {
+// ✅ ELIMINAR SESIÓN (Soporta modo "Desconectar" y modo "Borrar Slot")
+async function deleteSessionData(locationId, slot, shouldDeleteSlot = false) {
     const sessionId = `${locationId}_slot${slot}`;
     const session = sessions.get(sessionId);
 
     if (session) {
-        // 🔒 BLOQUEO CRÍTICO: Evita que Baileys guarde nada más en la BD
+        // Bloqueo de seguridad
         session.isDestroying = true;
 
         if (session.sock) {
@@ -132,7 +132,7 @@ async function deleteSessionData(locationId, slot) {
 
     sessions.delete(sessionId);
 
-    // Limpieza agresiva de la BD
+    // 1. Limpiar Auth (Siempre se hace)
     try {
         await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
         console.log(`🗑️ Credenciales eliminadas: ${sessionId}`);
@@ -140,10 +140,22 @@ async function deleteSessionData(locationId, slot) {
         console.error("Error borrando auth DB:", e.message);
     }
 
+    // 2. Limpiar o Borrar Slot (Depende del parámetro)
     try {
-        await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
+        if (shouldDeleteSlot) {
+            // MODO ADMIN: Borrar el registro completo de la base de datos
+            await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
+            console.log(`❌ Slot eliminado físicamente de DB: ${locationId} slot ${slot}`);
+        } else {
+            // MODO USUARIO/AUTO: Solo quitar el número, mantener el slot para reconectar
+            await pool.query(
+                "UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2",
+                [locationId, slot]
+            );
+            console.log(`mn Slot liberado (desvinculado) en DB: ${locationId} slot ${slot}`);
+        }
     } catch (e) {
-        console.error("Error borrando slot DB:", e.message);
+        console.error("Error gestionando slot DB:", e.message);
     }
 }
 
