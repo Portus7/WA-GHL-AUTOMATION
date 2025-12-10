@@ -3,14 +3,14 @@ const fs = require("fs");
 const cors = require("cors");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const express = require("express");
-const bcrypt = require("bcryptjs"); // ✅ IMPORTANTE: Para registro
+const bcrypt = require("bcryptjs");
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
 
-// ✅ Importamos requireRole para protección
 const { login, verifyToken, requireRole } = require("./controllers/authController");
 
+// ✅ IMPORTANTE: Importamos las constantes SUPPORT_LOC_ID y SUPPORT_SLOT_ID
 const {
     startWhatsApp,
     sessions,
@@ -22,8 +22,8 @@ const {
     waitForSocketOpen,
     processKeywordTags,
     sendButtons,
-    SUPPORT_LOC_ID, // <--- NUEVO
-    SUPPORT_SLOT_ID // <--- NUEVO
+    SUPPORT_LOC_ID, // <--- Constante del Bot de Soporte
+    SUPPORT_SLOT_ID // <--- Constante del Slot de Soporte
 } = require("./services/whatsappService");
 
 const {
@@ -46,8 +46,6 @@ if (!globalThis.crypto) {
 
 const PORT = process.env.PORT || 5000;
 const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
-
-// ✅ URL limpia para el iframe (sin markdown)
 const CUSTOM_MENU_URL_WA = process.env.CUSTOM_MENU_URL_WA || "https://wa.clicandapp.com";
 const AGENCY_ROW_ID = "__AGENCY__";
 
@@ -63,30 +61,28 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 app.use(express.static(PUBLIC_DIR));
 
+// Configuración CORS (Ajustar según necesidad)
 app.use(cors({
-    origin: "*", // Ajusta en producción a tus dominios reales
+    origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
 // ==========================================
-// 🔓 RUTAS PÚBLICAS
+// 🔓 RUTAS PÚBLICAS (Login / Webhooks)
 // ==========================================
 
 app.post("/auth/login", login);
 
-// ✅ REGISTRO DE AGENCIAS
+// REGISTRO DE AGENCIAS
 app.post("/auth/register", async (req, res) => {
     const { email, password, agencyName, role } = req.body;
-
     if (!email || !password) return res.status(400).json({ error: "Datos incompletos" });
 
     try {
         const salt = await bcrypt.genSalt(10);
         const hash = await bcrypt.hash(password, salt);
-
         const userRole = role || 'agency';
-        // Generamos ID temporal. Se actualizará a CompanyID real al instalar la app en GHL.
         const agencyId = userRole === 'agency' ? `AG-${Date.now()}` : null;
 
         const newUser = await pool.query(
@@ -102,7 +98,7 @@ app.post("/auth/register", async (req, res) => {
     }
 });
 
-// ✅ WEBHOOK INSTALACIÓN APP (Marketplace GHL)
+// WEBHOOK GHL APP INSTALL
 app.post("/ghl/app-webhook", async (req, res) => {
     try {
         const evt = req.body;
@@ -110,7 +106,6 @@ app.post("/ghl/app-webhook", async (req, res) => {
 
         if (evt.type === "INSTALL") {
             try {
-                // 1. Obtener y guardar tokens de la Location (OAuth)
                 const at = await ensureAgencyToken();
                 const ats = await getTokens(AGENCY_ROW_ID);
 
@@ -132,8 +127,6 @@ app.post("/ghl/app-webhook", async (req, res) => {
 
                 await saveTokens(evt.locationId, { ...ats, locationAccess: lr.data });
 
-                // 2. Crear Custom Menu (Iframe)
-                // Se inyecta location_id en la URL para que el frontend sepa quién es
                 await callGHLWithAgency({
                     method: "post",
                     url: "https://services.leadconnectorhq.com/custom-menus/",
@@ -148,22 +141,15 @@ app.post("/ghl/app-webhook", async (req, res) => {
                         userRole: "all",
                         allowCamera: false,
                         allowMicrophone: false,
-                        // ✅ SOLUCIÓN AL ERROR 422: Objeto icon obligatorio
-                        icon: {
-                            name: "whatsapp",
-                            fontFamily: "fab"
-                        }
+                        icon: { name: "whatsapp", fontFamily: "fab" }
                     }
-                }).then(() => console.log("✅ Custom Menu creado"))
-                    .catch((err) => console.error("⚠️ Error menú:", err.response?.data || err.message));
+                }).then(() => console.log("✅ Custom Menu creado")).catch((err) => console.error("⚠️ Error menú:", err.response?.data || err.message));
 
             } catch (errGHL) {
                 console.error("❌ Error flujo GHL:", errGHL.message);
             }
 
-            // 3. Registrar en DB Local (Vincular Location con CompanyID)
             await registerNewTenant(evt.locationId, evt.companyId);
-
             return res.json({ ok: true });
         }
 
@@ -180,7 +166,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
     }
 });
 
-// ✅ WEBHOOK MENSAJERÍA (Outbound)
+// WEBHOOK MENSAJERÍA
 app.post("/ghl/webhook", async (req, res) => {
     try {
         const { locationId, phone, message, type, attachments } = req.body;
@@ -247,70 +233,36 @@ app.post("/ghl/webhook", async (req, res) => {
 // 🔐 RUTAS PROTEGIDAS (Agencia/Admin)
 // ==========================================
 
-// ✅ SINCRONIZACIÓN AUTOMÁTICA (Llamado por Frontend tras instalación)
 app.post("/agency/sync-ghl", verifyToken, async (req, res) => {
     const { locationIdToVerify } = req.body;
     const userId = req.user.id;
-
     if (!locationIdToVerify) return res.status(400).json({ error: "Falta Location ID" });
-
     try {
-        // 1. Buscar el Tenant instalado
-        //const tenantRes = await pool.query("SELECT agency_id FROM tenants WHERE location_id = $1", [locationIdToVerify]);
-
-        //if (tenantRes.rows.length === 0) {
-        //    return res.status(404).json({ error: "Subcuenta no encontrada. Instálala primero en GHL." });
-        //}
-
-        //const realGhlCompanyId = tenantRes.rows[0].agency_id;
-
-        // 2. Actualizar Usuario con ID Real
         await pool.query("UPDATE users SET agency_id = $1 WHERE id = $2", [locationIdToVerify, userId]);
-
         res.json({ success: true, newAgencyId: locationIdToVerify });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// 1. Obtener Subcuentas (Filtrado por Jerarquía)
 app.get("/agency/locations", verifyToken, async (req, res) => {
     const { agencyId } = req.query;
-
-    // Si es AGENCIA, usamos SU ID real (de la DB para asegurar frescura)
     if (req.user.role === 'agency') {
         try {
             const userRes = await pool.query("SELECT agency_id FROM users WHERE id = $1", [req.user.id]);
             const myAgencyId = userRes.rows[0]?.agency_id;
-
-            if (!myAgencyId || myAgencyId.startsWith('AG-')) {
-                return res.json([]); // Aún no ha sincronizado
-            }
-
-            const result = await pool.query(`
-                SELECT t.location_id, t.name, t.status, t.settings, 
-                       (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
-                FROM tenants t WHERE t.agency_id = $1
-            `, [myAgencyId]);
+            if (!myAgencyId || myAgencyId.startsWith('AG-')) return res.json([]);
+            const result = await pool.query(`SELECT t.location_id, t.name, t.status, t.settings, (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots FROM tenants t WHERE t.agency_id = $1`, [myAgencyId]);
             return res.json(result.rows);
-        } catch (e) {
-            return res.status(500).json({ error: e.message });
-        }
+        } catch (e) { return res.status(500).json({ error: e.message }); }
     }
-
-    // Si es ADMIN, puede ver cualquier agencia
     if (!agencyId) return res.status(400).json({ error: "Falta agencyId" });
     try {
-        const result = await pool.query(`
-            SELECT t.location_id, t.name, t.status, t.settings, 
-                   (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots
-            FROM tenants t WHERE t.agency_id = $1
-        `, [agencyId]);
+        const result = await pool.query(`SELECT t.location_id, t.name, t.status, t.settings, (SELECT COUNT(*) FROM location_slots s WHERE s.location_id = t.location_id) as total_slots FROM tenants t WHERE t.agency_id = $1`, [agencyId]);
         res.json(result.rows);
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 2. Agregar Slot
 app.post("/agency/add-slot", verifyToken, async (req, res) => {
     const { locationId } = req.body;
     try {
@@ -318,18 +270,12 @@ app.post("/agency/add-slot", verifyToken, async (req, res) => {
         const ids = resSlots.rows.map(r => r.slot_id);
         let newId = 1;
         while (ids.includes(newId)) newId++;
-
         if (newId > 10) return res.status(400).json({ error: "Límite alcanzado" });
-
-        await pool.query(
-            "INSERT INTO location_slots (location_id, slot_id, slot_name, priority) VALUES ($1, $2, $3, $4)",
-            [locationId, newId, `Dispositivo #${newId}`, newId]
-        );
+        await pool.query("INSERT INTO location_slots (location_id, slot_id, slot_name, priority) VALUES ($1, $2, $3, $4)", [locationId, newId, `Dispositivo #${newId}`, newId]);
         res.json({ success: true, slot_id: newId, slot_name: `Dispositivo #${newId}` });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 3. Borrar Slot
 app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) => {
     try {
         await deleteSessionData(req.params.locationId, req.params.slotId);
@@ -337,7 +283,6 @@ app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) =>
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 4. Detalles de Location
 app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
     const { locationId } = req.params;
     try {
@@ -346,20 +291,13 @@ app.get("/agency/location-details/:locationId", verifyToken, async (req, res) =>
             pool.query("SELECT * FROM keyword_tags WHERE location_id=$1 ORDER BY created_at DESC", [locationId]),
             pool.query("SELECT settings, name FROM tenants WHERE location_id=$1", [locationId])
         ]);
-        res.json({
-            slots: slots.rows,
-            keywords: keys.rows,
-            settings: tenant.rows[0]?.settings || {},
-            name: tenant.rows[0]?.name
-        });
+        res.json({ slots: slots.rows, keywords: keys.rows, settings: tenant.rows[0]?.settings || {}, name: tenant.rows[0]?.name });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 5. Configuración
 app.post("/agency/keywords", verifyToken, async (req, res) => {
     try {
-        const r = await pool.query("INSERT INTO keyword_tags (location_id, keyword, tag) VALUES ($1, $2, $3) RETURNING *",
-            [req.body.locationId, req.body.keyword.toLowerCase(), req.body.tag]);
+        const r = await pool.query("INSERT INTO keyword_tags (location_id, keyword, tag) VALUES ($1, $2, $3) RETURNING *", [req.body.locationId, req.body.keyword.toLowerCase(), req.body.tag]);
         res.json(r.rows[0]);
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -377,12 +315,13 @@ app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// 🛠️ RUTAS GESTIÓN BOT DE SOPORTE (ADMIN)
+// 🛠️ RUTAS DE GESTIÓN BOT DE SOPORTE (ADMIN) - ¡ESTAS ERAN LAS QUE FALTABAN!
 // ==========================================
 
-// 1. Iniciar/Reiniciar Bot de Soporte (Generar QR)
+// 1. Iniciar/Reiniciar Bot de Soporte
 app.post("/admin/support/start", verifyToken, requireRole('admin'), async (req, res) => {
     try {
+        // Usamos las constantes importadas
         await startWhatsApp(SUPPORT_LOC_ID, SUPPORT_SLOT_ID);
         res.json({ success: true, message: "Iniciando proceso de conexión..." });
     } catch (e) {
@@ -405,6 +344,7 @@ app.get("/admin/support/status", verifyToken, requireRole('admin'), async (req, 
     const session = sessions.get(`${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`);
     let dbInfo = {};
     try {
+        // Consultamos si existe registro en DB
         const r = await pool.query(
             "SELECT phone_number FROM location_slots WHERE location_id=$1 AND slot_id=$2",
             [SUPPORT_LOC_ID, SUPPORT_SLOT_ID]
@@ -429,32 +369,12 @@ app.delete("/admin/support/disconnect", verifyToken, requireRole('admin'), async
     }
 });
 
-// --- RUTAS PÚBLICAS QR/STATUS (Para Iframe) ---
+// ==========================================
+// 🌍 RUTAS PÚBLICAS IFRAME (QR/STATUS)
+// ==========================================
 
 app.post("/start-whatsapp", async (req, res) => {
     try { await startWhatsApp(req.query.locationId, req.query.slot); res.json({ success: true }); } catch (e) { res.status(500).json({ error: "Error" }); }
-});
-
-app.post("/remove-slot", async (req, res) => {
-    try {
-        // El frontend envía los datos en la URL (query params)
-        const locationId = req.query.locationId;
-        const slot = req.query.slot;
-
-        if (!locationId || !slot) {
-            return res.status(400).json({ error: "Faltan parámetros: locationId o slot" });
-        }
-
-        console.log(`🔌 Solicitud de desconexión recibida para ${locationId} slot ${slot}`);
-
-        // Llamamos a la función que ya mejoraste para hacer logout real
-        await deleteSessionData(locationId, slot);
-
-        res.json({ success: true });
-    } catch (e) {
-        console.error("❌ Error en /remove-slot:", e.message);
-        res.status(500).json({ error: "Error al desconectar" });
-    }
 });
 
 app.get("/qr", (req, res) => {
@@ -467,6 +387,16 @@ app.get("/status", async (req, res) => {
     let extra = {};
     try { const r = await pool.query("SELECT * FROM location_slots WHERE location_id=$1 AND slot_id=$2", [req.query.locationId, req.query.slot]); if (r.rows.length) extra = r.rows[0]; } catch (e) { }
     res.json({ connected: s?.isConnected || false, myNumber: s?.myNumber, slotName: extra.slot_name });
+});
+
+app.post("/remove-slot", async (req, res) => {
+    try {
+        const locationId = req.query.locationId;
+        const slot = req.query.slot;
+        if (!locationId || !slot) return res.status(400).json({ error: "Faltan parámetros" });
+        await deleteSessionData(locationId, slot);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: "Error al desconectar" }); }
 });
 
 app.post("/config-slot", async (req, res) => {
@@ -489,7 +419,10 @@ app.get("/config", async (req, res) => {
     } catch (e) { res.status(500).json({ error: "Error" }); }
 });
 
-// --- ADMIN ROUTES ---
+// ==========================================
+// 👑 RUTAS ADMIN (Gestión General)
+// ==========================================
+
 app.get("/admin/agencies", verifyToken, requireRole('admin'), async (req, res) => {
     const r = await pool.query("SELECT agency_id, MAX(agency_name) as agency_name, COUNT(*) as total_subaccounts FROM tenants WHERE agency_id IS NOT NULL GROUP BY agency_id");
     res.json(r.rows);
