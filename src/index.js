@@ -203,15 +203,24 @@ app.post("/ghl/webhook", async (req, res) => {
             try {
                 await waitForSocketOpen(selected.session.sock);
 
+                let sentMsg; // Variable para capturar el mensaje enviado
+
                 if (attachments && attachments.length > 0) {
                     for (const url of attachments) {
                         let content = { image: { url }, caption: finalMessage };
                         if (url.endsWith(".mp4")) content = { video: { url }, caption: finalMessage };
                         else if (url.endsWith(".pdf")) content = { document: { url }, mimetype: "application/pdf", fileName: "doc.pdf", caption: finalMessage };
-                        await selected.session.sock.sendMessage(jid, content);
+
+                        sentMsg = await selected.session.sock.sendMessage(jid, content);
+
+                        // 🔥 FIX: Agregar ID a la lista negra para evitar duplicados en GHL
+                        if (sentMsg?.key?.id) botMessageIds.add(sentMsg.key.id);
                     }
                 } else {
-                    await selected.session.sock.sendMessage(jid, { text: finalMessage });
+                    sentMsg = await selected.session.sock.sendMessage(jid, { text: finalMessage });
+
+                    // 🔥 FIX: Agregar ID a la lista negra para evitar duplicados en GHL
+                    if (sentMsg?.key?.id) botMessageIds.add(sentMsg.key.id);
                 }
 
                 const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
@@ -427,7 +436,18 @@ app.get("/config", async (req, res) => {
 // ==========================================
 
 app.get("/admin/agencies", verifyToken, requireRole('admin'), async (req, res) => {
-    const r = await pool.query("SELECT agency_id, MAX(agency_name) as agency_name, COUNT(*) as total_subaccounts FROM tenants WHERE agency_id IS NOT NULL GROUP BY agency_id");
+    // 🔥 FIX: Agregamos el conteo condicional para 'active_subaccounts'
+    const q = `
+        SELECT 
+            agency_id, 
+            MAX(agency_name) as agency_name, 
+            COUNT(*) as total_subaccounts,
+            COUNT(CASE WHEN status = 'active' THEN 1 END) as active_subaccounts
+        FROM tenants 
+        WHERE agency_id IS NOT NULL 
+        GROUP BY agency_id
+    `;
+    const r = await pool.query(q);
     res.json(r.rows);
 });
 
