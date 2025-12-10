@@ -361,7 +361,18 @@ async function startWhatsApp(locationId, slotId) {
 
     // ✅ EVITAR GUARDAR SI ESTÁ DESTRUYENDO
     sock.ev.on("creds.update", async (creds) => {
-        if (!sessionData.isDestroying) await saveCreds(creds);
+        if (!sessionData.isDestroying) {
+            await saveCreds(creds);
+
+            // 🔥 CORRECCIÓN: Capturar número si llega en la actualización de credenciales
+            if (creds.me) {
+                const myPhone = normalizePhone(creds.me.id.split(":")[0]);
+                sessionData.myNumber = myPhone;
+                console.log(`🔄 Número actualizado desde creds: ${myPhone}`);
+                // Sincronizar con DB para asegurar que no esté NULL
+                syncSlotInfo(locationId, slotId, myPhone).catch(e => console.error(e));
+            }
+        }
     });
 
     sock.ev.on("connection.update", async (update) => {
