@@ -468,6 +468,30 @@ async function startWhatsApp(locationId, slotId) {
     });
 }
 
+async function sendInteractiveMessage(sock, jid, parsedData) {
+    const { title, body, image, buttons } = parsedData;
+    let header = { title: title, subtitle: "", hasMediaAttachment: false };
+
+    if (image) {
+        header = { hasMediaAttachment: true, imageMessage: { url: image } };
+    }
+
+    const msgPayload = {
+        viewOnceMessage: {
+            message: {
+                interactiveMessage: {
+                    body: { text: body },
+                    footer: { text: "Clic&App" },
+                    header: header,
+                    nativeFlowMessage: { buttons: buttons, messageParamsJson: "" }
+                }
+            }
+        }
+    };
+
+    await sock.sendMessage(jid, msgPayload);
+}
+
 module.exports = {
     sessions,
     botMessageIds,
