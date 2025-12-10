@@ -10,7 +10,6 @@ const { registerNewTenant, getTenantConfig } = require("./services/tenantService
 
 const { login, verifyToken, requireRole } = require("./controllers/authController");
 
-// ✅ IMPORTANTE: Importamos las constantes SUPPORT_LOC_ID y SUPPORT_SLOT_ID
 const {
     startWhatsApp,
     sessions,
@@ -61,7 +60,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 app.use(express.static(PUBLIC_DIR));
 
-// Configuración CORS (Ajustar según necesidad)
+// Configuración CORS
 app.use(cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -69,7 +68,7 @@ app.use(cors({
 }));
 
 // ==========================================
-// 🔓 RUTAS PÚBLICAS (Login / Webhooks)
+// 🔓 RUTAS PÚBLICAS
 // ==========================================
 
 app.post("/auth/login", login);
@@ -77,11 +76,13 @@ app.post("/auth/login", login);
 // REGISTRO DE AGENCIAS
 app.post("/auth/register", async (req, res) => {
     const { email, password, agencyName, role } = req.body;
+
     if (!email || !password) return res.status(400).json({ error: "Datos incompletos" });
 
     try {
         const salt = await bcrypt.genSalt(10);
         const hash = await bcrypt.hash(password, salt);
+
         const userRole = role || 'agency';
         const agencyId = userRole === 'agency' ? `AG-${Date.now()}` : null;
 
@@ -143,7 +144,8 @@ app.post("/ghl/app-webhook", async (req, res) => {
                         allowMicrophone: false,
                         icon: { name: "whatsapp", fontFamily: "fab" }
                     }
-                }).then(() => console.log("✅ Custom Menu creado")).catch((err) => console.error("⚠️ Error menú:", err.response?.data || err.message));
+                }).then(() => console.log("✅ Custom Menu creado"))
+                    .catch((err) => console.error("⚠️ Error menú:", err.response?.data || err.message));
 
             } catch (errGHL) {
                 console.error("❌ Error flujo GHL:", errGHL.message);
@@ -315,7 +317,7 @@ app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// 🛠️ RUTAS DE GESTIÓN BOT DE SOPORTE (ADMIN) - ¡ESTAS ERAN LAS QUE FALTABAN!
+// 🛠️ RUTAS GESTIÓN BOT DE SOPORTE (ADMIN) - ¡ESTAS ERAN LAS QUE FALTABAN!
 // ==========================================
 
 // 1. Iniciar/Reiniciar Bot de Soporte
