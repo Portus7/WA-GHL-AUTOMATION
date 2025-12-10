@@ -79,14 +79,15 @@ async function processKeywordTags(locationId, contactId, text, isMobileContext =
     }
 }
 
-// ✅ FUNCIÓN CORREGIDA: Enviar alertas usando el Bot de Soporte del Admin
-async function sendSupportAlert(message) {
+// ✅ FUNCIÓN CORREGIDA: Enviar alertas (Soporta destinatario dinámico)
+async function sendSupportAlert(message, targetPhoneOverride = null) {
     try {
-        // Obtenemos el número destino desde .env (tu número personal)
-        const targetPhone = process.env.SUPPORT_ALERT_RECIPIENT;
+        // 1. Si pasamos un número específico (el del cliente), usamos ese.
+        // 2. Si no, usamos el del admin definido en .env como fallback.
+        const targetPhone = targetPhoneOverride || process.env.SUPPORT_ALERT_RECIPIENT;
 
         if (!targetPhone) {
-            console.warn("⚠️ No se ha definido SUPPORT_ALERT_RECIPIENT en .env");
+            console.warn("⚠️ No hay destinatario para la alerta de soporte (ni cliente ni admin).");
             return;
         }
 
@@ -97,8 +98,10 @@ async function sendSupportAlert(message) {
         // Verificamos si el bot de soporte está vivo
         if (session && session.isConnected && session.sock) {
             const jid = targetPhone.replace(/\D/g, "") + "@s.whatsapp.net";
+
+            // Enviamos el mensaje
             await session.sock.sendMessage(jid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
-            console.log("🔔 Alerta de soporte enviada exitosamente.");
+            console.log(`🔔 Alerta enviada a ${targetPhone}`);
         } else {
             console.warn("⚠️ El Bot de Soporte NO está conectado. Ve al Panel Admin para vincularlo.");
         }
@@ -147,7 +150,6 @@ async function deleteSessionData(locationId, slot) {
 }
 
 async function syncSlotInfo(locationId, slotId, phoneNumber) {
-    // Si es el bot de soporte, no necesitamos validaciones complejas de location
     const check = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
     const res = await pool.query(check, [locationId, slotId]);
     if (res.rows.length === 0) {
@@ -160,7 +162,7 @@ async function syncSlotInfo(locationId, slotId, phoneNumber) {
 }
 
 async function saveRouting(clientPhone, locationId, contactId, channelNumber, message = null) {
-    if (locationId === SUPPORT_LOC_ID) return; // No guardamos routing para el bot de soporte
+    if (locationId === SUPPORT_LOC_ID) return;
     const normClient = normalizePhone(clientPhone);
     const normChannel = normalizePhone(channelNumber);
     const sql = `INSERT INTO phone_routing (phone, location_id, contact_id, channel_number, updated_at, messages_count) VALUES ($1, $2, $3, $4, NOW(), $5) ON CONFLICT (phone) DO UPDATE SET location_id = EXCLUDED.location_id, contact_id = COALESCE(EXCLUDED.contact_id, phone_routing.contact_id), channel_number = EXCLUDED.channel_number, updated_at = NOW(), messages_count = phone_routing.messages_count + 1;`;
@@ -183,6 +185,31 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
     }
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
     try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { console.error("Error fetching location slots config:", e); return []; }
+}
+
+// ✅ AGREGADA: Función para mensajes interactivos (Faltaba en tu versión anterior)
+async function sendInteractiveMessage(sock, jid, parsedData) {
+    const { title, body, image, buttons } = parsedData;
+    let header = { title: title, subtitle: "", hasMediaAttachment: false };
+
+    if (image) {
+        header = { hasMediaAttachment: true, imageMessage: { url: image } };
+    }
+
+    const msgPayload = {
+        viewOnceMessage: {
+            message: {
+                interactiveMessage: {
+                    body: { text: body },
+                    footer: { text: "Clic&App" },
+                    header: header,
+                    nativeFlowMessage: { buttons: buttons, messageParamsJson: "" }
+                }
+            }
+        }
+    };
+
+    await sock.sendMessage(jid, msgPayload);
 }
 
 // 🔥 HELPER: Descargar y Guardar Media
@@ -332,7 +359,26 @@ async function startWhatsApp(locationId, slotId) {
                 sessionData.sock = null;
                 sessions.delete(sessionId);
 
+                // ✅ LÓGICA DE ALERTA AL CLIENTE
                 if (isLogout && !sessionData.isDestroying) {
+
+                    // 1. OBTENER EL NÚMERO DEL CLIENTE ANTES DE BORRARLO
+                    let clientPhone = sessionData.myNumber;
+
+                    // Si por alguna razón no está en memoria (ej: reinicio de servidor), lo buscamos en DB
+                    if (!clientPhone || clientPhone === "Desconocido") {
+                        try {
+                            const res = await pool.query(
+                                "SELECT phone_number FROM location_slots WHERE location_id = $1 AND slot_id = $2",
+                                [locationId, slotId]
+                            );
+                            if (res.rows.length > 0) {
+                                clientPhone = res.rows[0].phone_number;
+                            }
+                        } catch (e) { console.error("Error buscando fono cliente:", e); }
+                    }
+
+                    // A) Actualizar DB (Borrar número)
                     try {
                         await pool.query(
                             "UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2",
@@ -341,13 +387,15 @@ async function startWhatsApp(locationId, slotId) {
                         await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
                     } catch (dbErr) { console.error("Error cleanup DB:", dbErr); }
 
-                    // Si se desconecta el propio soporte, avisa a la consola (no puede mandarse mensaje a sí mismo)
-                    if (locationId === SUPPORT_LOC_ID) {
-                        console.error("🚨 ALERTA CRÍTICA: ¡El Bot de Soporte se ha desconectado!");
+                    // B) Enviar Alerta DIRECTAMENTE AL CLIENTE
+                    // Si tenemos su número, usamos el bot de soporte para avisarle a ÉL/ELLA.
+                    if (clientPhone && clientPhone !== "Desconocido") {
+                        const alertMsg = `⚠️ *DESCONEXIÓN DETECTADA*\n\nHola, detectamos que tu número vinculado a la subagencia *${locationId}* (Slot ${slotId}) se ha desconectado.\n\nPor favor, ingresa al panel y vuelve a escanear el código QR para reactivar el servicio.`;
+
+                        // Pasamos clientPhone como segundo argumento
+                        await sendSupportAlert(alertMsg, clientPhone);
                     } else {
-                        // Si es un cliente normal, el soporte avisa
-                        const alertMsg = `⚠️ *ALERTA DE DESCONEXIÓN*\n\nEl cliente de la ubicación *${locationId}* (Dispositivo #${slotId}) ha cerrado la sesión desde su celular.\n\nFavor contactarlo para escanear el QR nuevamente.`;
-                        await sendSupportAlert(alertMsg);
+                        console.warn("⚠️ No se pudo enviar alerta al cliente: Número desconocido.");
                     }
                 }
             }
@@ -372,8 +420,7 @@ async function startWhatsApp(locationId, slotId) {
             const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
             if (!from || from.includes("status@") || from.includes("@newsletter")) return;
 
-            // ... (Lógica normal de procesamiento de mensajes: tipos, media, transcripción) ...
-            // (Mantenemos tu lógica existente aquí sin cambios, ya que está dentro del if locationId !== SUPPORT)
+            // ... (Resto de tu lógica normal) ...
             const msgType = Object.keys(m.message)[0];
             let text = "";
             let attachments = [];
@@ -464,32 +511,17 @@ async function startWhatsApp(locationId, slotId) {
                 await logMessageToGHL(locationId, contact.id, transcriptionMsg, direction, []);
             }
 
+            if (promo) {
+                const buttons = [
+                    { id: 'promo_yes', text: 'Ver Ofertas' },
+                    { id: 'promo_no', text: 'No me interesa' },
+                    { id: 'agent', text: 'Hablar con Humano' }
+                ];
+                await sendButtons(sock, from, `¡Hola ${waName}! Vimos que te interesan nuestras promos.`, buttons);
+            }
+
         } catch (error) { console.error("Upsert Error:", error.message); }
     });
-}
-
-async function sendInteractiveMessage(sock, jid, parsedData) {
-    const { title, body, image, buttons } = parsedData;
-    let header = { title: title, subtitle: "", hasMediaAttachment: false };
-
-    if (image) {
-        header = { hasMediaAttachment: true, imageMessage: { url: image } };
-    }
-
-    const msgPayload = {
-        viewOnceMessage: {
-            message: {
-                interactiveMessage: {
-                    body: { text: body },
-                    footer: { text: "Clic&App" },
-                    header: header,
-                    nativeFlowMessage: { buttons: buttons, messageParamsJson: "" }
-                }
-            }
-        }
-    };
-
-    await sock.sendMessage(jid, msgPayload);
 }
 
 module.exports = {
@@ -503,9 +535,9 @@ module.exports = {
     waitForSocketOpen,
     sendButtons,
     parseGHLCommand,
-    sendInteractiveMessage,
+    sendInteractiveMessage, // ✅ AHORA SÍ ESTÁ DEFINIDA Y EXPORTADA
     processKeywordTags,
     findOrCreateGHLContact,
-    SUPPORT_LOC_ID, // Exportamos constantes
+    SUPPORT_LOC_ID,
     SUPPORT_SLOT_ID
 };
