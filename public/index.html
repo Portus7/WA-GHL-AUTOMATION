@@ -277,7 +277,6 @@
         loaderView.style.display = "none";
         appView.style.display = "block";
 
-        // MODIFICACIÓN: Pasamos la lista de slots real, no un número
         renderSlots(conf.slots || []);
 
         setInterval(syncAllSlots, 5000);
@@ -306,7 +305,6 @@
         </div>`;
     }
 
-    // MODIFICACIÓN: Recibe array de slots, no un número total
     function renderSlots(slotsArray) {
       container.innerHTML = "";
 
@@ -316,7 +314,7 @@
       }
 
       slotsArray.forEach(slot => {
-        const i = slot.id; // ID real de la base de datos
+        const i = slot.id;
         const currentName = slot.name || `Dispositivo #${i}`;
 
         const html = `
@@ -354,8 +352,6 @@
         </div>
       `;
         container.insertAdjacentHTML('beforeend', html);
-
-        // Verificamos estado inicial
         checkStatus(i);
       });
     }
@@ -366,31 +362,21 @@
 
       if (newName && newName.trim() !== "" && newName !== currentName) {
         try {
-          // Actualización optimista (UI primero)
           document.getElementById(`title-text-${slot}`).textContent = newName;
-
-          // Guardar en Backend
           const res = await fetch("/config-slot", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              locationId,
-              slot,
-              slotName: newName
-            })
+            body: JSON.stringify({ locationId, slot, slotName: newName })
           });
-
           if (!res.ok) throw new Error("Error al guardar");
-
         } catch (e) {
           alert("No se pudo guardar el nombre.");
-          document.getElementById(`title-text-${slot}`).textContent = currentName; // Revertir
+          document.getElementById(`title-text-${slot}`).textContent = currentName;
         }
       }
     }
 
     function syncAllSlots() {
-      // MODIFICACIÓN: Buscar por atributo data-slot-id
       const cards = document.querySelectorAll('.slot-card');
       cards.forEach(card => {
         const slotId = card.getAttribute('data-slot-id');
@@ -410,7 +396,6 @@
 
     function updateUI(slot, isConnected, phone, priority, tags, slotName) {
       const badge = document.getElementById(`badge-${slot}`);
-      // Si el elemento no existe (porque se borró en el panel agencia pero el frontend no recargó), salimos
       if (!badge) return;
 
       const viewCon = document.getElementById(`connected-view-${slot}`);
@@ -443,7 +428,6 @@
         phoneText.textContent = "+" + phone;
       } else {
         metaDiv.style.display = "none";
-
         if (badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
           badge.className = "badge badge-off";
           badge.textContent = "INACTIVO";
@@ -472,7 +456,6 @@
         msg.textContent = "Escanea este código con WhatsApp:";
 
         const localInterval = setInterval(async () => {
-          // Verificar si el elemento sigue existiendo
           if (!document.getElementById(`card-${slot}`)) {
             clearInterval(localInterval);
             activeConnections.delete(slot);
@@ -485,7 +468,9 @@
           if (statData.connected) {
             clearInterval(localInterval);
             activeConnections.delete(slot);
-            updateUI(slot, true, statData.myNumber, statData.priority, statData.tags, statData.slotName);
+            // ✅ REFRESCAR PÁGINA AL CONECTAR (Para asegurar estado limpio)
+            alert("¡Conexión exitosa! Actualizando panel...");
+            window.location.reload();
             return;
           }
 
@@ -511,17 +496,17 @@
 
     async function disconnect(slot) {
       if (!confirm("¿Estás seguro de desconectar?")) return;
+
       const btn = document.querySelector(`#connected-view-${slot} button`);
       btn.disabled = true;
-      btn.textContent = "Desconectando...";
+      btn.textContent = "Desconectando..."; // Feedback visual inmediato
 
       try {
         await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-        updateUI(slot, false, null, undefined, undefined, null); // Null en nombre para no resetearlo visualmente
 
-        document.getElementById(`btn-${slot}`).disabled = false;
-        document.getElementById(`btn-${slot}`).textContent = "Vincular WhatsApp";
-        document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
+        // ✅ REFRESCAR PÁGINA AL DESCONECTAR (Solución al botón pegado)
+        window.location.reload();
+
       } catch (e) {
         alert("Error al desconectar");
         btn.disabled = false;
