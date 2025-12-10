@@ -78,13 +78,13 @@ async function processKeywordTags(locationId, contactId, text, isMobileContext =
     }
 }
 
-// ✅ ENVIAR ALERTAS (Soporte)
+// ✅ ENVIAR ALERTAS (Soporte) - Con validación de existencia
 async function sendSupportAlert(message, targetPhoneOverride = null) {
     try {
         const targetPhone = targetPhoneOverride || process.env.SUPPORT_ALERT_RECIPIENT;
 
         if (!targetPhone) {
-            console.warn("⚠️ No hay destinatario para la alerta de soporte.");
+            // console.warn("⚠️ No hay destinatario para la alerta de soporte.");
             return;
         }
 
@@ -92,15 +92,26 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
         const session = sessions.get(sessionId);
 
         if (session && session.isConnected && session.sock) {
-            console.log(`🔔 Enviando alerta a ${targetPhone}`);
             const jid = targetPhone.replace(/\D/g, "") + "@s.whatsapp.net";
-            await session.sock.sendMessage(jid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
-            console.log(`🔔 Alerta enviada a ${targetPhone}`);
+
+            // 1. VERIFICAR SI EL NÚMERO EXISTE EN WHATSAPP
+            const [result] = await session.sock.onWhatsApp(jid);
+
+            if (result?.exists) {
+                // 2. Si existe, enviamos (usamos el JID real que nos devuelve WhatsApp para asegurar formato)
+                await session.sock.sendMessage(result.jid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
+                console.log(`🔔 Alerta enviada a ${targetPhone}`);
+            } else {
+                console.warn(`⚠️ No se envió alerta a ${targetPhone}: El número no está registrado en WhatsApp.`);
+            }
         } else {
             console.warn("⚠️ El Bot de Soporte NO está conectado.");
         }
     } catch (e) {
-        console.error("Error enviando alerta de soporte:", e.message);
+        // Ignoramos errores de "no existe" para no ensuciar el log, pero logueamos otros graves
+        if (e?.data?.status !== 406) {
+            console.error("Error enviando alerta de soporte:", e.message);
+        }
     }
 }
 
