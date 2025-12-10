@@ -97,6 +97,7 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
             console.log(`jid: ${jid}`);
             // 1. VERIFICAR SI EL NÚMERO EXISTE EN WHATSAPP
             const [result] = await session.sock.onWhatsApp(jid);
+            console.log(`result: ${result}`);
 
             if (result?.exists) {
                 // 2. Si existe, enviamos (usamos el JID real que nos devuelve WhatsApp para asegurar formato)
