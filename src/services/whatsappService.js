@@ -90,6 +90,11 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
 
         const sessionId = `${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`;
         const session = sessions.get(sessionId);
+        console.log(`🔔 hasta aca llego ${targetPhone}`,
+            `session: ${session}`,
+            `session.isConnected: ${session.isConnected}`,
+            `session.sock: ${session.sock}`,
+            `supportAlertRecipient: ${SUPPORT_LOC_ID}`);
 
         if (session && session.isConnected && session.sock) {
             const jid = targetPhone.replace(/\D/g, "") + "@s.whatsapp.net";
