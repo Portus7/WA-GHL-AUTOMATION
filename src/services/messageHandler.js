@@ -106,7 +106,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
     if (!m?.message) return;
     if (botMessageIds.has(m.key.id)) return;
     console.log(`
-        Mensaje recibido: ${m}
+        Mensaje recibido: ${m.keys}
         ID: ${m.key.id}
         Remitente: ${m.key.remoteJid}
         Mensaje: ${JSON.stringify(m.message, null, 2)}
