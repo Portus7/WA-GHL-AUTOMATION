@@ -11,6 +11,8 @@ const rateLimit = require("express-rate-limit");
 
 const { login, verifyToken, requireRole } = require("./controllers/authController");
 
+const { startMediaCleanup } = require("./services/mediaCleanup");
+
 const {
     startWhatsApp,
     sessions,
@@ -549,6 +551,7 @@ async function restoreSessions() {
 (async () => {
     try {
         await initDb();
+        startMediaCleanup();
         app.listen(PORT, async () => {
             console.log(`API OK ${PORT}`);
             await restoreSessions();
