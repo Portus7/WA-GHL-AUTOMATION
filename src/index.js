@@ -222,16 +222,13 @@ app.post("/ghl/webhook", async (req, res) => {
     try {
         const { locationId, phone, message, type, attachments } = req.body;
 
-        // Validaciones básicas
         if (!locationId || !phone) return res.json({ ignored: true });
         if (message && message.includes("[Enviado desde otro dispositivo]")) return res.json({ ignored: true });
 
-        // Solo procesamos mensajes salientes (Outbound/SMS)
         if (type === "Outbound" || type === "SMS") {
             let finalMessage = message || "";
             let messageDelay = 0;
 
-            // Procesar Spintax y Delay si existen
             if (finalMessage) {
                 const processed = processAdvancedMessage(finalMessage);
                 finalMessage = processed.text;
@@ -240,58 +237,55 @@ app.post("/ghl/webhook", async (req, res) => {
             }
 
             const clientPhone = normalizePhone(phone);
-
-            // Obtenemos la configuración de los slots, que incluye la columna 'settings'
             const dbConfigs = await getLocationSlotsConfig(locationId);
 
-            // Buscar sesión disponible
             let availableCandidates = dbConfigs.map(conf => ({
                 slot: conf.slot_id,
                 myNumber: conf.phone_number,
-                settings: conf.settings || {}, // ✅ Importante: Traemos los settings para ver los grupos
+                settings: conf.settings || {},
                 session: sessions.get(`${locationId}_slot${conf.slot_id}`)
             })).filter(c => c.session && c.session.isConnected);
 
             if (availableCandidates.length === 0) return res.status(200).json({ error: "No devices connected" });
 
-            // Seleccionamos el primer slot disponible (o implementa tu lógica de rotación si tienes)
-            const selected = availableCandidates[0];
-
-            // --- 🆕 LÓGICA DE DETECCIÓN DE DESTINO (GRUPO vs INDIVIDUAL) ---
+            // 🔥 FIX INTELIGENTE DE SELECCIÓN DE SLOT
+            // Buscamos si es un mensaje para un GRUPO y qué slot lo tiene activo
             const jidUser = clientPhone.replace(/\D/g, "");
-            let jid;
+            let selected = null;
+            let targetJid = null;
 
-            // Revisamos la configuración de grupos del slot seleccionado
-            const groupsConfig = selected.settings.groups || {};
+            // 1. Barrido para encontrar si es un grupo configurado en algún slot
+            for (const candidate of availableCandidates) {
+                const groupsConfig = candidate.settings.groups || {};
+                const foundGroup = Object.keys(groupsConfig).find(gJid =>
+                    gJid.replace(/\D/g, "") === jidUser && groupsConfig[gJid].active
+                );
 
-            // Buscamos si existe un grupo ACTIVO cuyo ID coincida con el teléfono enviado por GHL
-            const targetGroupJid = Object.keys(groupsConfig).find(gJid =>
-                gJid.replace(/\D/g, "") === jidUser && groupsConfig[gJid].active
-            );
-
-            if (targetGroupJid) {
-                console.log(`📢 Enviando mensaje a Grupo: ${groupsConfig[targetGroupJid].name || targetGroupJid}`);
-                jid = targetGroupJid; // Usamos el JID real del grupo (ej: 123456@g.us)
-            } else {
-                // Si no es grupo, es un usuario normal
-                jid = jidUser + "@s.whatsapp.net";
+                if (foundGroup) {
+                    selected = candidate; // Usamos ESTE slot porque es el que conoce el grupo
+                    targetJid = foundGroup; // Usamos el JID real del grupo
+                    console.log(`📢 Detectado Grupo Activo en Slot ${selected.slot}: ${foundGroup}`);
+                    break;
+                }
             }
-            // -------------------------------------------------------------
+
+            // 2. Si no es grupo (o no se encontró config), asumimos chat individual
+            if (!selected) {
+                // Usamos el primero disponible (o rotación si quisieras)
+                selected = availableCandidates[0];
+                targetJid = jidUser + "@s.whatsapp.net";
+            }
 
             try {
                 await waitForSocketOpen(selected.session.sock);
-
                 let sentMsg;
 
-                // 1. Detectar si es un comando de botones (#btn)
                 const commandData = parseGHLCommand(finalMessage);
 
                 if (commandData) {
-                    console.log(`✨ Enviando botones interactivos a ${clientPhone} desde GHL`);
-                    sentMsg = await sendInteractiveMessage(selected.session.sock, jid, commandData);
-                }
-                // 2. Si no es comando, envío normal (con adjuntos o texto)
-                else {
+                    console.log(`✨ Enviando botones interactivos a ${targetJid}`);
+                    sentMsg = await sendInteractiveMessage(selected.session.sock, targetJid, commandData);
+                } else {
                     if (attachments && attachments.length > 0) {
                         for (const url of attachments) {
                             let content = { image: { url }, caption: finalMessage };
@@ -299,36 +293,25 @@ app.post("/ghl/webhook", async (req, res) => {
                             else if (url.endsWith(".pdf")) content = { document: { url }, mimetype: "application/pdf", fileName: "doc.pdf", caption: finalMessage };
                             else if (url.endsWith(".ogg") || url.endsWith(".mp3")) content = { audio: { url }, mimetype: "audio/mp4", ptt: true };
 
-                            sentMsg = await selected.session.sock.sendMessage(jid, content);
-
-                            // Evitar duplicados por cada adjunto enviado
+                            sentMsg = await selected.session.sock.sendMessage(targetJid, content);
                             if (sentMsg?.key?.id) botMessageIds.add(sentMsg.key.id);
                         }
                     } else {
-                        // Mensaje de texto simple
                         if (finalMessage && finalMessage.trim().length > 0) {
-                            sentMsg = await selected.session.sock.sendMessage(jid, { text: finalMessage });
+                            sentMsg = await selected.session.sock.sendMessage(targetJid, { text: finalMessage });
                         }
                     }
                 }
 
-                // 🔥 CRÍTICO: Agregar ID a la lista negra para evitar que el upsert lo duplique en GHL
-                if (sentMsg?.key?.id) {
-                    botMessageIds.add(sentMsg.key.id);
-                }
+                if (sentMsg?.key?.id) botMessageIds.add(sentMsg.key.id);
 
-                // 3. Registro en GHL (Contacto, Tags y Routing)
-                // Nota: Si es un grupo, GHL ya tiene el contacto del "Grupo" creado por el inbound handler,
-                // así que findOrCreate devolverá ese mismo contacto.
                 const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
 
                 if (contact?.id) {
-                    // Procesar tags (pasamos el slot actual para que aplique las reglas de ese número)
                     await processKeywordTags(locationId, contact.id, finalMessage, selected.slot, false);
                 }
 
                 await saveRouting(clientPhone, locationId, contact?.id, selected.myNumber);
-
                 return res.json({ ok: true });
 
             } catch (e) {
@@ -337,7 +320,6 @@ app.post("/ghl/webhook", async (req, res) => {
             }
         }
 
-        // Si no es Outbound/SMS
         res.json({ ignored: true });
 
     } catch (e) {
