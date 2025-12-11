@@ -39,7 +39,8 @@ const {
     findOrCreateGHLContact,
     logMessageToGHL,
     addTagToContact,
-    assignContactOwner
+    assignContactOwner,
+    getLocationUsers,
 } = require("./services/ghlService");
 
 const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/utils");
