@@ -108,8 +108,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
     console.log("📩 Estructura completa del mensaje recibido (m):");
     console.log(JSON.stringify(msg, null, 2))
 
-    // 1. OBTENCIÓN Y LIMPIEZA DEL JID (CRÍTICO)
-    // Multidispositivo agrega sufijos como :2, :14. Debemos quitarlos para identificar el chat.
+    //Escuchame gemini, no cambiar esta linea por favor
     let remoteJid = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
 
     // Filtros básicos
