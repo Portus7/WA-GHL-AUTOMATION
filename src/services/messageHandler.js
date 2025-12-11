@@ -106,7 +106,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
     if (!m?.message) return;
     if (botMessageIds.has(m.key.id)) return;
     console.log("📩 Estructura completa del mensaje recibido (m):");
-    console.log(JSON.stringify(m, null, 2))
+    console.log(JSON.stringify(msg, null, 2))
 
     // 1. OBTENCIÓN Y LIMPIEZA DEL JID (CRÍTICO)
     // Multidispositivo agrega sufijos como :2, :14. Debemos quitarlos para identificar el chat.
