@@ -6,6 +6,7 @@ const { parseGHLCommand } = require("../helpers/parser");
 const { transcribeAudio } = require("./openaiService");
 const { getTenantConfig } = require("./tenantService");
 const { initFunction } = require("buttons-warpper");
+const { prepareWAMessageMedia } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
@@ -218,27 +219,36 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
 async function sendInteractiveMessage(sock, jid, parsedData) {
     const { title, body, image, buttons } = parsedData;
 
-    // 1. Verificar si el wrapper se inicializó correctamente
     if (typeof sock.sendInteractiveMessage !== 'function') {
-        console.error("❌ ERROR: El método sock.sendInteractiveMessage no existe. ¿Se ejecutó initFunction?");
-        // Fallback a texto plano si falla la librería
-        return await sock.sendMessage(jid, { text: `[BOTONES NO SOPORTADOS]\n\n${body}` });
+        console.error("❌ ERROR: El método sock.sendInteractiveMessage no existe.");
+        return await sock.sendMessage(jid, { text: `[ERROR] Botones no habilitados.\n\n${body}` });
     }
 
-    // 2. Construir el payload EXACTO que espera 'buttons-warpper'
-    // (Ver src/types/message.types.ts del repositorio que subiste)
     const payload = {
-        text: body, // El cuerpo del mensaje
+        text: body,
         footer: "Clic&App",
-        interactiveButtons: buttons // El parser ya devuelve {name, buttonParamsJson} que es compatible
+        interactiveButtons: buttons
     };
 
-    // 3. Agregar Header si existe (Título o Imagen)
+    // ✅ FIX: Procesar la imagen antes de enviarla
     if (image) {
-        payload.header = {
-            hasMediaAttachment: true,
-            imageMessage: { url: image } // El wrapper maneja la descarga si es URL
-        };
+        try {
+            console.log("🖼️ Procesando imagen para botón interactivo...");
+            // prepareWAMessageMedia descarga y sube la imagen a los servidores de WhatsApp
+            const media = await prepareWAMessageMedia(
+                { image: { url: image } },
+                { upload: sock.waUploadToServer }
+            );
+
+            payload.header = {
+                hasMediaAttachment: true,
+                imageMessage: media.imageMessage // Usamos el objeto procesado, no la URL
+            };
+        } catch (error) {
+            console.error("❌ Error preparando imagen para botón:", error.message);
+            // Fallback: enviar sin imagen si falla la carga
+            payload.header = { title: title || "Aviso", hasMediaAttachment: false };
+        }
     } else if (title) {
         payload.header = {
             title: title,
@@ -246,13 +256,9 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
         };
     }
 
-    console.log(`🚀 Enviando payload al wrapper para ${jid}`);
-
-    // 4. EJECUTAR EL MÉTODO DEL WRAPPER
-    // Este método se encarga internamente de relayMessage y de inyectar los nodos 'biz' y 'bot'
+    console.log(`🚀 Enviando botones a ${jid}`);
     const msg = await sock.sendInteractiveMessage(jid, payload);
 
-    // 5. Guardar ID para evitar bucles en upsert
     if (msg?.key?.id) botMessageIds.add(msg.key.id);
 
     return msg;
