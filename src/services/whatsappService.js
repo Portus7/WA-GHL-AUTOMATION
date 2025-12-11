@@ -216,6 +216,9 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
 }
 
 async function sendInteractiveMessage(sock, jid, parsedData) {
+    // Importamos dinámicamente para generar el mensaje
+    const { generateWAMessageFromContent, proto } = require("@whiskeysockets/baileys");
+
     const { title, body, image, buttons } = parsedData;
 
     let header = {
@@ -229,28 +232,39 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
         header.imageMessage = { url: image };
     }
 
-    const msgPayload = {
+    // 1. Construimos la estructura exacta del mensaje interactivo
+    const interactiveMessage = {
+        body: { text: body },
+        footer: { text: "Clic&App" },
+        header: header,
+        nativeFlowMessage: {
+            buttons: buttons,
+            messageParamsJson: ""
+        }
+    };
+
+    // 2. Generamos el objeto WAMessage completo
+    const waMessage = await generateWAMessageFromContent(jid, {
         viewOnceMessage: {
             message: {
                 messageContextInfo: {
                     deviceListMetadata: {},
                     deviceListMetadataVersion: 2
                 },
-                interactiveMessage: {
-                    body: { text: body },
-                    footer: { text: "Clic&App" },
-                    header: header,
-                    nativeFlowMessage: {
-                        buttons: buttons,
-                        messageParamsJson: ""
-                    }
-                }
+                interactiveMessage: interactiveMessage
             }
         }
-    };
+    }, { userJid: sock.user.id });
 
-    // ✅ CAMBIO CLAVE: Agregamos 'return' para obtener el ID del mensaje en index.js
-    return await sock.sendMessage(jid, msgPayload);
+    // 3. ENVIAMOS USANDO relayMessage (Esto soluciona el error)
+    await sock.relayMessage(jid, waMessage.message, {
+        messageId: waMessage.key.id
+    });
+
+    // Guardamos ID para evitar bucles
+    if (waMessage.key.id) botMessageIds.add(waMessage.key.id);
+
+    return waMessage;
 }
 
 // 🔥 HELPER: Descargar y Guardar Media
