@@ -15,13 +15,34 @@ const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "https://wa.clicandapp.com"
 
 // --- Helpers Internos ---
 
-// ✅ Ahora esta función usa 'pool' importado arriba y se EXPORTA al final
-async function processKeywordTags(locationId, contactId, text, isMobileContext = false) {
+// 🆕 Helper para obtener configuración específica del slot
+async function getSlotSettings(locationId, phoneNumber) {
+    try {
+        const res = await pool.query(
+            "SELECT settings, slot_id FROM location_slots WHERE location_id = $1 AND phone_number = $2",
+            [locationId, phoneNumber]
+        );
+        if (res.rows.length > 0) return res.rows[0];
+        return { settings: {}, slot_id: null };
+    } catch (e) {
+        return { settings: {}, slot_id: null };
+    }
+}
+
+// ✅ processKeywordTags ahora filtra por slot_id
+async function processKeywordTags(locationId, contactId, text, currentSlotId = null, isMobileContext = false) {
     if (locationId === "__SYSTEM_SUPPORT__") return;
     try {
-        const sql = "SELECT keyword, tag FROM keyword_tags WHERE location_id = $1";
-        const res = await pool.query(sql, [locationId]);
+        // Buscamos keywords globales (slot_id NULL) O específicas de este slot
+        const sql = `
+            SELECT keyword, tag FROM keyword_tags 
+            WHERE location_id = $1 
+            AND (slot_id IS NULL OR slot_id = $2)
+        `;
+        // Si currentSlotId es null, la query funcionará igual trayendo solo las globales
+        const res = await pool.query(sql, [locationId, currentSlotId]);
         const tagRules = res.rows;
+
         if (tagRules.length === 0) return;
 
         const tagsToApply = new Set();
@@ -83,8 +104,6 @@ async function downloadAndSaveMedia(message, type) {
 
 // --- Lógica Principal ---
 
-// Mantenemos 'pool' en los argumentos por compatibilidad con whatsappService, 
-// pero usamos el importado si es necesario.
 async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessageIds, saveRouting, getRoutingForPhone) {
     if (locationId === "__SYSTEM_SUPPORT__") return;
     const m = msg.messages[0];
@@ -95,12 +114,24 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
     if (!from || from.includes("status@") || from.includes("@newsletter")) return;
 
     try {
+        // 1. Validar Tenant Activo (Nivel Global)
         const tenantStatus = await getTenantConfig(locationId);
         if (!tenantStatus.active) {
             console.warn(`⛔ Tenant ${locationId} inactivo.`);
             return;
         }
-        const settings = tenantStatus.settings;
+
+        // 2. Identificar el Slot (Canal) para obtener SU configuración específica
+        const myId = sock.user?.id;
+        const myChannelNumber = myId ? normalizePhone(myId.split(":")[0]) : "";
+
+        const slotData = await getSlotSettings(locationId, myChannelNumber);
+
+        // Si el slot tiene settings personalizados, úsalos. Si no, usa {} (defaults o vacíos)
+        // NOTA: Podrías hacer un merge con tenantStatus.settings si quieres herencia, 
+        // pero aquí priorizamos la configuración individual pura.
+        const settings = slotData.settings || {};
+        const currentSlotId = slotData.slot_id;
 
         const msgType = Object.keys(m.message)[0];
         let text = "";
@@ -119,8 +150,9 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
                 attachments.push(mediaData.url);
                 if (!text) text = `[Archivo: ${msgType}]`;
 
+                // Configuración de audio específica del slot
                 if (msgType === 'audioMessage' && settings.transcribe_audio !== false) {
-                    console.log(`🎙️ Transcribiendo audio para ${locationId}...`);
+                    console.log(`🎙️ Transcribiendo audio para ${locationId} (Slot ${currentSlotId})...`);
                     const transcriptText = await transcribeAudio(mediaData.filePath);
                     if (transcriptText) transcription = transcriptText;
                 }
@@ -140,8 +172,6 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
         if (!text && attachments.length === 0) return;
 
         const clientPhone = normalizePhone(from.split("@")[0]);
-        const myId = sock.user?.id;
-        const myChannelNumber = myId ? normalizePhone(myId.split(":")[0]) : "";
         const isFromMe = m.key.fromMe;
         const waName = m.pushName || "Usuario WhatsApp";
 
@@ -163,19 +193,25 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
         if (isFromMe) {
             const deviceFooter = "[Enviado desde otro dispositivo]";
             messageForGHL = `${text}\n\n${deviceFooter}`;
+
+            // Configuración de Source Label específica del slot
             if (settings.show_source_label !== false) {
                 let sourceLabel = `+${myChannelNumber}`;
                 try {
+                    // Intentamos obtener el nombre bonito del slot si existe
                     const slotRes = await pool.query("SELECT slot_name FROM location_slots WHERE location_id=$1 AND phone_number=$2", [locationId, myChannelNumber]);
                     if (slotRes.rows.length > 0 && slotRes.rows[0].slot_name) sourceLabel = slotRes.rows[0].slot_name;
                 } catch (err) { }
                 messageForGHL += `\nSource: ${sourceLabel}`;
             }
+
             direction = "outbound";
-            // Usamos processKeywordTags sin pasar pool como argumento
-            await processKeywordTags(locationId, contact.id, text, true);
+            // Pasamos currentSlotId para filtrar keywords
+            await processKeywordTags(locationId, contact.id, text, currentSlotId, true);
         } else {
             messageForGHL = text;
+
+            // Configuración de Source Label específica del slot (también para inbound si se desea)
             if (settings.show_source_label !== false) {
                 let sourceLabel = `+${myChannelNumber}`;
                 try {
@@ -184,6 +220,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
                 } catch (err) { }
                 messageForGHL += `\nSource: ${sourceLabel}`;
             }
+
             direction = "inbound";
         }
 

@@ -91,9 +91,14 @@ const initDb = async () => {
         slot_id INT,
         phone_number VARCHAR(50),
         priority INT DEFAULT 99,
-        tags JSONB DEFAULT '[]',
-        updated_at TIMESTAMP DEFAULT NOW(),
         slot_name VARCHAR(100),
+        settings JSONB DEFAULT '{ 
+            "show_source_label": true, 
+            "create_unknown_contacts": true,
+            "transcribe_audio": true,
+            "send_disconnect_message": true
+        }',
+        updated_at TIMESTAMP DEFAULT NOW(),
         PRIMARY KEY (location_id, slot_id)
       );
     `);

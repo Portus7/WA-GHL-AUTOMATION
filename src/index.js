@@ -28,6 +28,7 @@ const {
     sendInteractiveMessage
 } = require("./services/whatsappService");
 
+// Importamos processKeywordTags desde el handler (para uso en webhook)
 const { processKeywordTags } = require("./services/messageHandler");
 
 const {
@@ -289,12 +290,13 @@ app.post("/ghl/webhook", async (req, res) => {
                 }
 
                 // 3. Registro en GHL (Contacto, Tags y Routing)
-                // El mensaje en sí NO se loguea aquí porque GHL ya lo tiene (fue enviado desde ahí)
                 const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
 
                 if (contact?.id) {
-                    // Procesar tags si el mensaje contiene keywords configuradas
-                    await processKeywordTags(locationId, contact.id, finalMessage, false);
+                    // Procesar tags (Ojo: Aquí pasamos null como slotId porque en outbound GHL no sabemos el slot fácilmente,
+                    // a menos que lo guardemos en dbConfigs. Por ahora mantenemos null o 0).
+                    // Pero para ser consistentes con la nueva lógica, idealmente deberíamos pasar el selected.slot
+                    await processKeywordTags(locationId, contact.id, finalMessage, selected.slot, false);
                 }
 
                 await saveRouting(clientPhone, locationId, contact?.id, selected.myNumber);
@@ -363,7 +365,7 @@ app.post("/agency/add-slot", verifyToken, async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 3. Borrar Slot (Ruta Admin)
+// 3. Borrar Slot
 app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) => {
     try {
         await deleteSessionData(req.params.locationId, req.params.slotId, true);
@@ -371,21 +373,50 @@ app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) =>
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ✅ NUEVA RUTA: Guardar configuración de Slot Individual
+app.put("/agency/slots/:locationId/:slotId/settings", verifyToken, async (req, res) => {
+    try {
+        const { locationId, slotId } = req.params;
+        const { settings } = req.body;
+
+        await pool.query(
+            "UPDATE location_slots SET settings = $1::jsonb WHERE location_id = $2 AND slot_id = $3",
+            [JSON.stringify(settings), locationId, slotId]
+        );
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ✅ ACTUALIZADO: Detalles ahora trae slots con settings y tenant name
 app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
     const { locationId } = req.params;
     try {
         const [slots, keys, tenant] = await Promise.all([
+            // Traemos todos los campos del slot, incluida la columna 'settings'
             pool.query("SELECT * FROM location_slots WHERE location_id=$1 ORDER BY slot_id", [locationId]),
             pool.query("SELECT * FROM keyword_tags WHERE location_id=$1 ORDER BY created_at DESC", [locationId]),
-            pool.query("SELECT settings, name FROM tenants WHERE location_id=$1", [locationId])
+            pool.query("SELECT name FROM tenants WHERE location_id=$1", [locationId])
         ]);
-        res.json({ slots: slots.rows, keywords: keys.rows, settings: tenant.rows[0]?.settings || {}, name: tenant.rows[0]?.name });
+
+        res.json({
+            slots: slots.rows,
+            keywords: keys.rows,
+            name: tenant.rows[0]?.name
+        });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ✅ ACTUALIZADO: Crear Keyword con slotId opcional
 app.post("/agency/keywords", verifyToken, async (req, res) => {
     try {
-        const r = await pool.query("INSERT INTO keyword_tags (location_id, keyword, tag) VALUES ($1, $2, $3) RETURNING *", [req.body.locationId, req.body.keyword.toLowerCase(), req.body.tag]);
+        const { locationId, slotId, keyword, tag } = req.body;
+        // Si slotId no viene, será NULL (aplica globalmente o a todos, según tu lógica)
+        const r = await pool.query(
+            "INSERT INTO keyword_tags (location_id, slot_id, keyword, tag) VALUES ($1, $2, $3, $4) RETURNING *",
+            [locationId, slotId || null, keyword.toLowerCase(), tag]
+        );
         res.json(r.rows[0]);
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -395,6 +426,7 @@ app.delete("/agency/keywords/:id", verifyToken, async (req, res) => {
     catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Esta ruta actualiza settings globales del tenant (podrías mantenerla o deprecara)
 app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
     try {
         await pool.query("UPDATE tenants SET settings=$1::jsonb WHERE location_id=$2", [JSON.stringify(req.body.settings), req.params.locationId]);
@@ -403,13 +435,12 @@ app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// 🛠️ RUTAS GESTIÓN BOT DE SOPORTE (ADMIN) - ¡ESTAS ERAN LAS QUE FALTABAN!
+// 🛠️ RUTAS GESTIÓN BOT DE SOPORTE (ADMIN)
 // ==========================================
 
 // 1. Iniciar/Reiniciar Bot de Soporte
 app.post("/admin/support/start", verifyToken, requireRole('admin'), async (req, res) => {
     try {
-        // Usamos las constantes importadas
         await startWhatsApp(SUPPORT_LOC_ID, SUPPORT_SLOT_ID);
         res.json({ success: true, message: "Iniciando proceso de conexión..." });
     } catch (e) {
@@ -432,7 +463,6 @@ app.get("/admin/support/status", verifyToken, requireRole('admin'), async (req, 
     const session = sessions.get(`${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`);
     let dbInfo = {};
     try {
-        // Consultamos si existe registro en DB
         const r = await pool.query(
             "SELECT phone_number FROM location_slots WHERE location_id=$1 AND slot_id=$2",
             [SUPPORT_LOC_ID, SUPPORT_SLOT_ID]
@@ -512,7 +542,6 @@ app.get("/config", async (req, res) => {
 // ==========================================
 
 app.get("/admin/agencies", verifyToken, requireRole('admin'), async (req, res) => {
-    // 🔥 FIX: Agregamos el conteo condicional para 'active_subaccounts'
     const q = `
         SELECT 
             agency_id, 
