@@ -20,12 +20,13 @@ const {
     getRoutingForPhone,
     getLocationSlotsConfig,
     waitForSocketOpen,
-    processKeywordTags,
     sendButtons,
     SUPPORT_LOC_ID,
     SUPPORT_SLOT_ID,
     sendInteractiveMessage
 } = require("./services/whatsappService");
+
+const { processKeywordTags } = require("./services/messageHandler");
 
 const {
     saveTokens,

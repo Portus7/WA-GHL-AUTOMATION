@@ -1,22 +1,22 @@
-// src/services/messageHandler.js
 const { downloadMediaMessage } = require("@whiskeysockets/baileys");
 const { normalizePhone } = require("../helpers/utils");
 const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
 const { transcribeAudio } = require("./openaiService");
-const { getTenantConfig } = require("./tenantService"); // Asegúrate de importar esto
+const { getTenantConfig } = require("./tenantService");
+const { pool } = require("../config/db"); // 👈 IMPORTANTE: Conexión DB directa
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
 const mime = require("mime-types");
 
-// Configuración de Directorios para Medios (Misma que tenías)
 const PUBLIC_DIR = path.join(__dirname, "..", "..", "public");
 const MEDIA_DIR = path.join(PUBLIC_DIR, "media");
 const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "https://wa.clicandapp.com";
 
-// --- Helpers Internos (Movidos aquí porque solo se usan al recibir mensajes) ---
+// --- Helpers Internos ---
 
-async function processKeywordTags(locationId, contactId, text, pool, isMobileContext = false) {
+// ✅ Ahora esta función usa 'pool' importado arriba y se EXPORTA al final
+async function processKeywordTags(locationId, contactId, text, isMobileContext = false) {
     if (locationId === "__SYSTEM_SUPPORT__") return;
     try {
         const sql = "SELECT keyword, tag FROM keyword_tags WHERE location_id = $1";
@@ -81,10 +81,11 @@ async function downloadAndSaveMedia(message, type) {
     }
 }
 
-// --- Lógica Principal Exportada ---
+// --- Lógica Principal ---
 
-async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds, saveRouting, getRoutingForPhone) {
-    // 1. Validaciones iniciales
+// Mantenemos 'pool' en los argumentos por compatibilidad con whatsappService, 
+// pero usamos el importado si es necesario.
+async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessageIds, saveRouting, getRoutingForPhone) {
     if (locationId === "__SYSTEM_SUPPORT__") return;
     const m = msg.messages[0];
     if (!m?.message) return;
@@ -94,7 +95,6 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
     if (!from || from.includes("status@") || from.includes("@newsletter")) return;
 
     try {
-        // 2. Obtener Configuración del Tenant
         const tenantStatus = await getTenantConfig(locationId);
         if (!tenantStatus.active) {
             console.warn(`⛔ Tenant ${locationId} inactivo.`);
@@ -102,7 +102,6 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
         }
         const settings = tenantStatus.settings;
 
-        // 3. Extraer Texto y Tipo
         const msgType = Object.keys(m.message)[0];
         let text = "";
         let attachments = [];
@@ -114,7 +113,6 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
         else if (msgType === 'videoMessage') text = m.message.videoMessage.caption || "";
         else if (msgType === 'documentMessage') text = m.message.documentMessage.caption || "";
 
-        // 4. Manejo de Archivos
         if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(msgType)) {
             const mediaData = await downloadAndSaveMedia(m, msgType);
             if (mediaData) {
@@ -129,7 +127,6 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
             }
         }
 
-        // Manejo de citas (Quoted)
         const contextInfo = m.message[msgType]?.contextInfo || m.message.extendedTextMessage?.contextInfo;
         if (contextInfo && contextInfo.quotedMessage) {
             let qText = "";
@@ -142,7 +139,6 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
 
         if (!text && attachments.length === 0) return;
 
-        // 5. Procesar Contacto y Routing
         const clientPhone = normalizePhone(from.split("@")[0]);
         const myId = sock.user?.id;
         const myChannelNumber = myId ? normalizePhone(myId.split(":")[0]) : "";
@@ -161,7 +157,6 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
 
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber, messageNumber);
 
-        // 6. Preparar Payload GHL
         let messageForGHL = "";
         let direction = "inbound";
 
@@ -170,7 +165,6 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
             messageForGHL = `${text}\n\n${deviceFooter}`;
             if (settings.show_source_label !== false) {
                 let sourceLabel = `+${myChannelNumber}`;
-                // Consulta rápida local para nombre del slot (opcional)
                 try {
                     const slotRes = await pool.query("SELECT slot_name FROM location_slots WHERE location_id=$1 AND phone_number=$2", [locationId, myChannelNumber]);
                     if (slotRes.rows.length > 0 && slotRes.rows[0].slot_name) sourceLabel = slotRes.rows[0].slot_name;
@@ -178,7 +172,8 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
                 messageForGHL += `\nSource: ${sourceLabel}`;
             }
             direction = "outbound";
-            await processKeywordTags(locationId, contact.id, text, pool, true);
+            // Usamos processKeywordTags sin pasar pool como argumento
+            await processKeywordTags(locationId, contact.id, text, true);
         } else {
             messageForGHL = text;
             if (settings.show_source_label !== false) {
@@ -192,7 +187,6 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
             direction = "inbound";
         }
 
-        // 7. Enviar a GHL
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
 
         if (transcription) {
@@ -206,4 +200,5 @@ async function handleIncomingMessage(msg, sock, locationId, pool, botMessageIds,
     }
 }
 
-module.exports = { handleIncomingMessage };
+// ✅ Exportamos AMBAS funciones
+module.exports = { handleIncomingMessage, processKeywordTags };
