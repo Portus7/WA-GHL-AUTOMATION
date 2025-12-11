@@ -2,7 +2,8 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const { pool } = require("../config/db");
 
-const JWT_SECRET = process.env.JWT_SECRET || "secreto_super_seguro_cambiar_en_env";
+const JWT_SECRET = process.env.JWT_SECRET || false;
+if (!JWT_SECRET) throw new Error("JWT_SECRET no definido");
 
 // 1. Login
 async function login(req, res) {

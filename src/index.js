@@ -7,6 +7,7 @@ const bcrypt = require("bcryptjs");
 const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
+const rateLimit = require("express-rate-limit");
 
 const { login, verifyToken, requireRole } = require("./controllers/authController");
 
@@ -57,6 +58,10 @@ if (!fs.existsSync(MEDIA_DIR)) {
 }
 
 const app = express();
+
+// ✅ IMPORTANTE: Confiar en el proxy (Nginx/Docker) para obtener la IP real
+app.set('trust proxy', 1);
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 app.use(express.static(PUBLIC_DIR));
@@ -67,6 +72,41 @@ app.use(cors({
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
+// ==========================================
+// 🛡️ CONFIGURACIÓN DE RATE LIMITING
+// ==========================================
+
+// A. Limitador ESTRICTO para Autenticación (Login/Register)
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutos
+    max: 10, // Límite de 10 peticiones por IP
+    message: { error: "Demasiados intentos de inicio de sesión, intenta de nuevo en 15 minutos." },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// B. Limitador GENERAL para la API y Webhooks
+const apiLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, // 1 minuto
+    max: 200, // 200 peticiones
+    message: { error: "Has excedido el límite de peticiones." }
+});
+
+// C. Limitador para Polling del Frontend (QR/Status)
+const pollingLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, // 1 minuto
+    max: 150,
+    message: { error: "Demasiadas consultas de estado." }
+});
+
+// ✅ APLICACIÓN DE LOS LIMITADORES A LAS RUTAS
+app.use("/auth/", authLimiter);      // Protege login y register
+app.use("/ghl/", apiLimiter);        // Protege webhooks
+app.use("/agency/", apiLimiter);     // Protege rutas de agencia
+app.use("/admin/", apiLimiter);      // Protege rutas de admin
+app.use("/status", pollingLimiter);  // Permite polling del frontend
+app.use("/qr", pollingLimiter);      // Permite polling del frontend
 
 // ==========================================
 // 🔓 RUTAS PÚBLICAS
