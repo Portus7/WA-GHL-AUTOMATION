@@ -1,35 +1,50 @@
 const { pool } = require("../config/db");
-// ✅ AGREGADO: Importamos 'sleep' para la pausa táctica
-const { normalizePhone, toBold, sleep } = require("../helpers/utils");
-const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
+const { normalizePhone, sleep } = require("../helpers/utils");
 const { parseGHLCommand } = require("../helpers/parser");
-const { transcribeAudio } = require("./openaiService");
 const { getTenantConfig } = require("./tenantService");
 const { initFunction } = require("buttons-warpper");
 const { prepareWAMessageMedia } = require("@whiskeysockets/baileys");
 const pino = require("pino");
-const fs = require("fs");
-const path = require("path");
-const mime = require("mime-types");
+
+// ✅ IMPORTANTE: Importamos el nuevo manejador de mensajes
+const { handleIncomingMessage } = require("./messageHandler");
 
 // Estado Global
 const sessions = new Map();
 const botMessageIds = new Set();
 
-// ✅ CONSTANTES PARA EL BOT DE SOPORTE
+// Constantes
 const SUPPORT_LOC_ID = "__SYSTEM_SUPPORT__";
 const SUPPORT_SLOT_ID = "1";
 
-// Configuración de Directorios para Medios
-const PUBLIC_DIR = path.join(__dirname, "..", "..", "public");
-const MEDIA_DIR = path.join(PUBLIC_DIR, "media");
-const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "https://wa.clicandapp.com";
+// Configuración de limpieza de memoria
+const CLEANUP_INTERVAL = 60 * 60 * 1000; // Ejecutar cada 1 hora
+const MAX_INACTIVITY = 24 * 60 * 60 * 1000; // 24 horas de inactividad
 
-if (!fs.existsSync(MEDIA_DIR)) {
-    fs.mkdirSync(MEDIA_DIR, { recursive: true });
-}
+// --- GARBAGE COLLECTOR (Limpieza de RAM) ---
+setInterval(() => {
+    console.log("🧹 Ejecutando limpieza de sesiones inactivas...");
+    const now = Date.now();
 
-// --- DB HELPERS LOCALES ---
+    sessions.forEach(async (session, sessionId) => {
+        // Si lleva más de 24h sin actividad y está conectado
+        if (session.isConnected && session.lastActivity && (now - session.lastActivity > MAX_INACTIVITY)) {
+            console.log(`💤 Hibernando sesión inactiva por >24h: ${sessionId}`);
+            try {
+                // Solo cerramos el socket para liberar RAM.
+                // No borramos la DB, así que al recibir un mensaje saliente se reconectará.
+                session.sock.end(undefined);
+                session.isConnected = false;
+                sessions.delete(sessionId);
+            } catch (e) {
+                console.error(`Error hibernando ${sessionId}:`, e);
+            }
+        }
+    });
+}, CLEANUP_INTERVAL);
+
+
+// --- HELPERS DE MENSAJERÍA ---
 
 async function sendButtons(sock, jid, text, buttons) {
     let menu = `${text}\n\n`;
@@ -40,102 +55,88 @@ async function sendButtons(sock, jid, text, buttons) {
     await sock.sendMessage(jid, { text: menu });
 }
 
-// 🔥 FUNCIÓN CENTRALIZADA PARA ETIQUETAS
-async function processKeywordTags(locationId, contactId, text, isMobileContext = false) {
-    if (locationId === SUPPORT_LOC_ID) return;
+// ✅ Envío de Mensajes Interactivos con FALLBACK a Texto
+async function sendInteractiveMessage(sock, jid, parsedData) {
+    const { title, body, image, buttons, footer } = parsedData;
 
     try {
-        const sql = "SELECT keyword, tag FROM keyword_tags WHERE location_id = $1";
-        const res = await pool.query(sql, [locationId]);
-        const tagRules = res.rows;
-
-        if (tagRules.length === 0) return;
-
-        const tagsToApply = new Set();
-        const lowerText = text.toLowerCase();
-        const deviceFooter = "[Enviado desde otro dispositivo]";
-
-        for (const rule of tagRules) {
-            const keyword = rule.keyword.toLowerCase();
-
-            if (rule.keyword !== deviceFooter && lowerText.includes(keyword)) {
-                console.log(`🏷️ Tag dinámico detectado: "${rule.keyword}" -> "${rule.tag}"`);
-                tagsToApply.add(rule.tag);
-            }
-
-            if (isMobileContext && rule.keyword === deviceFooter) {
-                console.log(`📱 Tag de dispositivo móvil aplicado: "${rule.tag}"`);
-                tagsToApply.add(rule.tag);
-            }
+        if (typeof sock.sendInteractiveMessage !== 'function') {
+            throw new Error("Método sendInteractiveMessage no soportado/disponible");
         }
 
-        if (tagsToApply.size > 0) {
-            await Promise.all(
-                Array.from(tagsToApply).map(tag =>
-                    addTagToContact(locationId, contactId, tag)
-                )
-            );
-        }
-    } catch (e) {
-        console.error("Error procesando tags:", e);
-    }
-}
+        const payload = {
+            text: body,
+            footer: "Clic&App",
+            interactiveButtons: buttons
+        };
 
-// ✅ ENVIAR ALERTAS (Soporte) - Con Delay Estratégico y Validación
-async function sendSupportAlert(message, targetPhoneOverride = null) {
-    try {
-        const targetPhone = targetPhoneOverride || process.env.SUPPORT_ALERT_RECIPIENT;
-
-        if (!targetPhone) return;
-
-        await sleep(8000);
-
-        const sessionId = `${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`;
-        const session = sessions.get(sessionId);
-
-        if (session && session.isConnected && session.sock) {
-            const jid = targetPhone.replace(/\D/g, "") + "@s.whatsapp.net";
-
-            let exists = false;
-            let realJid = jid;
-
+        if (image) {
             try {
-                const [result] = await session.sock.onWhatsApp(jid);
-                if (result?.exists) {
-                    exists = true;
-                    realJid = result.jid;
-                }
+                // Preparamos la media (subida a servidores de WA)
+                const media = await prepareWAMessageMedia(
+                    { image: { url: image } },
+                    { upload: sock.waUploadToServer }
+                );
+                payload.header = {
+                    hasMediaAttachment: true,
+                    imageMessage: media.imageMessage
+                };
             } catch (err) {
-                exists = true;
+                console.warn("⚠️ Falló carga de imagen para botón, enviando sin imagen.");
+                payload.header = { title: title || "Aviso", hasMediaAttachment: false };
             }
+        } else if (title) {
+            payload.header = { title: title, hasMediaAttachment: false };
+        }
 
-            if (exists) {
-                console.log(`🔔 Enviando alerta a ${targetPhone}...`, realJid, jid, exists);
-                await session.sock.sendMessage(realJid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
-                console.log(`✅ Alerta entregada.`);
-            } else {
-                console.warn(`⚠️ No se envió alerta a ${targetPhone}: El número no está registrado en WhatsApp.`);
-            }
-        } else {
-            console.warn("⚠️ El Bot de Soporte NO está conectado. No se pudo enviar la alerta.");
-        }
+        // Intentar enviar botones nativos
+        const msg = await sock.sendInteractiveMessage(jid, payload);
+        if (msg?.key?.id) botMessageIds.add(msg.key.id);
+        return msg;
+
     } catch (e) {
-        if (e?.data?.status !== 406 && e?.output?.statusCode !== 406) {
-            console.error("Error enviando alerta de soporte:", e.message);
-        } else {
-            console.warn(`⚠️ Envío rechazado por WhatsApp (406).`);
-        }
+        console.warn(`⚠️ Fallo envío interactivo a ${jid}. Aplicando Fallback a Texto. Error: ${e.message}`);
+
+        // --- FALLBACK A MENÚ DE TEXTO ---
+        let menuText = `*${title || "Opciones"}*\n\n${body}\n`;
+        if (image) menuText += `_(Imagen adjunta omitida en modo texto)_\n`;
+
+        buttons.forEach((btn, i) => {
+            let label = "Opción";
+            try {
+                const params = JSON.parse(btn.buttonParamsJson);
+                label = params.display_text || params.displayText || "Opción";
+            } catch (err) { }
+            menuText += `\n*${i + 1}.* ${label}`;
+        });
+
+        menuText += `\n\n_${footer || "Responde con el número de tu opción."}_`;
+
+        const fallbackMsg = await sock.sendMessage(jid, { text: menuText });
+        if (fallbackMsg?.key?.id) botMessageIds.add(fallbackMsg.key.id);
+        return fallbackMsg;
     }
 }
 
-// ✅ ELIMINAR SESIÓN (Soporta modo "Desconectar" y modo "Borrar Slot")
+// --- GESTIÓN DE SESIONES ---
+
+async function waitForSocketOpen(sock) {
+    if (sock.ws.isOpen) return;
+    return new Promise((resolve, reject) => {
+        let retries = 0;
+        const interval = setInterval(() => {
+            if (sock.ws.isOpen) { clearInterval(interval); resolve(); }
+            if (retries++ > 20) { clearInterval(interval); reject(new Error("Socket timeout")); }
+        }, 200);
+    });
+}
+
 async function deleteSessionData(locationId, slot, shouldDeleteSlot = false) {
     const sessionId = `${locationId}_slot${slot}`;
     const session = sessions.get(sessionId);
 
     if (session) {
         session.isDestroying = true;
-
         if (session.sock) {
             try {
                 if (session.isConnected) {
@@ -158,24 +159,15 @@ async function deleteSessionData(locationId, slot, shouldDeleteSlot = false) {
     try {
         await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
         console.log(`🗑️ Credenciales eliminadas: ${sessionId}`);
-    } catch (e) {
-        console.error("Error borrando auth DB:", e.message);
-    }
+    } catch (e) { console.error("Error borrando auth DB:", e.message); }
 
     try {
         if (shouldDeleteSlot) {
             await pool.query("DELETE FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
-            console.log(`❌ Slot eliminado físicamente de DB: ${locationId} slot ${slot}`);
         } else {
-            await pool.query(
-                "UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2",
-                [locationId, slot]
-            );
-            console.log(`✅ Slot liberado (desvinculado) en DB: ${locationId} slot ${slot}`);
+            await pool.query("UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2", [locationId, slot]);
         }
-    } catch (e) {
-        console.error("Error gestionando slot DB:", e.message);
-    }
+    } catch (e) { console.error("Error gestionando slot DB:", e.message); }
 }
 
 async function syncSlotInfo(locationId, slotId, phoneNumber) {
@@ -210,129 +202,60 @@ async function getRoutingForPhone(clientPhone, locationId) {
 async function getLocationSlotsConfig(locationId, slotId = null) {
     if (slotId) {
         const sql = "SELECT * FROM location_slots WHERE location_id = $1 AND slot_id = $2";
-        try { const res = await pool.query(sql, [locationId, slotId]); return res.rows; } catch (e) { console.error("Error fetching slot config:", e); return []; }
+        try { const res = await pool.query(sql, [locationId, slotId]); return res.rows; } catch (e) { return []; }
     }
     const sql = "SELECT * FROM location_slots WHERE location_id = $1 ORDER BY priority ASC";
-    try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { console.error("Error fetching location slots config:", e); return []; }
+    try { const res = await pool.query(sql, [locationId]); return res.rows; } catch (e) { return []; }
 }
 
-async function sendInteractiveMessage(sock, jid, parsedData) {
-    const { title, body, image, buttons } = parsedData;
-
-    if (typeof sock.sendInteractiveMessage !== 'function') {
-        console.error("❌ ERROR: El método sock.sendInteractiveMessage no existe.");
-        return await sock.sendMessage(jid, { text: `[ERROR] Botones no habilitados.\n\n${body}` });
-    }
-
-    const payload = {
-        text: body,
-        footer: "Clic&App",
-        interactiveButtons: buttons
-    };
-
-    // ✅ FIX: Procesar la imagen antes de enviarla
-    if (image) {
-        try {
-            console.log("🖼️ Procesando imagen para botón interactivo...");
-            // prepareWAMessageMedia descarga y sube la imagen a los servidores de WhatsApp
-            const media = await prepareWAMessageMedia(
-                { image: { url: image } },
-                { upload: sock.waUploadToServer }
-            );
-
-            payload.header = {
-                hasMediaAttachment: true,
-                imageMessage: media.imageMessage // Usamos el objeto procesado, no la URL
-            };
-        } catch (error) {
-            console.error("❌ Error preparando imagen para botón:", error.message);
-            // Fallback: enviar sin imagen si falla la carga
-            payload.header = { title: title || "Aviso", hasMediaAttachment: false };
-        }
-    } else if (title) {
-        payload.header = {
-            title: title,
-            hasMediaAttachment: false
-        };
-    }
-
-    console.log(`🚀 Enviando botones a ${jid}`);
-    const msg = await sock.sendInteractiveMessage(jid, payload);
-
-    if (msg?.key?.id) botMessageIds.add(msg.key.id);
-
-    return msg;
-}
-
-// 🔥 HELPER: Descargar y Guardar Media
-async function downloadAndSaveMedia(message, type) {
+async function sendSupportAlert(message, targetPhoneOverride = null) {
     try {
-        const { downloadMediaMessage } = await import("@whiskeysockets/baileys");
-        const buffer = await downloadMediaMessage(
-            message,
-            'buffer',
-            {},
-            { logger: pino({ level: 'silent' }), reuploadRequest: (msg) => new Promise((resolve) => resolve(msg)) }
-        );
-
-        let ext = "bin";
-        let mimeType = "";
-
-        if (type === 'imageMessage') mimeType = message.message.imageMessage.mimetype;
-        else if (type === 'videoMessage') mimeType = message.message.videoMessage.mimetype;
-        else if (type === 'audioMessage') mimeType = message.message.audioMessage.mimetype;
-        else if (type === 'documentMessage') mimeType = message.message.documentMessage.mimetype;
-
-        if (mimeType) ext = mime.extension(mimeType) || "bin";
-        if (type === 'audioMessage' && !ext) ext = "ogg";
-
-        const filename = `${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
-        const filepath = path.join(MEDIA_DIR, filename);
-
-        fs.writeFileSync(filepath, buffer);
-
-        return {
-            url: `${API_PUBLIC_URL}/media/${filename}`,
-            filePath: filepath
-        };
-
-    } catch (e) {
-        console.error("Error descargando media:", e);
-        return null;
-    }
+        const targetPhone = targetPhoneOverride || process.env.SUPPORT_ALERT_RECIPIENT;
+        if (!targetPhone) return;
+        await sleep(8000);
+        const sessionId = `${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`;
+        const session = sessions.get(sessionId);
+        if (session && session.isConnected && session.sock) {
+            const jid = targetPhone.replace(/\D/g, "") + "@s.whatsapp.net";
+            let realJid = jid;
+            try {
+                const [result] = await session.sock.onWhatsApp(jid);
+                if (result?.exists) realJid = result.jid;
+            } catch (err) { }
+            await session.sock.sendMessage(realJid, { text: `🤖 *SISTEMA DE ALERTAS*\n\n${message}` });
+        }
+    } catch (e) { console.warn("Error alerta soporte:", e.message); }
 }
 
-async function waitForSocketOpen(sock) {
-    if (sock.ws.isOpen) return;
-    return new Promise((resolve, reject) => {
-        let retries = 0;
-        const interval = setInterval(() => {
-            if (sock.ws.isOpen) { clearInterval(interval); resolve(); }
-            if (retries++ > 20) { clearInterval(interval); reject(new Error("Socket timeout")); }
-        }, 200);
-    });
-}
+// --- FUNCIÓN PRINCIPAL DE CONEXIÓN ---
 
-// --- MAIN START FUNCTION ---
 async function startWhatsApp(locationId, slotId) {
     const sessionId = `${locationId}_slot${slotId}`;
     const existing = sessions.get(sessionId);
 
-    // NOTA: No necesitamos cargar tenantStatus aquí para la lógica de mensajes, 
-    // se carga dentro del evento 'messages.upsert' para asegurar que sea fresco.
+    // Si ya existe y está conectado, solo actualizamos el timestamp de actividad
+    if (existing && existing.sock && existing.isConnected) {
+        existing.lastActivity = Date.now();
+        return existing;
+    }
 
-    if (existing && existing.sock && existing.isConnected) return existing;
-
-    const sessionData = { sock: null, qr: null, isConnected: false, myNumber: null, isDestroying: false };
+    const sessionData = {
+        sock: null,
+        qr: null,
+        isConnected: false,
+        myNumber: null,
+        isDestroying: false,
+        lastActivity: Date.now() // RASTREO DE ACTIVIDAD INICIAL
+    };
     sessions.set(sessionId, sessionData);
 
     console.log(`▶ Iniciando: ${sessionId}`);
 
     const baileys = await import("@whiskeysockets/baileys");
-    const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds } = baileys;
+    const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, BufferJSON } = baileys;
 
+    // --- Adaptador PostgreSQL para Auth ---
     async function usePostgreSQLAuthState(pool, id) {
-        const { BufferJSON } = await import("@whiskeysockets/baileys");
         const readData = async (key) => {
             try {
                 const res = await pool.query("SELECT data FROM baileys_auth WHERE session_id = $1 AND key_id = $2", [id, key]);
@@ -341,9 +264,7 @@ async function startWhatsApp(locationId, slotId) {
         };
         const writeData = async (key, data) => {
             try {
-                // ✅ BLOQUEO DE ESCRITURA SI ESTAMOS DESTRUYENDO
                 if (sessionData.isDestroying) return;
-
                 const jsonData = JSON.stringify(data, BufferJSON.replacer);
                 const sql = `INSERT INTO baileys_auth (session_id, key_id, data, updated_at) VALUES ($1, $2, $3::jsonb, NOW()) ON CONFLICT (session_id, key_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`;
                 await pool.query(sql, [id, key, jsonData]);
@@ -362,9 +283,7 @@ async function startWhatsApp(locationId, slotId) {
                         return data;
                     },
                     set: async (data) => {
-                        // ✅ BLOQUEO TAMBIÉN EN KEYS
                         if (sessionData.isDestroying) return;
-
                         const tasks = [];
                         for (const cat in data) { for (const id in data[cat]) { const val = data[cat][id]; const key = `${cat}-${id}`; if (val) tasks.push(writeData(key, val)); } }
                         await Promise.all(tasks);
@@ -391,14 +310,12 @@ async function startWhatsApp(locationId, slotId) {
     });
 
     sessionData.sock = sock;
-
     initFunction(sock);
 
-    // ✅ CRÍTICO: Actualizar número si llega en creds
+    // Evento Credenciales
     sock.ev.on("creds.update", async (creds) => {
         if (!sessionData.isDestroying) {
             await saveCreds(creds);
-
             if (creds.me) {
                 const myPhone = normalizePhone(creds.me.id.split(":")[0]);
                 sessionData.myNumber = myPhone;
@@ -407,9 +324,18 @@ async function startWhatsApp(locationId, slotId) {
         }
     });
 
+    // Evento Conexión
     sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) { sessionData.qr = qr; sessionData.isConnected = false; console.log(`📌 QR: ${sessionId}`); }
+
+        // Actualizar actividad en cada cambio de conexión
+        sessionData.lastActivity = Date.now();
+
+        if (qr) {
+            sessionData.qr = qr;
+            sessionData.isConnected = false;
+            console.log(`📌 QR Generado: ${sessionId}`);
+        }
 
         if (connection === "open") {
             sessionData.isConnected = true;
@@ -427,176 +353,62 @@ async function startWhatsApp(locationId, slotId) {
             const shouldReconnect = !isLogout && !sessionData.isDestroying;
 
             if (shouldReconnect) {
-                console.log(`🔄 Reconectando sesión ${sessionId}... (Código: ${code})`);
+                console.log(`🔄 Reconectando ${sessionId}... (Código: ${code})`);
                 setTimeout(() => startWhatsApp(locationId, slotId), 3000);
             } else {
-                console.log(`🛑 Sesión cerrada definitivamente: ${sessionId} (Código: ${code})`);
-
+                console.log(`🛑 Sesión cerrada: ${sessionId}`);
                 sessionData.isDestroying = true;
                 sessionData.isConnected = false;
                 sessionData.sock = null;
                 sessions.delete(sessionId);
 
                 if (isLogout) {
+                    // Lógica de logout (limpiar DB y avisar)
                     let clientPhone = sessionData.myNumber;
-
                     if (!clientPhone || clientPhone === "Desconocido") {
                         try {
                             const res = await pool.query("SELECT phone_number FROM location_slots WHERE location_id = $1 AND slot_id = $2", [locationId, slotId]);
                             if (res.rows.length > 0) clientPhone = res.rows[0].phone_number;
                         } catch (e) { }
                     }
-
                     try {
-                        // Limpieza DB
                         await pool.query("UPDATE location_slots SET phone_number = NULL WHERE location_id = $1 AND slot_id = $2", [locationId, slotId]);
                         await pool.query("DELETE FROM baileys_auth WHERE session_id = $1", [sessionId]);
-                    } catch (dbErr) { console.error("Error cleanup DB:", dbErr); }
+                    } catch (dbErr) { }
 
-                    // Enviar Alerta
                     if (clientPhone && clientPhone !== "Desconocido") {
                         try {
-                            // ✅ CORREGIDO: Definir settings antes de usarlo
                             const tenantConfig = await getTenantConfig(locationId);
                             const settings = tenantConfig.settings || {};
-
                             if (settings.send_disconnect_message !== false) {
-                                const alertMsg = `⚠️ *DESCONEXIÓN DETECTADA*\n\nHola, detectamos que tu número vinculado a la subagencia *${locationId}* (Slot ${slotId}) se ha desconectado.\n\nPor favor, ingresa al panel y vuelve a escanear el código QR para reactivar el servicio.`;
+                                const alertMsg = `⚠️ *DESCONEXIÓN DETECTADA*\n\nSu dispositivo del slot ${slotId} en la ubicación ${locationId} se ha desconectado. Por favor re-escanee el QR.`;
                                 await sendSupportAlert(alertMsg, clientPhone);
-                            } else {
-                                console.log(`🔕 Alerta de desconexión omitida por configuración para ${locationId}`);
                             }
-                        } catch (e) {
-                            console.error(`Error enviando alerta de desconexión para ${locationId}:`, e.message);
-                        }
+                        } catch (e) { }
                     }
                 }
             }
         }
     });
 
+    // Evento Mensajes (DELEGADO AL HANDLER)
     sock.ev.on("messages.upsert", async (msg) => {
-        if (locationId === SUPPORT_LOC_ID) return;
+        // Actualizamos actividad
+        sessionData.lastActivity = Date.now();
 
-        try {
-            // Se obtiene la config aquí para asegurar que 'settings' esté disponible y fresco
-            const tenantStatus = await getTenantConfig(locationId);
-
-            if (!tenantStatus.active) {
-                console.warn(`⛔ Tenant ${locationId} inactivo.`);
-                return;
-            }
-            const settings = tenantStatus.settings;
-            const m = msg.messages[0];
-            if (!m?.message) return;
-            if (botMessageIds.has(m.key.id)) return;
-
-            const from = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
-            if (!from || from.includes("status@") || from.includes("@newsletter")) return;
-
-            const msgType = Object.keys(m.message)[0];
-            let text = "";
-            let attachments = [];
-            let transcription = "";
-
-            if (msgType === 'conversation') text = m.message.conversation;
-            else if (msgType === 'extendedTextMessage') text = m.message.extendedTextMessage.text;
-            else if (msgType === 'imageMessage') text = m.message.imageMessage.caption || "";
-            else if (msgType === 'videoMessage') text = m.message.videoMessage.caption || "";
-            else if (msgType === 'documentMessage') text = m.message.documentMessage.caption || "";
-
-            if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(msgType)) {
-                const mediaData = await downloadAndSaveMedia(m, msgType);
-                if (mediaData) {
-                    attachments.push(mediaData.url);
-                    if (!text) text = `[Archivo: ${msgType}]`;
-
-                    if (msgType === 'audioMessage' && settings.transcribe_audio !== false) {
-                        console.log(`🎙️ Transcribiendo audio para ${locationId}...`);
-                        const transcriptText = await transcribeAudio(mediaData.filePath);
-                        if (transcriptText) transcription = transcriptText;
-                    } else if (msgType === 'audioMessage') {
-                        console.log(`lx️ Transcripción omitida por configuración para ${locationId}`);
-                    }
-                }
-            }
-
-            const contextInfo = m.message[msgType]?.contextInfo || m.message.extendedTextMessage?.contextInfo;
-            if (contextInfo && contextInfo.quotedMessage) {
-                let qText = "";
-                const q = contextInfo.quotedMessage;
-                if (q.conversation) qText = q.conversation;
-                else if (q.extendedTextMessage) qText = q.extendedTextMessage.text;
-                else if (q.imageMessage) qText = "[Imagen]";
-                else qText = "[Archivo]";
-                if (qText) text = `> En respuesta a: "${qText.substring(0, 50)}..."\n\n${text}`;
-            }
-
-            if (!text && attachments.length === 0) return;
-
-            const clientPhone = normalizePhone(from.split("@")[0]);
-            const myId = sock.user?.id;
-            const myChannelNumber = myId ? normalizePhone(myId.split(":")[0]) : "";
-            const isFromMe = m.key.fromMe;
-            const waName = m.pushName || "Usuario WhatsApp";
-
-            console.log(`📩 PROCESANDO: ${clientPhone} (FromMe: ${isFromMe})`);
-
-            const route = await getRoutingForPhone(clientPhone, locationId);
-            const messageNumber = route?.messages ?? 1;
-            const existingContactId = (route?.locationId === locationId) ? route.contactId : null;
-            const contact = await findOrCreateGHLContact(locationId, clientPhone, waName, existingContactId, isFromMe, settings.create_unknown_contacts);
-
-            if (!contact?.id) return;
-
-            await saveRouting(clientPhone, locationId, contact.id, myChannelNumber, messageNumber);
-
-            let messageForGHL = "";
-            let direction = "inbound";
-
-            // ✅ CORREGIDO: Declarar variable promo para evitar error "promo is not defined"
-            let promo = false;
-
-            if (isFromMe) {
-                const deviceFooter = "[Enviado desde otro dispositivo]";
-                messageForGHL = `${text}\n\n${deviceFooter}`;
-                if (settings.show_source_label !== false) {
-                    let sourceLabel = `+${myChannelNumber}`;
-                    try {
-                        const slotRes = await pool.query("SELECT slot_name FROM location_slots WHERE location_id=$1 AND phone_number=$2", [locationId, myChannelNumber]);
-                        if (slotRes.rows.length > 0 && slotRes.rows[0].slot_name) sourceLabel = slotRes.rows[0].slot_name;
-                    } catch (err) { }
-                    messageForGHL += `\nSource: ${sourceLabel}`;
-                }
-                direction = "outbound";
-                await processKeywordTags(locationId, contact.id, text, true);
-            } else {
-                if (messageNumber === 1) promo = true;
-                messageForGHL = text;
-                if (settings.show_source_label !== false) {
-                    let sourceLabel = `+${myChannelNumber}`;
-                    try {
-                        const slotRes = await pool.query("SELECT slot_name FROM location_slots WHERE location_id=$1 AND phone_number=$2", [locationId, myChannelNumber]);
-                        if (slotRes.rows.length > 0 && slotRes.rows[0].slot_name) sourceLabel = slotRes.rows[0].slot_name;
-                    } catch (err) { }
-                    messageForGHL += `\nSource: ${sourceLabel}`;
-                }
-                direction = "inbound";
-            }
-
-            await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
-
-            if (transcription) {
-                let transcriptionMsg = `🎤 [Transcripción]:\n"${transcription}"\n\nSource: +${myChannelNumber}`;
-                if (isFromMe) transcriptionMsg += "\n\n[Enviado desde otro dispositivo]";
-                await logMessageToGHL(locationId, contact.id, transcriptionMsg, direction, []);
-            }
-
-            if (promo) {
-                // Código comentado, pero la variable promo ya existe para que no falle el if
-            }
-        } catch (error) { console.error("Upsert Error:", error.message); }
+        // Delegar lógica al handler externo
+        await handleIncomingMessage(
+            msg,
+            sock,
+            locationId,
+            pool,
+            botMessageIds,
+            saveRouting,
+            getRoutingForPhone
+        );
     });
+
+    return sessionData;
 }
 
 module.exports = {
@@ -611,8 +423,7 @@ module.exports = {
     sendButtons,
     parseGHLCommand,
     sendInteractiveMessage,
-    processKeywordTags,
-    findOrCreateGHLContact,
+    // processKeywordTags y findOrCreateGHLContact ya no se exportan porque se usan en el handler
     SUPPORT_LOC_ID,
     SUPPORT_SLOT_ID
 };
