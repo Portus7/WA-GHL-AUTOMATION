@@ -1,6 +1,7 @@
 const { downloadMediaMessage } = require("@whiskeysockets/baileys");
 const { normalizePhone } = require("../helpers/utils");
-const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./ghlService");
+// ✅ Asegúrate de que assignContactOwner está importado aquí
+const { findOrCreateGHLContact, logMessageToGHL, addTagToContact, assignContactOwner } = require("./ghlService");
 const { transcribeAudio } = require("./openaiService");
 const { getTenantConfig } = require("./tenantService");
 const { pool } = require("../config/db"); // 👈 IMPORTANTE: Conexión DB directa
@@ -127,9 +128,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
 
         const slotData = await getSlotSettings(locationId, myChannelNumber);
 
-        // Si el slot tiene settings personalizados, úsalos. Si no, usa {} (defaults o vacíos)
-        // NOTA: Podrías hacer un merge con tenantStatus.settings si quieres herencia, 
-        // pero aquí priorizamos la configuración individual pura.
+        // Si el slot tiene settings personalizados, úsalos.
         const settings = slotData.settings || {};
         const currentSlotId = slotData.slot_id;
 
@@ -185,6 +184,20 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
 
         if (!contact?.id) return;
 
+        // --- 🆕 LÓGICA: ASIGNACIÓN DE TAGS Y RESPONSABLES (SOLO INBOUND) ---
+        if (!isFromMe) {
+            // A. Agregar Tag Específico del Número (si existe en la config del slot)
+            if (settings.ghl_contact_tag) {
+                await addTagToContact(locationId, contact.id, settings.ghl_contact_tag);
+            }
+
+            // B. Asignar Usuario Responsable (si existe en la config del slot)
+            if (settings.ghl_assigned_user) {
+                await assignContactOwner(locationId, contact.id, settings.ghl_assigned_user);
+            }
+        }
+        // -------------------------------------------------------------------
+
         await saveRouting(clientPhone, locationId, contact.id, myChannelNumber, messageNumber);
 
         let messageForGHL = "";
@@ -198,7 +211,6 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             if (settings.show_source_label !== false) {
                 let sourceLabel = `+${myChannelNumber}`;
                 try {
-                    // Intentamos obtener el nombre bonito del slot si existe
                     const slotRes = await pool.query("SELECT slot_name FROM location_slots WHERE location_id=$1 AND phone_number=$2", [locationId, myChannelNumber]);
                     if (slotRes.rows.length > 0 && slotRes.rows[0].slot_name) sourceLabel = slotRes.rows[0].slot_name;
                 } catch (err) { }
@@ -211,7 +223,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
         } else {
             messageForGHL = text;
 
-            // Configuración de Source Label específica del slot (también para inbound si se desea)
+            // Configuración de Source Label específica del slot (opcional en inbound)
             if (settings.show_source_label !== false) {
                 let sourceLabel = `+${myChannelNumber}`;
                 try {

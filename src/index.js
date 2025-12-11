@@ -38,7 +38,8 @@ const {
     callGHLWithAgency,
     findOrCreateGHLContact,
     logMessageToGHL,
-    addTagToContact
+    addTagToContact,
+    assignContactOwner
 } = require("./services/ghlService");
 
 const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/utils");
@@ -329,6 +330,16 @@ app.post("/agency/sync-ghl", verifyToken, async (req, res) => {
     try {
         await pool.query("UPDATE users SET agency_id = $1 WHERE id = $2", [locationIdToVerify, userId]);
         res.json({ success: true, newAgencyId: locationIdToVerify });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get("/agency/ghl-users/:locationId", verifyToken, async (req, res) => {
+    try {
+        const { locationId } = req.params;
+        const users = await getLocationUsers(locationId);
+        res.json(users);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

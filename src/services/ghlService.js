@@ -214,6 +214,41 @@ async function logMessageToGHL(locationId, contactId, text, direction, attachmen
   }
 }
 
+async function getLocationUsers(locationId) {
+  try {
+    const res = await callGHLWithLocation(locationId, {
+      method: "GET",
+      url: "https://services.leadconnectorhq.com/users/",
+      params: { locationId }
+    });
+
+    return (res.data.users || []).map(u => ({
+      id: u.id,
+      name: `${u.firstName} ${u.lastName}`,
+      email: u.email,
+      role: u.roles?.type || u.role
+    }));
+  } catch (error) {
+    console.error("Error obteniendo usuarios GHL:", error.message);
+    return [];
+  }
+}
+
+// 🆕 Asignar usuario responsable al contacto
+async function assignContactOwner(locationId, contactId, userId) {
+  if (!userId) return;
+  try {
+    console.log(`👤 Asignando responsable ${userId} al contacto ${contactId}...`);
+    await callGHLWithLocation(locationId, {
+      method: "PUT",
+      url: `https://services.leadconnectorhq.com/contacts/${contactId}`,
+      data: { assignedTo: userId }
+    });
+  } catch (e) {
+    console.error("Error asignando responsable:", e.message);
+  }
+}
+
 module.exports = {
   saveTokens,
   getTokens,
@@ -224,4 +259,6 @@ module.exports = {
   ensureAgencyToken,
   addTagToContact,
   deleteTagsContact,
+  getLocationUsers,
+  assignContactOwner
 };
