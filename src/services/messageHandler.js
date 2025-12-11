@@ -190,7 +190,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
         await logMessageToGHL(locationId, contact.id, messageForGHL, direction, attachments);
 
         if (transcription) {
-            let transcriptionMsg = `🎤 [Transcripción]:\n"${transcription}"\n\nSource: +${sourceLabel}`;
+            let transcriptionMsg = `🎤 [Transcripción]:\n"${transcription}"\n\nSource: +${myChannelNumber}`;
             if (isFromMe) transcriptionMsg += "\n\n[Enviado desde otro dispositivo]";
             await logMessageToGHL(locationId, contact.id, transcriptionMsg, direction, []);
         }
