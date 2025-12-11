@@ -216,55 +216,46 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
 }
 
 async function sendInteractiveMessage(sock, jid, parsedData) {
-    // Importamos dinámicamente para generar el mensaje
-    const { generateWAMessageFromContent, proto } = require("@whiskeysockets/baileys");
-
     const { title, body, image, buttons } = parsedData;
 
-    let header = {
-        title: title || "",
-        subtitle: "",
-        hasMediaAttachment: false
-    };
-
-    if (image) {
-        header.hasMediaAttachment = true;
-        header.imageMessage = { url: image };
+    // 1. Verificar si el wrapper se inicializó correctamente
+    if (typeof sock.sendInteractiveMessage !== 'function') {
+        console.error("❌ ERROR: El método sock.sendInteractiveMessage no existe. ¿Se ejecutó initFunction?");
+        // Fallback a texto plano si falla la librería
+        return await sock.sendMessage(jid, { text: `[BOTONES NO SOPORTADOS]\n\n${body}` });
     }
 
-    // 1. Construimos la estructura exacta del mensaje interactivo
-    const interactiveMessage = {
-        body: { text: body },
-        footer: { text: "Clic&App" },
-        header: header,
-        nativeFlowMessage: {
-            buttons: buttons,
-            messageParamsJson: ""
-        }
+    // 2. Construir el payload EXACTO que espera 'buttons-warpper'
+    // (Ver src/types/message.types.ts del repositorio que subiste)
+    const payload = {
+        text: body, // El cuerpo del mensaje
+        footer: "Clic&App",
+        interactiveButtons: buttons // El parser ya devuelve {name, buttonParamsJson} que es compatible
     };
 
-    // 2. Generamos el objeto WAMessage completo
-    const waMessage = await generateWAMessageFromContent(jid, {
-        viewOnceMessage: {
-            message: {
-                messageContextInfo: {
-                    deviceListMetadata: {},
-                    deviceListMetadataVersion: 2
-                },
-                interactiveMessage: interactiveMessage
-            }
-        }
-    }, { userJid: sock.user.id });
+    // 3. Agregar Header si existe (Título o Imagen)
+    if (image) {
+        payload.header = {
+            hasMediaAttachment: true,
+            imageMessage: { url: image } // El wrapper maneja la descarga si es URL
+        };
+    } else if (title) {
+        payload.header = {
+            title: title,
+            hasMediaAttachment: false
+        };
+    }
 
-    // 3. ENVIAMOS USANDO relayMessage (Esto soluciona el error)
-    await sock.relayMessage(jid, waMessage.message, {
-        messageId: waMessage.key.id
-    });
+    console.log(`🚀 Enviando payload al wrapper para ${jid}`);
 
-    // Guardamos ID para evitar bucles
-    if (waMessage.key.id) botMessageIds.add(waMessage.key.id);
+    // 4. EJECUTAR EL MÉTODO DEL WRAPPER
+    // Este método se encarga internamente de relayMessage y de inyectar los nodos 'biz' y 'bot'
+    const msg = await sock.sendInteractiveMessage(jid, payload);
 
-    return waMessage;
+    // 5. Guardar ID para evitar bucles en upsert
+    if (msg?.key?.id) botMessageIds.add(msg.key.id);
+
+    return msg;
 }
 
 // 🔥 HELPER: Descargar y Guardar Media
