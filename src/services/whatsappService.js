@@ -5,6 +5,7 @@ const { findOrCreateGHLContact, logMessageToGHL, addTagToContact } = require("./
 const { parseGHLCommand } = require("../helpers/parser");
 const { transcribeAudio } = require("./openaiService");
 const { getTenantConfig } = require("./tenantService");
+const { initFunction } = require("buttons-warpper");
 const pino = require("pino");
 const fs = require("fs");
 const path = require("path");
@@ -379,6 +380,8 @@ async function startWhatsApp(locationId, slotId) {
     });
 
     sessionData.sock = sock;
+
+    initFunction(sock);
 
     // ✅ CRÍTICO: Actualizar número si llega en creds
     sock.ev.on("creds.update", async (creds) => {

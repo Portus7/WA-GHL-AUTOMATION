@@ -11,6 +11,7 @@
     "@gohighlevel/api-client": "^2.2.2",
     "@whiskeysockets/baileys": "github:WhiskeySockets/Baileys",
     "bcryptjs": "^3.0.3",
+    "buttons-warpper": "^1.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
