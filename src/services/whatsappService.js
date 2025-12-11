@@ -411,6 +411,76 @@ async function startWhatsApp(locationId, slotId) {
     return sessionData;
 }
 
+// 🆕 Obtener listado de grupos donde participa el bot
+async function getGroups(locationId, slotId) {
+    const session = sessions.get(`${locationId}_slot${slotId}`);
+    if (!session || !session.sock) throw new Error("Sesión no conectada");
+
+    try {
+        // Baileys: Fetch all groups
+        const groups = await session.sock.groupFetchAllParticipating();
+        // Convertir objeto a array
+        return Object.values(groups).map(g => ({
+            id: g.id,
+            subject: g.subject,
+            participants: g.participants.length
+        }));
+    } catch (e) {
+        console.error("Error fetching groups:", e);
+        return [];
+    }
+}
+
+// 🆕 Sincronizar miembros de un grupo hacia GHL
+async function syncGroupMembers(locationId, slotId, groupJid) {
+    const session = sessions.get(`${locationId}_slot${slotId}`);
+    if (!session || !session.sock) throw new Error("Sesión no conectada");
+
+    // Importamos dinámicamente o movemos require arriba si es circular, 
+    // pero idealmente 'ghlService' debería inyectarse o requerirse al inicio.
+    // Para evitar ciclos, asumimos que findOrCreateGHLContact está disponible o lo requerimos aquí:
+    const { findOrCreateGHLContact, addTagToContact } = require("./ghlService");
+
+    try {
+        const metadata = await session.sock.groupMetadata(groupJid);
+        const groupName = metadata.subject;
+
+        console.log(`🔄 Sincronizando ${metadata.participants.length} miembros del grupo ${groupName}...`);
+
+        let count = 0;
+        for (const p of metadata.participants) {
+            // Ignoramos al propio bot
+            const myId = session.sock.user?.id?.split(':')[0];
+            if (p.id.includes(myId)) continue;
+
+            const phone = p.id.split('@')[0];
+
+            // Creamos contacto en GHL
+            const contact = await findOrCreateGHLContact(
+                locationId,
+                phone,
+                "Miembro Grupo", // Nombre genérico, GHL o WA podrían actualizarlo luego
+                null,
+                false,
+                true // createUnknown
+            );
+
+            if (contact?.id) {
+                // Etiquetamos para saber de dónde vino
+                await addTagToContact(locationId, contact.id, `Miembro: ${groupName}`);
+                count++;
+            }
+            // Pequeña pausa para no saturar API
+            await new Promise(r => setTimeout(r, 200));
+        }
+        return { synced: count, total: metadata.participants.length };
+
+    } catch (e) {
+        console.error("Error sync group members:", e);
+        throw e;
+    }
+}
+
 module.exports = {
     sessions,
     botMessageIds,
@@ -423,7 +493,8 @@ module.exports = {
     sendButtons,
     parseGHLCommand,
     sendInteractiveMessage,
-    // processKeywordTags y findOrCreateGHLContact ya no se exportan porque se usan en el handler
     SUPPORT_LOC_ID,
-    SUPPORT_SLOT_ID
+    SUPPORT_SLOT_ID,
+    getGroups,
+    syncGroupMembers
 };

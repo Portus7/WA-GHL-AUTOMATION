@@ -25,7 +25,9 @@ const {
     sendButtons,
     SUPPORT_LOC_ID,
     SUPPORT_SLOT_ID,
-    sendInteractiveMessage
+    sendInteractiveMessage,
+    getGroups,
+    syncGroupMembers
 } = require("./services/whatsappService");
 
 // Importamos processKeywordTags desde el handler (para uso en webhook)
@@ -238,19 +240,43 @@ app.post("/ghl/webhook", async (req, res) => {
             }
 
             const clientPhone = normalizePhone(phone);
+
+            // Obtenemos la configuración de los slots, que incluye la columna 'settings'
             const dbConfigs = await getLocationSlotsConfig(locationId);
 
             // Buscar sesión disponible
             let availableCandidates = dbConfigs.map(conf => ({
                 slot: conf.slot_id,
                 myNumber: conf.phone_number,
+                settings: conf.settings || {}, // ✅ Importante: Traemos los settings para ver los grupos
                 session: sessions.get(`${locationId}_slot${conf.slot_id}`)
             })).filter(c => c.session && c.session.isConnected);
 
             if (availableCandidates.length === 0) return res.status(200).json({ error: "No devices connected" });
 
+            // Seleccionamos el primer slot disponible (o implementa tu lógica de rotación si tienes)
             const selected = availableCandidates[0];
-            const jid = clientPhone.replace(/\D/g, "") + "@s.whatsapp.net";
+
+            // --- 🆕 LÓGICA DE DETECCIÓN DE DESTINO (GRUPO vs INDIVIDUAL) ---
+            const jidUser = clientPhone.replace(/\D/g, "");
+            let jid;
+
+            // Revisamos la configuración de grupos del slot seleccionado
+            const groupsConfig = selected.settings.groups || {};
+
+            // Buscamos si existe un grupo ACTIVO cuyo ID coincida con el teléfono enviado por GHL
+            const targetGroupJid = Object.keys(groupsConfig).find(gJid =>
+                gJid.replace(/\D/g, "") === jidUser && groupsConfig[gJid].active
+            );
+
+            if (targetGroupJid) {
+                console.log(`📢 Enviando mensaje a Grupo: ${groupsConfig[targetGroupJid].name || targetGroupJid}`);
+                jid = targetGroupJid; // Usamos el JID real del grupo (ej: 123456@g.us)
+            } else {
+                // Si no es grupo, es un usuario normal
+                jid = jidUser + "@s.whatsapp.net";
+            }
+            // -------------------------------------------------------------
 
             try {
                 await waitForSocketOpen(selected.session.sock);
@@ -292,12 +318,12 @@ app.post("/ghl/webhook", async (req, res) => {
                 }
 
                 // 3. Registro en GHL (Contacto, Tags y Routing)
+                // Nota: Si es un grupo, GHL ya tiene el contacto del "Grupo" creado por el inbound handler,
+                // así que findOrCreate devolverá ese mismo contacto.
                 const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
 
                 if (contact?.id) {
-                    // Procesar tags (Ojo: Aquí pasamos null como slotId porque en outbound GHL no sabemos el slot fácilmente,
-                    // a menos que lo guardemos en dbConfigs. Por ahora mantenemos null o 0).
-                    // Pero para ser consistentes con la nueva lógica, idealmente deberíamos pasar el selected.slot
+                    // Procesar tags (pasamos el slot actual para que aplique las reglas de ese número)
                     await processKeywordTags(locationId, contact.id, finalMessage, selected.slot, false);
                 }
 
@@ -323,6 +349,34 @@ app.post("/ghl/webhook", async (req, res) => {
 // ==========================================
 // 🔐 RUTAS PROTEGIDAS (Agencia/Admin)
 // ==========================================
+
+
+// ✅ RUTAS DE GRUPOS
+app.get("/agency/slots/:locationId/:slotId/groups", verifyToken, async (req, res) => {
+    try {
+        const { locationId, slotId } = req.params;
+        const groups = await getGroups(locationId, slotId);
+        res.json(groups);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post("/agency/slots/:locationId/:slotId/groups/sync-members", verifyToken, async (req, res) => {
+    try {
+        const { locationId, slotId } = req.params;
+        const { groupJid } = req.body;
+
+        // Ejecutamos en segundo plano para no bloquear (o await si quieres esperar)
+        syncGroupMembers(locationId, slotId, groupJid)
+            .then(r => console.log(`✅ Miembros sincronizados: ${r.synced}`))
+            .catch(e => console.error("❌ Error background sync:", e));
+
+        res.json({ success: true, message: "Sincronización iniciada en segundo plano." });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 app.post("/agency/sync-ghl", verifyToken, async (req, res) => {
     const { locationIdToVerify } = req.body;
