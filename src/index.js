@@ -21,8 +21,9 @@ const {
     waitForSocketOpen,
     processKeywordTags,
     sendButtons,
-    SUPPORT_LOC_ID, // <--- Constante del Bot de Soporte
-    SUPPORT_SLOT_ID // <--- Constante del Slot de Soporte
+    SUPPORT_LOC_ID,
+    SUPPORT_SLOT_ID,
+    sendInteractiveMessage
 } = require("./services/whatsappService");
 
 const {
@@ -172,13 +173,17 @@ app.post("/ghl/app-webhook", async (req, res) => {
 app.post("/ghl/webhook", async (req, res) => {
     try {
         const { locationId, phone, message, type, attachments } = req.body;
+
+        // Validaciones básicas
         if (!locationId || !phone) return res.json({ ignored: true });
         if (message && message.includes("[Enviado desde otro dispositivo]")) return res.json({ ignored: true });
 
+        // Solo procesamos mensajes salientes (Outbound/SMS)
         if (type === "Outbound" || type === "SMS") {
             let finalMessage = message || "";
             let messageDelay = 0;
 
+            // Procesar Spintax y Delay si existen
             if (finalMessage) {
                 const processed = processAdvancedMessage(finalMessage);
                 finalMessage = processed.text;
@@ -189,6 +194,7 @@ app.post("/ghl/webhook", async (req, res) => {
             const clientPhone = normalizePhone(phone);
             const dbConfigs = await getLocationSlotsConfig(locationId);
 
+            // Buscar sesión disponible
             let availableCandidates = dbConfigs.map(conf => ({
                 slot: conf.slot_id,
                 myNumber: conf.phone_number,
@@ -203,40 +209,67 @@ app.post("/ghl/webhook", async (req, res) => {
             try {
                 await waitForSocketOpen(selected.session.sock);
 
-                let sentMsg; // Variable para capturar el mensaje enviado
+                let sentMsg;
 
-                if (attachments && attachments.length > 0) {
-                    for (const url of attachments) {
-                        let content = { image: { url }, caption: finalMessage };
-                        if (url.endsWith(".mp4")) content = { video: { url }, caption: finalMessage };
-                        else if (url.endsWith(".pdf")) content = { document: { url }, mimetype: "application/pdf", fileName: "doc.pdf", caption: finalMessage };
+                // 1. Detectar si es un comando de botones (#btn)
+                const commandData = parseGHLCommand(finalMessage);
 
-                        sentMsg = await selected.session.sock.sendMessage(jid, content);
+                if (commandData) {
+                    console.log(`✨ Enviando botones interactivos a ${clientPhone} desde GHL`);
+                    sentMsg = await sendInteractiveMessage(selected.session.sock, jid, commandData);
+                }
+                // 2. Si no es comando, envío normal (con adjuntos o texto)
+                else {
+                    if (attachments && attachments.length > 0) {
+                        for (const url of attachments) {
+                            let content = { image: { url }, caption: finalMessage };
+                            if (url.endsWith(".mp4")) content = { video: { url }, caption: finalMessage };
+                            else if (url.endsWith(".pdf")) content = { document: { url }, mimetype: "application/pdf", fileName: "doc.pdf", caption: finalMessage };
+                            else if (url.endsWith(".ogg") || url.endsWith(".mp3")) content = { audio: { url }, mimetype: "audio/mp4", ptt: true };
 
-                        // 🔥 FIX: Agregar ID a la lista negra para evitar duplicados en GHL
-                        if (sentMsg?.key?.id) botMessageIds.add(sentMsg.key.id);
+                            sentMsg = await selected.session.sock.sendMessage(jid, content);
+
+                            // Evitar duplicados por cada adjunto enviado
+                            if (sentMsg?.key?.id) botMessageIds.add(sentMsg.key.id);
+                        }
+                    } else {
+                        // Mensaje de texto simple
+                        if (finalMessage && finalMessage.trim().length > 0) {
+                            sentMsg = await selected.session.sock.sendMessage(jid, { text: finalMessage });
+                        }
                     }
-                } else {
-                    sentMsg = await selected.session.sock.sendMessage(jid, { text: finalMessage });
-
-                    // 🔥 FIX: Agregar ID a la lista negra para evitar duplicados en GHL
-                    if (sentMsg?.key?.id) botMessageIds.add(sentMsg.key.id);
                 }
 
+                // 🔥 CRÍTICO: Agregar ID a la lista negra para evitar que el upsert lo duplique en GHL
+                if (sentMsg?.key?.id) {
+                    botMessageIds.add(sentMsg.key.id);
+                }
+
+                // 3. Registro en GHL (Contacto, Tags y Routing)
+                // El mensaje en sí NO se loguea aquí porque GHL ya lo tiene (fue enviado desde ahí)
                 const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
-                if (contact?.id) await processKeywordTags(locationId, contact.id, finalMessage, false);
+
+                if (contact?.id) {
+                    // Procesar tags si el mensaje contiene keywords configuradas
+                    await processKeywordTags(locationId, contact.id, finalMessage, false);
+                }
+
                 await saveRouting(clientPhone, locationId, contact?.id, selected.myNumber);
 
                 return res.json({ ok: true });
+
             } catch (e) {
                 console.error("Error envío:", e.message);
                 return res.status(500).json({ error: "Send failed" });
             }
         }
+
+        // Si no es Outbound/SMS
         res.json({ ignored: true });
+
     } catch (e) {
         console.error(e);
-        res.status(500).json({ error: "Error" });
+        res.status(500).json({ error: "Error processing webhook" });
     }
 });
 

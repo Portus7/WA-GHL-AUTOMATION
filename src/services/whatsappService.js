@@ -216,23 +216,40 @@ async function getLocationSlotsConfig(locationId, slotId = null) {
 
 async function sendInteractiveMessage(sock, jid, parsedData) {
     const { title, body, image, buttons } = parsedData;
-    let header = { title: title, subtitle: "", hasMediaAttachment: false };
+
+    let header = {
+        title: title || "",
+        subtitle: "",
+        hasMediaAttachment: false
+    };
+
     if (image) {
-        header = { hasMediaAttachment: true, imageMessage: { url: image } };
+        header.hasMediaAttachment = true;
+        header.imageMessage = { url: image };
     }
+
     const msgPayload = {
         viewOnceMessage: {
             message: {
+                messageContextInfo: {
+                    deviceListMetadata: {},
+                    deviceListMetadataVersion: 2
+                },
                 interactiveMessage: {
                     body: { text: body },
                     footer: { text: "Clic&App" },
                     header: header,
-                    nativeFlowMessage: { buttons: buttons, messageParamsJson: "" }
+                    nativeFlowMessage: {
+                        buttons: buttons,
+                        messageParamsJson: ""
+                    }
                 }
             }
         }
     };
-    await sock.sendMessage(jid, msgPayload);
+
+    // ✅ CAMBIO CLAVE: Agregamos 'return' para obtener el ID del mensaje en index.js
+    return await sock.sendMessage(jid, msgPayload);
 }
 
 // 🔥 HELPER: Descargar y Guardar Media
