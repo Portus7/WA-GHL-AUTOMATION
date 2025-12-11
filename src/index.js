@@ -85,36 +85,32 @@ app.use(cors({
 // 🛡️ CONFIGURACIÓN DE RATE LIMITING
 // ==========================================
 
-// A. Limitador ESTRICTO para Autenticación (Login/Register)
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 10, // Límite de 10 peticiones por IP
+    windowMs: 15 * 60 * 1000,
+    max: 10,
     message: { error: "Demasiados intentos de inicio de sesión, intenta de nuevo en 15 minutos." },
     standardHeaders: true,
     legacyHeaders: false,
 });
 
-// B. Limitador GENERAL para la API y Webhooks
 const apiLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // 1 minuto
-    max: 200, // 200 peticiones
+    windowMs: 1 * 60 * 1000,
+    max: 200,
     message: { error: "Has excedido el límite de peticiones." }
 });
 
-// C. Limitador para Polling del Frontend (QR/Status)
 const pollingLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // 1 minuto
+    windowMs: 1 * 60 * 1000,
     max: 150,
     message: { error: "Demasiadas consultas de estado." }
 });
 
-// ✅ APLICACIÓN DE LOS LIMITADORES A LAS RUTAS
-app.use("/auth/", authLimiter);      // Protege login y register
-app.use("/ghl/", apiLimiter);        // Protege webhooks
-app.use("/agency/", apiLimiter);     // Protege rutas de agencia
-app.use("/admin/", apiLimiter);      // Protege rutas de admin
-app.use("/status", pollingLimiter);  // Permite polling del frontend
-app.use("/qr", pollingLimiter);      // Permite polling del frontend
+app.use("/auth/", authLimiter);
+app.use("/ghl/", apiLimiter);
+app.use("/agency/", apiLimiter);
+app.use("/admin/", apiLimiter);
+app.use("/status", pollingLimiter);
+app.use("/qr", pollingLimiter);
 
 // ==========================================
 // 🔓 RUTAS PÚBLICAS
@@ -122,16 +118,13 @@ app.use("/qr", pollingLimiter);      // Permite polling del frontend
 
 app.post("/auth/login", login);
 
-// REGISTRO DE AGENCIAS
 app.post("/auth/register", async (req, res) => {
     const { email, password, agencyName, role } = req.body;
-
     if (!email || !password) return res.status(400).json({ error: "Datos incompletos" });
 
     try {
         const salt = await bcrypt.genSalt(10);
         const hash = await bcrypt.hash(password, salt);
-
         const userRole = role || 'agency';
         const agencyId = userRole === 'agency' ? `AG-${Date.now()}` : null;
 
@@ -139,7 +132,6 @@ app.post("/auth/register", async (req, res) => {
             "INSERT INTO users (email, password_hash, role, agency_id) VALUES ($1, $2, $3, $4) RETURNING id, email, role, agency_id",
             [email, hash, userRole, agencyId]
         );
-
         res.json({ success: true, user: newUser.rows[0] });
     } catch (e) {
         if (e.code === '23505') return res.status(400).json({ error: "El email ya existe" });
@@ -199,17 +191,14 @@ app.post("/ghl/app-webhook", async (req, res) => {
             } catch (errGHL) {
                 console.error("❌ Error flujo GHL:", errGHL.message);
             }
-
             await registerNewTenant(evt.locationId, evt.companyId);
             return res.json({ ok: true });
         }
-
         if (evt.type === "UNINSTALL") {
             console.log(`🗑️ Desinstalación: ${evt.locationId}`);
             await pool.query("UPDATE tenants SET status = 'cancelled' WHERE location_id = $1", [evt.locationId]);
             return res.json({ ok: true });
         }
-
         res.json({ ignored: true });
     } catch (e) {
         console.error("Error app-webhook:", e);
@@ -225,6 +214,7 @@ app.post("/ghl/webhook", async (req, res) => {
         if (!locationId || !phone) return res.json({ ignored: true });
         if (message && message.includes("[Enviado desde otro dispositivo]")) return res.json({ ignored: true });
 
+        // Solo procesamos mensajes salientes (Outbound/SMS)
         if (type === "Outbound" || type === "SMS") {
             let finalMessage = message || "";
             let messageDelay = 0;
@@ -239,41 +229,56 @@ app.post("/ghl/webhook", async (req, res) => {
             const clientPhone = normalizePhone(phone);
             const dbConfigs = await getLocationSlotsConfig(locationId);
 
+            // Buscar sesiones disponibles
             let availableCandidates = dbConfigs.map(conf => ({
                 slot: conf.slot_id,
                 myNumber: conf.phone_number,
-                settings: conf.settings || {},
+                settings: conf.settings || {}, // Importante: Traer settings para leer grupos
                 session: sessions.get(`${locationId}_slot${conf.slot_id}`)
             })).filter(c => c.session && c.session.isConnected);
 
             if (availableCandidates.length === 0) return res.status(200).json({ error: "No devices connected" });
 
-            // 🔥 FIX INTELIGENTE DE SELECCIÓN DE SLOT
-            // Buscamos si es un mensaje para un GRUPO y qué slot lo tiene activo
+            // 🔥 LOGICA DE SELECCIÓN DE SLOT Y DESTINO (GRUPO vs INDIVIDUAL)
             const jidUser = clientPhone.replace(/\D/g, "");
             let selected = null;
             let targetJid = null;
 
-            // 1. Barrido para encontrar si es un grupo configurado en algún slot
-            for (const candidate of availableCandidates) {
-                const groupsConfig = candidate.settings.groups || {};
-                const foundGroup = Object.keys(groupsConfig).find(gJid =>
-                    gJid.replace(/\D/g, "") === jidUser && groupsConfig[gJid].active
-                );
+            console.log(`📨 Webhook GHL -> Destino: ${jidUser}`);
 
-                if (foundGroup) {
-                    selected = candidate; // Usamos ESTE slot porque es el que conoce el grupo
-                    targetJid = foundGroup; // Usamos el JID real del grupo
-                    console.log(`📢 Detectado Grupo Activo en Slot ${selected.slot}: ${foundGroup}`);
+            // 1. Intentar encontrar si es un grupo configurado en algún slot
+            for (const candidate of availableCandidates) {
+                const groupsConfig = candidate.settings?.groups || {};
+
+                // Buscamos si alguna key de grupo (limpiando caracteres) coincide con el número de GHL
+                const foundGroupKey = Object.keys(groupsConfig).find(gKey => {
+                    const cleanKey = gKey.replace(/\D/g, "");
+                    // Verificamos coincidencia Y que esté activo
+                    return cleanKey === jidUser && groupsConfig[gKey].active;
+                });
+
+                if (foundGroupKey) {
+                    selected = candidate;
+                    targetJid = foundGroupKey; // Usamos el ID original con @g.us
+                    console.log(`📢 Encontrado Grupo Configurado en Slot ${candidate.slot}: ${targetJid}`);
                     break;
                 }
             }
 
-            // 2. Si no es grupo (o no se encontró config), asumimos chat individual
+            // 2. Si no se encontró en la config, decidimos estrategia fallback
             if (!selected) {
-                // Usamos el primero disponible (o rotación si quisieras)
-                selected = availableCandidates[0];
-                targetJid = jidUser + "@s.whatsapp.net";
+                selected = availableCandidates[0]; // Usamos el primer slot por defecto
+
+                // ⚠️ DETECCIÓN AUTOMÁTICA DE GRUPO (FALLBACK)
+                // Los grupos (antiguos y nuevos) suelen ser largos o empezar con ciertos prefijos (12036...)
+                // Si el número tiene más de 17 dígitos o empieza por 12036, asumimos grupo.
+                if (jidUser.length > 16 || jidUser.startsWith("12036")) {
+                    console.warn(`⚠️ Número parece grupo (${jidUser}) pero no está en config. Forzando @g.us`);
+                    targetJid = jidUser + "@g.us";
+                } else {
+                    // Usuario normal
+                    targetJid = jidUser + "@s.whatsapp.net";
+                }
             }
 
             try {
@@ -332,8 +337,6 @@ app.post("/ghl/webhook", async (req, res) => {
 // 🔐 RUTAS PROTEGIDAS (Agencia/Admin)
 // ==========================================
 
-
-// ✅ RUTAS DE GRUPOS
 app.get("/agency/slots/:locationId/:slotId/groups", verifyToken, async (req, res) => {
     try {
         const { locationId, slotId } = req.params;
@@ -348,12 +351,9 @@ app.post("/agency/slots/:locationId/:slotId/groups/sync-members", verifyToken, a
     try {
         const { locationId, slotId } = req.params;
         const { groupJid } = req.body;
-
-        // Ejecutamos en segundo plano para no bloquear (o await si quieres esperar)
         syncGroupMembers(locationId, slotId, groupJid)
             .then(r => console.log(`✅ Miembros sincronizados: ${r.synced}`))
             .catch(e => console.error("❌ Error background sync:", e));
-
         res.json({ success: true, message: "Sincronización iniciada en segundo plano." });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -413,7 +413,6 @@ app.post("/agency/add-slot", verifyToken, async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 3. Borrar Slot
 app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) => {
     try {
         await deleteSessionData(req.params.locationId, req.params.slotId, true);
@@ -421,12 +420,10 @@ app.delete("/agency/slots/:locationId/:slotId", verifyToken, async (req, res) =>
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ✅ NUEVA RUTA: Guardar configuración de Slot Individual
 app.put("/agency/slots/:locationId/:slotId/settings", verifyToken, async (req, res) => {
     try {
         const { locationId, slotId } = req.params;
         const { settings } = req.body;
-
         await pool.query(
             "UPDATE location_slots SET settings = $1::jsonb WHERE location_id = $2 AND slot_id = $3",
             [JSON.stringify(settings), locationId, slotId]
@@ -437,17 +434,14 @@ app.put("/agency/slots/:locationId/:slotId/settings", verifyToken, async (req, r
     }
 });
 
-// ✅ ACTUALIZADO: Detalles ahora trae slots con settings y tenant name
 app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
     const { locationId } = req.params;
     try {
         const [slots, keys, tenant] = await Promise.all([
-            // Traemos todos los campos del slot, incluida la columna 'settings'
             pool.query("SELECT * FROM location_slots WHERE location_id=$1 ORDER BY slot_id", [locationId]),
             pool.query("SELECT * FROM keyword_tags WHERE location_id=$1 ORDER BY created_at DESC", [locationId]),
             pool.query("SELECT name FROM tenants WHERE location_id=$1", [locationId])
         ]);
-
         res.json({
             slots: slots.rows,
             keywords: keys.rows,
@@ -456,11 +450,9 @@ app.get("/agency/location-details/:locationId", verifyToken, async (req, res) =>
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ✅ ACTUALIZADO: Crear Keyword con slotId opcional
 app.post("/agency/keywords", verifyToken, async (req, res) => {
     try {
         const { locationId, slotId, keyword, tag } = req.body;
-        // Si slotId no viene, será NULL (aplica globalmente o a todos, según tu lógica)
         const r = await pool.query(
             "INSERT INTO keyword_tags (location_id, slot_id, keyword, tag) VALUES ($1, $2, $3, $4) RETURNING *",
             [locationId, slotId || null, keyword.toLowerCase(), tag]
@@ -474,7 +466,6 @@ app.delete("/agency/keywords/:id", verifyToken, async (req, res) => {
     catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Esta ruta actualiza settings globales del tenant (podrías mantenerla o deprecara)
 app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
     try {
         await pool.query("UPDATE tenants SET settings=$1::jsonb WHERE location_id=$2", [JSON.stringify(req.body.settings), req.params.locationId]);
@@ -483,10 +474,9 @@ app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// 🛠️ RUTAS GESTIÓN BOT DE SOPORTE (ADMIN)
+// 🛠️ RUTAS GESTIÓN BOT DE SOPORTE
 // ==========================================
 
-// 1. Iniciar/Reiniciar Bot de Soporte
 app.post("/admin/support/start", verifyToken, requireRole('admin'), async (req, res) => {
     try {
         await startWhatsApp(SUPPORT_LOC_ID, SUPPORT_SLOT_ID);
@@ -496,7 +486,6 @@ app.post("/admin/support/start", verifyToken, requireRole('admin'), async (req, 
     }
 });
 
-// 2. Obtener QR del Soporte
 app.get("/admin/support/qr", verifyToken, requireRole('admin'), (req, res) => {
     const session = sessions.get(`${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`);
     if (session && session.qr) {
@@ -506,7 +495,6 @@ app.get("/admin/support/qr", verifyToken, requireRole('admin'), (req, res) => {
     }
 });
 
-// 3. Estado del Soporte
 app.get("/admin/support/status", verifyToken, requireRole('admin'), async (req, res) => {
     const session = sessions.get(`${SUPPORT_LOC_ID}_slot${SUPPORT_SLOT_ID}`);
     let dbInfo = {};
@@ -525,7 +513,6 @@ app.get("/admin/support/status", verifyToken, requireRole('admin'), async (req, 
     });
 });
 
-// 4. Desconectar Soporte
 app.delete("/admin/support/disconnect", verifyToken, requireRole('admin'), async (req, res) => {
     try {
         await deleteSessionData(SUPPORT_LOC_ID, SUPPORT_SLOT_ID);
@@ -536,7 +523,7 @@ app.delete("/admin/support/disconnect", verifyToken, requireRole('admin'), async
 });
 
 // ==========================================
-// 🌍 RUTAS PÚBLICAS IFRAME (QR/STATUS)
+// 🌍 RUTAS PÚBLICAS IFRAME
 // ==========================================
 
 app.post("/start-whatsapp", async (req, res) => {
