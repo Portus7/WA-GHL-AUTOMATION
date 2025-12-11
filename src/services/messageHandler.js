@@ -110,7 +110,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
 
     // 1. OBTENCIÓN Y LIMPIEZA DEL JID (CRÍTICO)
     // Multidispositivo agrega sufijos como :2, :14. Debemos quitarlos para identificar el chat.
-    let remoteJid = m.key.remoteJid;
+    let remoteJid = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
 
     // Filtros básicos
     if (!remoteJid || remoteJid.includes("status@") || remoteJid.includes("@newsletter")) return;
