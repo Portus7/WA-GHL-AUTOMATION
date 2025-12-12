@@ -111,7 +111,6 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
     // Solo si NO es ninguno de esos, intentamos buscar el alternativo (para los casos raros de LIDs).
     let remoteJid = m.key.remoteJid;
     if (remoteJid && !remoteJid.includes("@s.whatsapp.net") && !remoteJid.includes("@g.us")) {
-        // Aquí aplicamos tu lógica para recuperar el ID real si viene como LID raro
         if (m.key.remoteJidAlt) {
             remoteJid = m.key.remoteJidAlt;
         }
@@ -126,7 +125,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
     }
 
     // LOG DE DEBUG PARA VERIFICAR
-    console.log(`📩 Procesando mensaje de: ${remoteJid}`);
+    // console.log(`📩 Procesando mensaje de: ${remoteJid}`);
 
     try {
         const tenantStatus = await getTenantConfig(locationId);
@@ -159,12 +158,22 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
 
             // Para GHL, usamos solo los números del ID del grupo
             clientIdentifier = remoteJid.replace(/\D/g, "");
-            clientName = groupConfig.name || "Grupo WhatsApp";
+
+            // ✅ AGREGAR SUFIJO [GRUPO] PARA IDENTIFICACIÓN EN GHL
+            const rawName = groupConfig.name || "Grupo WhatsApp";
+            clientName = rawName.includes("[GRUPO]") ? rawName : `${rawName} [GRUPO]`;
+
             console.log(`👥 Mensaje de Grupo Activo: ${clientName} (${clientIdentifier})`);
         } else {
             // Chat Individual
             clientIdentifier = normalizePhone(remoteJid.split("@")[0]);
-            clientName = m.pushName || "Usuario WhatsApp";
+
+            // ✅ PROTECCIÓN DE NOMBRE AL ESCRIBIR DESDE CELULAR
+            if (m.key.fromMe) {
+                clientName = "Usuario WhatsApp";
+            } else {
+                clientName = m.pushName || "Usuario WhatsApp";
+            }
         }
 
         // Extracción de Contenido
@@ -205,18 +214,16 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             text = `> En respuesta a: "${qText.substring(0, 50)}..."\n\n${text}`;
         }
 
-        // Prefijo en grupos (Quién envió el mensaje)
-        // Esto es vital para saber quién habla dentro de GHL
+        // ✅ MEJORA: PREFIJO EN GRUPOS CON NOMBRE REAL
         if (isGroup && !m.key.fromMe) {
-            // participant puede venir como "12345@s.whatsapp.net" o "12345:2@s.whatsapp.net"
-            let participant = m.key.participant || m.participant;
-            if (participant) {
-                // Limpiamos el participant para que quede solo el número
-                participant = participant.split('@')[0].split(':')[0];
-            } else {
-                participant = "Anon";
-            }
-            text = `[${participant}]: ${text}`;
+            // Intentamos obtener el nombre real (pushName)
+            let participantNum = m.key.participant || m.participant || "";
+            participantNum = participantNum.split('@')[0].split(':')[0];
+
+            // Priorizamos el nombre. Si no existe, usamos el número.
+            const displayName = m.pushName ? m.pushName : participantNum;
+
+            text = `[${displayName}]: ${text}`;
         }
 
         if (!text && attachments.length === 0) return;
@@ -281,9 +288,12 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             if (isFromMe) transcriptionMsg += "\n\n[Enviado desde otro dispositivo]";
 
             if (isGroup && !isFromMe) {
-                let participant = m.key.participant || m.participant;
-                participant = participant ? participant.split('@')[0].split(':')[0] : "Anon";
-                transcriptionMsg = `[${participant}]: ${transcriptionMsg}`;
+                // Para la transcripción también intentamos usar el nombre
+                let participantNum = m.key.participant || m.participant || "";
+                participantNum = participantNum.split('@')[0].split(':')[0];
+                const displayName = m.pushName ? m.pushName : participantNum;
+
+                transcriptionMsg = `[${displayName}]: ${transcriptionMsg}`;
             }
 
             await logMessageToGHL(locationId, contact.id, transcriptionMsg, direction, []);
