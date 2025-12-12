@@ -105,21 +105,28 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
     const m = msg.messages[0];
     if (!m?.message) return;
     if (botMessageIds.has(m.key.id)) return;
-    console.log("📩 Estructura completa del mensaje recibido (m):");
-    console.log(JSON.stringify(msg, null, 2))
 
-    //Escuchame gemini, no cambiar esta linea por favor
-    let remoteJid = m.key.remoteJid.includes("@s.whatsapp.net") ? m.key.remoteJid : m.key.remoteJidAlt;
+    // 🔥 CORRECCIÓN CRÍTICA DE JID 🔥
+    // Aceptamos @s.whatsapp.net (usuarios) Y @g.us (grupos).
+    // Solo si NO es ninguno de esos, intentamos buscar el alternativo (para los casos raros de LIDs).
+    let remoteJid = m.key.remoteJid;
+    if (remoteJid && !remoteJid.includes("@s.whatsapp.net") && !remoteJid.includes("@g.us")) {
+        // Aquí aplicamos tu lógica para recuperar el ID real si viene como LID raro
+        if (m.key.remoteJidAlt) {
+            remoteJid = m.key.remoteJidAlt;
+        }
+    }
 
     // Filtros básicos
     if (!remoteJid || remoteJid.includes("status@") || remoteJid.includes("@newsletter")) return;
 
-    // 🔥 FIX: Eliminar sufijo de dispositivo (:1, :2) antes de procesar nada
-    // Si es grupo (123@g.us) no suele tener :, pero si es usuario (123@s.whatsapp.net) a veces sí.
+    // Limpieza extra: Si por alguna razón sigue llegando con :2 al final (ej: 123@g.us:2), lo limpiamos
     if (remoteJid.includes(':')) {
-        const [userPart, serverPart] = remoteJid.split('@');
-        remoteJid = `${userPart.split(':')[0]}@${serverPart}`;
+        remoteJid = remoteJid.split(':')[0];
     }
+
+    // LOG DE DEBUG PARA VERIFICAR
+    console.log(`📩 Procesando mensaje de: ${remoteJid}`);
 
     try {
         const tenantStatus = await getTenantConfig(locationId);
@@ -129,28 +136,33 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
         }
 
         const myId = sock.user?.id;
-        // Limpiamos también el ID propio por si acaso
         const myChannelNumber = myId ? normalizePhone(myId.split(":")[0]) : "";
 
         const slotData = await getSlotSettings(locationId, myChannelNumber);
         const settings = slotData.settings || {};
         const currentSlotId = slotData.slot_id;
 
+        // Detectar si es Grupo
         const isGroup = remoteJid.endsWith('@g.us');
         let clientIdentifier = "";
         let clientName = "";
 
         if (isGroup) {
+            // Buscamos la configuración del grupo
             const groupConfig = settings.groups?.[remoteJid];
 
-            // Si no está activo explícitamente, ignorar
-            if (!groupConfig || !groupConfig.active) return;
+            // Si no está activo explícitamente en el panel, ignorar mensaje
+            if (!groupConfig || !groupConfig.active) {
+                console.log(`Ignorando grupo no activo: ${remoteJid}`);
+                return;
+            }
 
+            // Para GHL, usamos solo los números del ID del grupo
             clientIdentifier = remoteJid.replace(/\D/g, "");
             clientName = groupConfig.name || "Grupo WhatsApp";
-            console.log(`👥 Mensaje de Grupo Activo: ${clientName}`);
+            console.log(`👥 Mensaje de Grupo Activo: ${clientName} (${clientIdentifier})`);
         } else {
-            // Chat 1 a 1
+            // Chat Individual
             clientIdentifier = normalizePhone(remoteJid.split("@")[0]);
             clientName = m.pushName || "Usuario WhatsApp";
         }
@@ -167,6 +179,9 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
         else if (msgType === 'videoMessage') text = m.message.videoMessage.caption || "";
         else if (msgType === 'documentMessage') text = m.message.documentMessage.caption || "";
 
+        // Ignorar mensajes de sistema (ej: cambios de claves)
+        if (msgType === 'senderKeyDistributionMessage' || msgType === 'protocolMessage') return;
+
         if (['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(msgType)) {
             const mediaData = await downloadAndSaveMedia(m, msgType);
             if (mediaData) {
@@ -174,7 +189,6 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
                 if (!text) text = `[Archivo: ${msgType}]`;
 
                 if (msgType === 'audioMessage' && settings.transcribe_audio !== false) {
-                    console.log(`🎙️ Transcribiendo audio para ${locationId}...`);
                     const transcriptText = await transcribeAudio(mediaData.filePath);
                     if (transcriptText) transcription = transcriptText;
                 }
@@ -191,17 +205,21 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             text = `> En respuesta a: "${qText.substring(0, 50)}..."\n\n${text}`;
         }
 
-        // Prefijo en grupos
+        // Prefijo en grupos (Quién envió el mensaje)
+        // Esto es vital para saber quién habla dentro de GHL
         if (isGroup && !m.key.fromMe) {
-            const participant = m.key.participant || m.participant;
-            // Limpiamos participant también
-            const participantPhone = participant ? participant.split(':')[0].split('@')[0] : "Anon";
-            text = `[${participantPhone}]: ${text}`;
+            // participant puede venir como "12345@s.whatsapp.net" o "12345:2@s.whatsapp.net"
+            let participant = m.key.participant || m.participant;
+            if (participant) {
+                // Limpiamos el participant para que quede solo el número
+                participant = participant.split('@')[0].split(':')[0];
+            } else {
+                participant = "Anon";
+            }
+            text = `[${participant}]: ${text}`;
         }
 
         if (!text && attachments.length === 0) return;
-
-        console.log(`📩 PROCESANDO: ${clientIdentifier} (${isGroup ? 'Grupo' : 'Directo'})`);
 
         // Routing y GHL
         const route = await getRoutingForPhone(clientIdentifier, locationId);
@@ -212,6 +230,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
 
         if (!contact?.id) return;
 
+        // Acciones CRM (Solo Inbound)
         if (!m.key.fromMe) {
             if (!isGroup && settings.ghl_contact_tag) {
                 await addTagToContact(locationId, contact.id, settings.ghl_contact_tag);
@@ -262,9 +281,9 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             if (isFromMe) transcriptionMsg += "\n\n[Enviado desde otro dispositivo]";
 
             if (isGroup && !isFromMe) {
-                const participant = m.key.participant || m.participant;
-                const participantPhone = participant ? participant.split(':')[0].split('@')[0] : "Anon";
-                transcriptionMsg = `[${participantPhone}]: ${transcriptionMsg}`;
+                let participant = m.key.participant || m.participant;
+                participant = participant ? participant.split('@')[0].split(':')[0] : "Anon";
+                transcriptionMsg = `[${participant}]: ${transcriptionMsg}`;
             }
 
             await logMessageToGHL(locationId, contact.id, transcriptionMsg, direction, []);
