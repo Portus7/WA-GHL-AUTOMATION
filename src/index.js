@@ -243,11 +243,10 @@ app.post("/ghl/webhook", async (req, res) => {
             let selected = null;
             let targetJid = null;
 
-            // 1. Intentar encontrar si es un grupo configurado en algún slot
+            // 1. Intentar encontrar si es un grupo configurado explícitamente en algún slot
             for (const candidate of availableCandidates) {
                 const groupsConfig = candidate.settings?.groups || {};
 
-                // Buscamos coincidencia exacta en los grupos activos
                 const foundGroupKey = Object.keys(groupsConfig).find(gKey => {
                     const cleanKey = gKey.replace(/\D/g, "");
                     return cleanKey === jidUser && groupsConfig[gKey].active;
@@ -261,16 +260,41 @@ app.post("/ghl/webhook", async (req, res) => {
                 }
             }
 
-            // 2. Fallback: Si no está en config, pero parece un grupo
+            // 2. Si no se encontró en la config, intentar detección automática inteligente
             if (!selected) {
-                selected = availableCandidates[0];
 
-                // 🔥 LOGICA CRÍTICA PARA OUTBOUND A GRUPOS
-                // Los grupos de comunidades suelen empezar con 12036... y tienen 18+ dígitos
+                // ¿Es un ID de grupo? (12036... y longitud >= 18)
                 if (jidUser.startsWith("12036") && jidUser.length >= 18) {
-                    targetJid = jidUser + "@g.us";
-                    console.log(`⚠️ Detectado ID de Grupo (Fallback): ${targetJid}`);
+                    const tempGroupJid = jidUser + "@g.us";
+                    console.log(`⚠️ Detectado ID de Grupo (Fallback): ${tempGroupJid}. Buscando slot participante...`);
+
+                    // 🔍 BÚSQUEDA PROFUNDA: ¿Qué slot es miembro de este grupo?
+                    for (const candidate of availableCandidates) {
+                        try {
+                            // Consultamos metadata del grupo usando esta sesión
+                            const meta = await candidate.session.sock.groupMetadata(tempGroupJid);
+                            if (meta && meta.id) {
+                                selected = candidate;
+                                targetJid = tempGroupJid;
+                                console.log(`✅ Slot ${candidate.slot} es miembro del grupo. Enviando...`);
+                                break;
+                            }
+                        } catch (err) {
+                            // Si falla, es probable que este slot no sea miembro o no tenga acceso
+                            // Continuamos con el siguiente candidato
+                        }
+                    }
+
+                    // Si ningún slot pudo verificar el grupo, forzamos el primero (mejor intento)
+                    if (!selected) {
+                        selected = availableCandidates[0];
+                        targetJid = tempGroupJid;
+                        console.warn(`⚠️ Ningún slot pudo verificar membresía. Forzando Slot ${selected.slot}.`);
+                    }
+
                 } else {
+                    // Es un usuario normal
+                    selected = availableCandidates[0]; // Podrías rotar esto si quisieras load balancing
                     targetJid = jidUser + "@s.whatsapp.net";
                 }
             }
@@ -282,6 +306,7 @@ app.post("/ghl/webhook", async (req, res) => {
                 const commandData = parseGHLCommand(finalMessage);
 
                 if (commandData) {
+                    console.log(`✨ Enviando botones interactivos a ${targetJid}`);
                     sentMsg = await sendInteractiveMessage(selected.session.sock, targetJid, commandData);
                 } else {
                     if (attachments && attachments.length > 0) {
@@ -305,8 +330,7 @@ app.post("/ghl/webhook", async (req, res) => {
 
                 const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
 
-                // No procesamos keywords en mensajes salientes de API a grupos para evitar bucles raros
-                // Pero sí para chats individuales si quisieras.
+                // No procesamos keywords en mensajes salientes de API a grupos para evitar bucles
                 if (contact?.id && targetJid.includes("@s.whatsapp.net")) {
                     await processKeywordTags(locationId, contact.id, finalMessage, selected.slot, false);
                 }
