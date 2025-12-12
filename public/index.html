@@ -7,7 +7,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
     <style>
@@ -34,7 +33,7 @@
             font-size: 1.5rem;
         }
 
-        /* Cards */
+        /* --- TARJETAS --- */
         .slot-card {
             background: white;
             border-radius: 12px;
@@ -42,6 +41,7 @@
             margin-bottom: 20px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
             border: 1px solid #e5e7eb;
+            transition: all 0.3s ease;
         }
 
         .slot-header {
@@ -51,7 +51,6 @@
             margin-bottom: 15px;
         }
 
-        /* Title Editable Area */
         .title-wrapper {
             display: flex;
             align-items: center;
@@ -77,7 +76,7 @@
             color: #4f46e5;
         }
 
-        /* Badges & Info */
+        /* --- BADGES --- */
         .badge {
             padding: 4px 10px;
             border-radius: 6px;
@@ -97,29 +96,49 @@
             color: #166534;
         }
 
-        .meta-info {
-            font-size: 0.85rem;
-            color: #6b7280;
-            margin-bottom: 15px;
-            background: #f9fafb;
-            padding: 10px;
+        /* --- ZONA DE GESTIÓN (NUEVO) --- */
+        .management-area {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
             border-radius: 8px;
-            border: 1px solid #f3f4f6;
-            display: none;
+            padding: 15px;
+            margin-bottom: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
         }
 
-        .tag {
-            background: #e0f2fe;
-            color: #0369a1;
-            padding: 2px 8px;
-            border-radius: 4px;
-            margin-right: 5px;
-            font-size: 0.75rem;
-            border: 1px solid #bae6fd;
+        .control-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .control-label {
+            font-size: 0.85rem;
             font-weight: 600;
+            color: #475569;
         }
 
-        /* Buttons */
+        .select-input {
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid #cbd5e1;
+            background: white;
+            font-size: 0.85rem;
+            color: #334155;
+            outline: none;
+            cursor: pointer;
+            min-width: 140px;
+            max-width: 200px;
+        }
+
+        .select-input:focus {
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 2px #e0e7ff;
+        }
+
+        /* --- BOTONES --- */
         .btn {
             width: 100%;
             padding: 12px;
@@ -129,6 +148,7 @@
             cursor: pointer;
             font-size: 0.95rem;
             transition: all 0.2s;
+            margin-top: 10px;
         }
 
         .btn-primary {
@@ -144,7 +164,6 @@
             background: #fff;
             color: #ef4444;
             border: 1px solid #fecaca;
-            margin-top: 10px;
         }
 
         .btn-danger:hover {
@@ -157,7 +176,7 @@
             cursor: not-allowed;
         }
 
-        /* QR Area */
+        /* --- QR AREA --- */
         .qr-area {
             margin-top: 15px;
             display: flex;
@@ -185,7 +204,7 @@
             margin-bottom: 5px;
         }
 
-        /* Blocked Screen */
+        /* --- PANTALLA BLOQUEO --- */
         .blocked-screen {
             position: fixed;
             top: 0;
@@ -210,35 +229,6 @@
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
             border: 1px solid #e5e7eb;
         }
-
-        .icon-lock {
-            font-size: 3rem;
-            margin-bottom: 20px;
-            display: block;
-        }
-
-        .blocked-title {
-            font-size: 1.5rem;
-            font-weight: 800;
-            color: #1f2937;
-            margin: 0 0 10px 0;
-        }
-
-        .blocked-msg {
-            color: #6b7280;
-            font-size: 1rem;
-            line-height: 1.5;
-            margin-bottom: 25px;
-        }
-
-        .btn-contact {
-            background: #4f46e5;
-            color: white;
-            text-decoration: none;
-            display: inline-block;
-            padding: 10px 20px;
-            border-radius: 8px;
-        }
     </style>
 </head>
 
@@ -247,7 +237,7 @@
     <div id="loader-view" class="container">
         <div style="text-align:center; margin-top: 50px;">
             <div style="margin-bottom: 15px; font-size: 2rem;">⌛</div>
-            <div style="color:#6b7280;">Verificando suscripción...</div>
+            <div style="color:#6b7280;">Cargando configuración...</div>
         </div>
     </div>
 
@@ -260,17 +250,13 @@
         const params = new URLSearchParams(window.location.search);
         const locationId = params.get("location_id") || params.get("locationId");
 
-        // Configuración base de SweetAlert para que combine con el estilo
+        // Configuración Toast de SweetAlert2
         const Toast = Swal.mixin({
             toast: true,
             position: 'top-end',
             showConfirmButton: false,
             timer: 3000,
-            timerProgressBar: true,
-            didOpen: (toast) => {
-                toast.addEventListener('mouseenter', Swal.stopTimer)
-                toast.addEventListener('mouseleave', Swal.resumeTimer)
-            }
+            timerProgressBar: true
         });
 
         if (!locationId) document.body.innerHTML = "<h3 style='text-align:center; margin-top:50px; color:red'>Error Fatal: Falta location_id</h3>";
@@ -280,8 +266,13 @@
         const container = document.getElementById("slots-container");
         const activeConnections = new Set();
         const connectionIntervals = new Map();
+
+        // Variable para guardar usuarios de GHL
+        let ghlUsers = [];
+
         async function init() {
             try {
+                // 1. Obtener Configuración General
                 const confRes = await fetch(`/config?locationId=${locationId}`);
                 if (!confRes.ok) throw new Error("Error de conexión");
                 const conf = await confRes.json();
@@ -291,11 +282,27 @@
                     return;
                 }
 
+                // 2. Obtener Usuarios de GHL (para el dropdown de responsables)
+                try {
+                    const usersRes = await fetch(`/public/ghl-users?locationId=${locationId}`);
+                    if (usersRes.ok) {
+                        ghlUsers = await usersRes.json();
+                    }
+                } catch (e) {
+                    console.error("Error cargando usuarios GHL", e);
+                }
+
                 loaderView.style.display = "none";
                 appView.style.display = "block";
 
-                renderSlots(conf.slots || []);
+                // Ordenamos slots por prioridad para renderizar en orden correcto
+                const slots = conf.slots || [];
+                // Si la prioridad es null, usamos 99 (al final)
+                slots.sort((a, b) => (a.priority || 99) - (b.priority || 99));
 
+                renderSlots(slots);
+
+                // Polling de estado cada 5s
                 setInterval(syncAllSlots, 5000);
 
             } catch (e) {
@@ -304,129 +311,170 @@
             }
         }
 
-        function showBlockedScreen(reason) {
-            let title = "Cuenta Inactiva";
-            let msg = "Su cuenta no se encuentra activa.";
-            let icon = "🔒";
-            if (reason === "trial_expired") { title = "Periodo de Prueba Finalizado"; msg = "Su trial ha vencido."; icon = "⏳"; }
-            else if (reason === "subscription_inactive") { title = "Servicio Suspendido"; msg = "Problema con la suscripción."; icon = "⛔"; }
-
-            document.body.innerHTML = `
-        <div class="blocked-screen">
-            <div class="blocked-card">
-                <div class="icon-lock">${icon}</div>
-                <h2 class="blocked-title">${title}</h2>
-                <p class="blocked-msg">${msg}</p>
-                <a href="#" class="btn btn-contact">Contactar Soporte</a>
-            </div>
-        </div>`;
-        }
-
         function renderSlots(slotsArray) {
             container.innerHTML = "";
+            const totalSlots = slotsArray.length;
 
-            if (slotsArray.length === 0) {
-                container.innerHTML = "<p style='text-align:center; color:#6b7280; padding:20px'>No hay dispositivos configurados. Contacte a su administrador o agencia.</p>";
+            if (totalSlots === 0) {
+                container.innerHTML = "<p style='text-align:center; color:#6b7280; padding:20px'>No hay dispositivos configurados.</p>";
                 return;
             }
 
             slotsArray.forEach(slot => {
                 const i = slot.id;
                 const currentName = slot.name || `Dispositivo #${i}`;
+                const currentPrio = slot.priority || 99;
+
+                // Extraer el usuario asignado desde settings (si existe)
+                const settings = slot.settings || {};
+                const currentAssigned = settings.ghl_assigned_user || "";
+
+                // --- Generar Opciones de Prioridad ---
+                // Solo mostramos números del 1 al N (donde N es la cantidad de slots)
+                let prioOptions = "";
+                for (let p = 1; p <= totalSlots; p++) {
+                    const label = p === 1 ? `${p} (Máxima)` : p;
+                    const selected = p === currentPrio ? 'selected' : '';
+                    prioOptions += `<option value="${p}" ${selected}>${label}</option>`;
+                }
+                // Si la prioridad actual está fuera del rango (ej: 99), agregamos opción extra
+                if (currentPrio > totalSlots) {
+                    prioOptions += `<option value="${currentPrio}" selected>${currentPrio} (Sin orden)</option>`;
+                }
+
+                // --- Generar Opciones de Usuarios ---
+                let userOptions = `<option value="">-- Automático --</option>`;
+                ghlUsers.forEach(u => {
+                    const selected = u.id === currentAssigned ? 'selected' : '';
+                    userOptions += `<option value="${u.id}" ${selected}>${u.name}</option>`;
+                });
 
                 const html = `
-        <div class="slot-card" id="card-${i}" data-slot-id="${i}">
-          <div class="slot-header">
-            <div class="title-wrapper">
-                <div class="slot-title" id="title-text-${i}">${currentName}</div>
-                <button class="edit-btn" onclick="editSlotName(${i})" title="Editar nombre">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
-                </button>
-            </div>
-            <div id="badge-${i}" class="badge badge-off">Desconectado</div>
-          </div>
+                <div class="slot-card" id="card-${i}" data-slot-id="${i}">
+                    <div class="slot-header">
+                        <div class="title-wrapper">
+                            <div class="slot-title" id="title-text-${i}">${currentName}</div>
+                            <button class="edit-btn" onclick="editSlotName(${i})" title="Editar nombre">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                            </button>
+                        </div>
+                        <div id="badge-${i}" class="badge badge-off">Desconectado</div>
+                    </div>
 
-          <div id="meta-${i}" class="meta-info">
-             <div>Prioridad: <strong id="prio-val-${i}">-</strong></div>
-             <div style="margin-top:5px">Tags: <span id="tags-list-${i}"></span></div>
-          </div>
+                    <div class="management-area">
+                        <div class="control-group">
+                            <label class="control-label">Prioridad de Envío:</label>
+                            <select class="select-input" onchange="changePriority(${i}, this.value)">
+                                ${prioOptions}
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label class="control-label">Asignar Chat a:</label>
+                            <select class="select-input" onchange="changeResponsible(${i}, this.value)">
+                                ${userOptions}
+                            </select>
+                        </div>
+                    </div>
 
-          <div id="connected-view-${i}" style="display:none">
-             <div style="text-align:center; margin: 20px 0;">
-               <div style="font-size: 1.3rem; font-weight:bold; color:#111827" id="phone-${i}">...</div>
-               <small style="color:#059669">● Sincronizado</small>
-             </div>
-             <button class="btn btn-danger" onclick="disconnect(${i})">Cerrar Sesión</button>
-          </div>
+                    <div id="connected-view-${i}" style="display:none">
+                        <div style="text-align:center; margin: 20px 0;">
+                            <div style="font-size: 1.3rem; font-weight:bold; color:#111827" id="phone-${i}">...</div>
+                            <small style="color:#059669">● Sincronizado</small>
+                        </div>
+                        <button class="btn btn-danger" onclick="disconnect(${i})">Cerrar Sesión</button>
+                    </div>
 
-          <div id="disconnected-view-${i}">
-             <button id="btn-${i}" class="btn btn-primary" onclick="startConnect(${i})">Vincular WhatsApp</button>
-             
-             <div id="qr-area-${i}" class="qr-area">
-                <span id="msg-${i}" class="status-msg">Solicitando código QR...</span>
-                <div id="qr-canvas-${i}" class="qr-canvas"></div>
-                
-                <button class="btn btn-danger" style="width: auto; padding: 8px 20px; margin-top: 10px; font-size: 0.85rem;" onclick="cancelConnect(${i})">
-                  Cancelar / Detener
-                </button>
-             </div>
-          </div>
-        </div>
-      `;
+                    <div id="disconnected-view-${i}">
+                        <button id="btn-${i}" class="btn btn-primary" onclick="startConnect(${i})">Vincular WhatsApp</button>
+                        <div id="qr-area-${i}" class="qr-area">
+                            <span id="msg-${i}" class="status-msg">Solicitando código QR...</span>
+                            <div id="qr-canvas-${i}" class="qr-canvas"></div>
+                            <button class="btn btn-danger" style="width: auto; padding: 8px 20px; margin-top: 10px; font-size: 0.85rem;" onclick="cancelConnect(${i})">Cancelar</button>
+                        </div>
+                    </div>
+                </div>`;
+
                 container.insertAdjacentHTML('beforeend', html);
                 checkStatus(i);
             });
         }
 
+        // --- FUNCIONES DE CAMBIO (NUEVO) ---
+
+        async function changePriority(slotId, newPriority) {
+            const val = parseInt(newPriority);
+            Toast.fire({ icon: 'info', title: 'Reordenando...' });
+
+            try {
+                const res = await fetch(`/public/update-slot-config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        locationId,
+                        slotId,
+                        priority: val
+                    })
+                });
+
+                if (!res.ok) throw new Error("Fallo al actualizar");
+
+                // Recargamos para ver el nuevo orden
+                setTimeout(() => window.location.reload(), 500);
+
+            } catch (e) {
+                Toast.fire({ icon: 'error', title: 'Error al cambiar prioridad' });
+            }
+        }
+
+        async function changeResponsible(slotId, userId) {
+            try {
+                const res = await fetch(`/public/update-slot-config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        locationId,
+                        slotId,
+                        assignedUser: userId // Puede ser string vacío para "Automático"
+                    })
+                });
+
+                if (res.ok) {
+                    Toast.fire({ icon: 'success', title: 'Responsable actualizado' });
+                } else {
+                    throw new Error("Fallo");
+                }
+            } catch (e) {
+                Toast.fire({ icon: 'error', title: 'No se pudo guardar el responsable' });
+            }
+        }
+
+        // --- FUNCIONES ORIGINALES ---
+
         async function editSlotName(slot) {
             const currentName = document.getElementById(`title-text-${slot}`).textContent;
-
-            // ✅ SWEETALERT2: Input Modal
             const { value: newName } = await Swal.fire({
-                title: 'Editar nombre del dispositivo',
+                title: 'Editar nombre',
                 input: 'text',
                 inputValue: currentName,
-                inputLabel: 'Ej: Ventas, Soporte, etc.',
                 showCancelButton: true,
                 confirmButtonText: 'Guardar',
                 cancelButtonText: 'Cancelar',
-                confirmButtonColor: '#4f46e5', // Indigo
-                cancelButtonColor: '#9ca3af',
-                inputValidator: (value) => {
-                    if (!value) {
-                        return '¡Debes escribir un nombre!'
-                    }
-                }
+                confirmButtonColor: '#4f46e5'
             });
 
-            if (newName && newName.trim() !== "" && newName !== currentName) {
-                try {
-                    document.getElementById(`title-text-${slot}`).textContent = newName;
-                    const res = await fetch("/config-slot", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ locationId, slot, slotName: newName })
-                    });
-                    if (!res.ok) throw new Error("Error al guardar");
-
-                    Toast.fire({ icon: 'success', title: 'Nombre actualizado' });
-
-                } catch (e) {
-                    // ✅ SWEETALERT2: Error
-                    Swal.fire({
-                        icon: 'error',
-                        title: 'Error',
-                        text: 'No se pudo guardar el nombre.',
-                        confirmButtonColor: '#4f46e5'
-                    });
-                    document.getElementById(`title-text-${slot}`).textContent = currentName;
-                }
+            if (newName && newName !== currentName) {
+                document.getElementById(`title-text-${slot}`).textContent = newName;
+                await fetch("/config-slot", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ locationId, slot, slotName: newName })
+                });
+                Toast.fire({ icon: 'success', title: 'Nombre actualizado' });
             }
         }
 
         function syncAllSlots() {
-            const cards = document.querySelectorAll('.slot-card');
-            cards.forEach(card => {
+            document.querySelectorAll('.slot-card').forEach(card => {
                 const slotId = card.getAttribute('data-slot-id');
                 if (slotId && !activeConnections.has(parseInt(slotId))) {
                     checkStatus(slotId);
@@ -438,33 +486,20 @@
             try {
                 const res = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
                 const data = await res.json();
-                updateUI(slot, data.connected, data.myNumber, data.priority, data.tags, data.slotName);
+                updateUI(slot, data.connected, data.myNumber);
             } catch (e) { }
         }
 
-        function updateUI(slot, isConnected, phone, priority, tags, slotName) {
+        function updateUI(slot, isConnected, phone) {
             const badge = document.getElementById(`badge-${slot}`);
-            if (!badge) return;
+            if (!badge) return; // Por si se elimina la tarjeta
 
             const viewCon = document.getElementById(`connected-view-${slot}`);
             const viewDisc = document.getElementById(`disconnected-view-${slot}`);
             const phoneText = document.getElementById(`phone-${slot}`);
             const qrArea = document.getElementById(`qr-area-${slot}`);
-            const metaDiv = document.getElementById(`meta-${slot}`);
-
-            if (slotName) {
-                document.getElementById(`title-text-${slot}`).textContent = slotName;
-            }
 
             if (isConnected) {
-                if (priority !== undefined || (tags && tags.length > 0)) {
-                    metaDiv.style.display = "block";
-                    document.getElementById(`prio-val-${slot}`).textContent = priority ?? "Auto";
-                    document.getElementById(`tags-list-${slot}`).innerHTML = (tags && tags.length) ? tags.map(t => `<span class="tag">${t}</span>`).join("") : "<em style='color:#9ca3af'>Sin tags</em>";
-                } else {
-                    metaDiv.style.display = "none";
-                }
-
                 if (badge.textContent !== "ACTIVO") {
                     badge.className = "badge badge-on";
                     badge.textContent = "ACTIVO";
@@ -475,7 +510,6 @@
                 }
                 phoneText.textContent = "+" + phone;
             } else {
-                metaDiv.style.display = "none";
                 if (badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
                     badge.className = "badge badge-off";
                     badge.textContent = "INACTIVO";
@@ -489,47 +523,37 @@
             activeConnections.add(slot);
             const btn = document.getElementById(`btn-${slot}`);
             const qrArea = document.getElementById(`qr-area-${slot}`);
-            const msg = document.getElementById(`msg-${slot}`);
             const qrCanvas = document.getElementById(`qr-canvas-${slot}`);
 
             btn.disabled = true;
-            btn.textContent = "Generando sesión...";
+            btn.textContent = "Cargando...";
             qrArea.classList.add("active");
             qrCanvas.innerHTML = "";
 
             try {
                 const res = await fetch(`/start-whatsapp?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-                if (!res.ok) throw new Error("Error de inicio");
-
-                msg.textContent = "Escanea este código con WhatsApp:";
+                if (!res.ok) throw new Error("Fallo inicio");
 
                 const localInterval = setInterval(async () => {
-                    if (!document.getElementById(`card-${slot}`)) {
+                    if (!document.getElementById(`card-${slot}`)) { // Tarjeta eliminada
                         clearInterval(localInterval);
-                        connectionIntervals.delete(slot);
-                        activeConnections.delete(slot);
                         return;
                     }
 
-                    const statRes = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
-                    const statData = await statRes.json();
+                    const s = await fetch(`/status?locationId=${locationId}&slot=${slot}`).then(r => r.json());
 
-                    if (statData.connected) {
+                    if (s.connected) {
                         clearInterval(localInterval);
                         connectionIntervals.delete(slot);
                         activeConnections.delete(slot);
-                        // El refresh recargará la página, no necesitamos alert aquí
                         window.location.reload();
                         return;
                     }
 
-                    const qrRes = await fetch(`/qr?locationId=${locationId}&slot=${slot}`);
-                    if (qrRes.ok) {
-                        const qrData = await qrRes.json();
-                        if (qrData.qr && qrCanvas.innerHTML === "") {
-                            new QRCode(qrCanvas, { text: qrData.qr, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.L });
-                            btn.textContent = "Esperando escaneo...";
-                        }
+                    const q = await fetch(`/qr?locationId=${locationId}&slot=${slot}`).then(r => r.json());
+                    if (q.qr && qrCanvas.innerHTML === "") {
+                        new QRCode(qrCanvas, { text: q.qr, width: 200, height: 200 });
+                        btn.textContent = "Escanea con WhatsApp";
                     }
                 }, 2000);
 
@@ -537,55 +561,34 @@
 
             } catch (e) {
                 activeConnections.delete(slot);
-                connectionIntervals.delete(slot);
-                if (msg) {
-                    msg.textContent = "Error al conectar.";
-                    msg.style.color = "red";
-                }
-                if (btn) btn.disabled = false;
-
-                // ✅ SWEETALERT2: Toast Error
-                Toast.fire({ icon: 'error', title: 'No se pudo iniciar la conexión' });
+                btn.disabled = false;
+                btn.textContent = "Vincular WhatsApp";
+                Toast.fire({ icon: 'error', title: 'Error al iniciar conexión' });
             }
         }
 
         async function disconnect(slot) {
-            // ✅ SWEETALERT2: Confirm Modal
             const result = await Swal.fire({
-                title: '¿Estás seguro?',
-                text: "Se cerrará la sesión de WhatsApp en este dispositivo.",
+                title: '¿Cerrar sesión?',
+                text: "Se desconectará el dispositivo.",
                 icon: 'warning',
                 showCancelButton: true,
-                confirmButtonColor: '#ef4444', // Rojo
-                cancelButtonColor: '#9ca3af', // Gris
-                confirmButtonText: 'Sí, cerrar sesión',
+                confirmButtonColor: '#ef4444',
+                confirmButtonText: 'Sí, cerrar',
                 cancelButtonText: 'Cancelar'
             });
 
             if (!result.isConfirmed) return;
 
-            const btn = document.querySelector(`#connected-view-${slot} button`);
-            btn.disabled = true;
-            btn.textContent = "Desconectando...";
-
             try {
                 await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
                 window.location.reload();
-
             } catch (e) {
-                // ✅ SWEETALERT2: Error Modal
-                Swal.fire({
-                    icon: 'error',
-                    title: 'Error',
-                    text: 'Hubo un problema al desconectar.',
-                    confirmButtonColor: '#4f46e5'
-                });
-                btn.disabled = false;
-                btn.textContent = "Cerrar Sesión";
+                Toast.fire({ icon: 'error', title: 'Error al desconectar' });
             }
         }
+
         async function cancelConnect(slot) {
-            // 1. Detener el polling (deja de pedir QR al backend)
             const interval = connectionIntervals.get(slot);
             if (interval) {
                 clearInterval(interval);
@@ -593,24 +596,28 @@
             }
             activeConnections.delete(slot);
 
-            // 2. Restaurar la interfaz visual (UI)
+            document.getElementById(`qr-area-${slot}`).classList.remove("active");
+            document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
             const btn = document.getElementById(`btn-${slot}`);
-            const qrArea = document.getElementById(`qr-area-${slot}`);
-            const qrCanvas = document.getElementById(`qr-canvas-${slot}`);
+            btn.disabled = false;
+            btn.textContent = "Vincular WhatsApp";
 
-            if (btn) {
-                btn.disabled = false;
-                btn.textContent = "Vincular WhatsApp";
-            }
-            if (qrArea) qrArea.classList.remove("active");
-            if (qrCanvas) qrCanvas.innerHTML = "";
+            await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
+        }
 
-            try {
-                console.log(`Cancelando conexión para slot ${slot}...`);
-                await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-            } catch (e) {
-                console.error("Error limpiando sesión en backend", e);
-            }
+        function showBlockedScreen(reason) {
+            let msg = "Su cuenta no está activa.";
+            if (reason === "trial_expired") msg = "Periodo de prueba finalizado.";
+            else if (reason === "subscription_inactive") msg = "Suscripción inactiva o cancelada.";
+
+            document.body.innerHTML = `
+            <div class="blocked-screen">
+                <div class="blocked-card">
+                    <div style="font-size:3rem;margin-bottom:20px">🔒</div>
+                    <h2 style="margin:0 0 10px 0;color:#1f2937">Acceso Restringido</h2>
+                    <p style="color:#6b7280">${msg}</p>
+                </div>
+            </div>`;
         }
 
         init();

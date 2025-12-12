@@ -569,6 +569,85 @@ app.delete("/admin/support/disconnect", verifyToken, requireRole('admin'), async
 // 🌍 RUTAS PÚBLICAS IFRAME
 // ==========================================
 
+// ✅ NUEVO: Obtener usuarios de GHL para el dropdown (Público)
+app.get("/public/ghl-users", async (req, res) => {
+    try {
+        const { locationId } = req.query;
+        if (!locationId) return res.status(400).json({ error: "Falta locationId" });
+
+        // Reutilizamos tu servicio existente
+        const users = await getLocationUsers(locationId);
+
+        // Devolvemos solo lo necesario para el frontend
+        res.json(users.map(u => ({ id: u.id, name: u.name })));
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: "Error obteniendo usuarios" });
+    }
+});
+
+// ✅ NUEVO: Actualizar Configuración del Slot (Prioridad y Responsable)
+app.post("/public/update-slot-config", async (req, res) => {
+    const { locationId, slotId, priority, assignedUser } = req.body;
+
+    try {
+        // Lógica de SWAP de Prioridad
+        if (priority) {
+            // 1. Obtener la prioridad actual de este slot
+            const currentRes = await pool.query(
+                "SELECT priority FROM location_slots WHERE location_id = $1 AND slot_id = $2",
+                [locationId, slotId]
+            );
+            const oldPriority = currentRes.rows[0]?.priority || 99;
+
+            // 2. Buscar si hay alguien ocupando la prioridad deseada
+            const targetRes = await pool.query(
+                "SELECT slot_id FROM location_slots WHERE location_id = $1 AND priority = $2",
+                [locationId, priority]
+            );
+
+            // 3. Si alguien la ocupa, le damos mi prioridad vieja (SWAP)
+            if (targetRes.rows.length > 0) {
+                const targetSlotId = targetRes.rows[0].slot_id;
+                await pool.query(
+                    "UPDATE location_slots SET priority = $1 WHERE location_id = $2 AND slot_id = $3",
+                    [oldPriority, locationId, targetSlotId]
+                );
+            }
+
+            // 4. Actualizar mi prioridad
+            await pool.query(
+                "UPDATE location_slots SET priority = $1 WHERE location_id = $2 AND slot_id = $3",
+                [priority, locationId, slotId]
+            );
+        }
+
+        // Lógica de Usuario Responsable
+        if (assignedUser !== undefined) { // Permite string vacío para desasignar
+            // Obtenemos settings actuales
+            const setRes = await pool.query(
+                "SELECT settings FROM location_slots WHERE location_id = $1 AND slot_id = $2",
+                [locationId, slotId]
+            );
+
+            let currentSettings = setRes.rows[0]?.settings || {};
+            // Actualizamos la propiedad ghl_assigned_user
+            currentSettings.ghl_assigned_user = assignedUser;
+
+            await pool.query(
+                "UPDATE location_slots SET settings = $1::jsonb WHERE location_id = $2 AND slot_id = $3",
+                [JSON.stringify(currentSettings), locationId, slotId]
+            );
+        }
+
+        res.json({ success: true });
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post("/start-whatsapp", async (req, res) => {
     try { await startWhatsApp(req.query.locationId, req.query.slot); res.json({ success: true }); } catch (e) { res.status(500).json({ error: "Error" }); }
 });
@@ -582,7 +661,7 @@ app.get("/status", async (req, res) => {
     const s = sessions.get(`${req.query.locationId}_slot${req.query.slot}`);
     let extra = {};
     try { const r = await pool.query("SELECT * FROM location_slots WHERE location_id=$1 AND slot_id=$2", [req.query.locationId, req.query.slot]); if (r.rows.length) extra = r.rows[0]; } catch (e) { }
-    res.json({ connected: s?.isConnected || false, myNumber: s?.myNumber, slotName: extra.slot_name });
+    res.json({ connected: s?.isConnected || false, myNumber: s?.myNumber, slotName: extra.slot_name, priority: extra.priority, settings: extra.settings });
 });
 
 app.post("/remove-slot", async (req, res) => {
@@ -606,11 +685,17 @@ app.get("/config", async (req, res) => {
     try {
         const { locationId } = req.query;
         const tenantStatus = await getTenantConfig(locationId);
-        const slotsRes = await pool.query("SELECT slot_id, slot_name, phone_number FROM location_slots WHERE location_id = $1 ORDER BY slot_id ASC", [locationId]);
+        const slotsRes = await pool.query("SELECT slot_id, slot_name, phone_number, priority, settings FROM location_slots WHERE location_id = $1 ORDER BY priority ASC", [locationId]);
         res.json({
             is_active: tenantStatus.active,
             reason: tenantStatus.reason,
-            slots: slotsRes.rows.map(s => ({ id: s.slot_id, name: s.slot_name, connected: !!s.phone_number }))
+            slots: slotsRes.rows.map(s => ({
+                id: s.slot_id,
+                name: s.slot_name,
+                connected: !!s.phone_number,
+                priority: s.priority,
+                settings: s.settings
+            }))
         });
     } catch (e) { res.status(500).json({ error: "Error" }); }
 });
