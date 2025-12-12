@@ -12,7 +12,6 @@ const MAX_AGE_MS = MAX_AGE_HOURS * 60 * 60 * 1000;
 const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 function cleanOldFiles() {
-    console.log('🧹 [MediaCleanup] Iniciando limpieza de archivos antiguos...');
 
     if (!fs.existsSync(MEDIA_DIR)) {
         console.log('⚠️ Carpeta media no existe, omitiendo limpieza.');
@@ -61,6 +60,7 @@ function cleanOldFiles() {
 }
 
 function startMediaCleanup() {
+    console.log('🧹 [MediaCleanup] Iniciando limpieza de archivos antiguos...');
     // 1. Ejecutar limpieza inicial al arrancar (con un pequeño delay para no saturar el inicio)
     setTimeout(cleanOldFiles, 10000);
 
