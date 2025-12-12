@@ -11,7 +11,7 @@ const { handleIncomingMessage } = require("./messageHandler");
 
 // Estado Global
 const sessions = new Map();
-const botMessageIds = new Set();
+const botMessageIds = new Set(); // Cache de IDs procesados (Entrantes y Salientes)
 
 // Constantes
 const SUPPORT_LOC_ID = "__SYSTEM_SUPPORT__";
@@ -21,18 +21,16 @@ const SUPPORT_SLOT_ID = "1";
 const CLEANUP_INTERVAL = 60 * 60 * 1000; // Ejecutar cada 1 hora
 const MAX_INACTIVITY = 24 * 60 * 60 * 1000; // 24 horas de inactividad
 
-// --- GARBAGE COLLECTOR (Limpieza de RAM) ---
+// --- GARBAGE COLLECTOR (Limpieza de RAM y IDs) ---
 setInterval(() => {
-    console.log("🧹 Ejecutando limpieza de sesiones inactivas...");
+    console.log("🧹 Ejecutando limpieza del sistema...");
     const now = Date.now();
 
+    // 1. Limpiar sesiones inactivas
     sessions.forEach(async (session, sessionId) => {
-        // Si lleva más de 24h sin actividad y está conectado
         if (session.isConnected && session.lastActivity && (now - session.lastActivity > MAX_INACTIVITY)) {
             console.log(`💤 Hibernando sesión inactiva por >24h: ${sessionId}`);
             try {
-                // Solo cerramos el socket para liberar RAM.
-                // No borramos la DB, así que al recibir un mensaje saliente se reconectará.
                 session.sock.end(undefined);
                 session.isConnected = false;
                 sessions.delete(sessionId);
@@ -41,6 +39,14 @@ setInterval(() => {
             }
         }
     });
+
+    // 2. Limpiar cache de IDs de mensajes (Evitar consumo infinito de RAM)
+    // Reiniciamos el Set si tiene demasiados elementos (ej: > 10,000)
+    // Esto es seguro porque los duplicados ocurren en segundos, no horas después.
+    if (botMessageIds.size > 10000) {
+        console.log("🧹 Limpiando caché de IDs de mensajes...");
+        botMessageIds.clear();
+    }
 }, CLEANUP_INTERVAL);
 
 
@@ -55,7 +61,6 @@ async function sendButtons(sock, jid, text, buttons) {
     await sock.sendMessage(jid, { text: menu });
 }
 
-// ✅ Envío de Mensajes Interactivos con FALLBACK a Texto
 async function sendInteractiveMessage(sock, jid, parsedData) {
     const { title, body, image, buttons, footer } = parsedData;
 
@@ -72,7 +77,6 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
 
         if (image) {
             try {
-                // Preparamos la media (subida a servidores de WA)
                 const media = await prepareWAMessageMedia(
                     { image: { url: image } },
                     { upload: sock.waUploadToServer }
@@ -89,15 +93,13 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
             payload.header = { title: title, hasMediaAttachment: false };
         }
 
-        // Intentar enviar botones nativos
         const msg = await sock.sendInteractiveMessage(jid, payload);
         if (msg?.key?.id) botMessageIds.add(msg.key.id);
         return msg;
 
     } catch (e) {
-        console.warn(`⚠️ Fallo envío interactivo a ${jid}. Aplicando Fallback a Texto. Error: ${e.message}`);
+        console.warn(`⚠️ Fallo envío interactivo a ${jid}. Aplicando Fallback a Texto.`);
 
-        // --- FALLBACK A MENÚ DE TEXTO ---
         let menuText = `*${title || "Opciones"}*\n\n${body}\n`;
         if (image) menuText += `_(Imagen adjunta omitida en modo texto)_\n`;
 
@@ -227,13 +229,73 @@ async function sendSupportAlert(message, targetPhoneOverride = null) {
     } catch (e) { console.warn("Error alerta soporte:", e.message); }
 }
 
+// 🆕 Obtener listado de grupos donde participa el bot
+async function getGroups(locationId, slotId) {
+    const session = sessions.get(`${locationId}_slot${slotId}`);
+    if (!session || !session.sock) throw new Error("Sesión no conectada");
+
+    try {
+        const groups = await session.sock.groupFetchAllParticipating();
+        return Object.values(groups).map(g => ({
+            id: g.id,
+            subject: g.subject,
+            participants: g.participants.length
+        }));
+    } catch (e) {
+        console.error("Error fetching groups:", e);
+        return [];
+    }
+}
+
+// 🆕 Sincronizar miembros
+async function syncGroupMembers(locationId, slotId, groupJid) {
+    const session = sessions.get(`${locationId}_slot${slotId}`);
+    if (!session || !session.sock) throw new Error("Sesión no conectada");
+
+    const { findOrCreateGHLContact, addTagToContact } = require("./ghlService");
+
+    try {
+        const metadata = await session.sock.groupMetadata(groupJid);
+        const groupName = metadata.subject;
+
+        console.log(`🔄 Sincronizando ${metadata.participants.length} miembros del grupo ${groupName}...`);
+
+        let count = 0;
+        for (const p of metadata.participants) {
+            const myId = session.sock.user?.id?.split(':')[0];
+            if (p.id.includes(myId)) continue;
+
+            const phone = p.id.split('@')[0];
+
+            const contact = await findOrCreateGHLContact(
+                locationId,
+                phone,
+                "Miembro Grupo",
+                null,
+                false,
+                true
+            );
+
+            if (contact?.id) {
+                await addTagToContact(locationId, contact.id, `Miembro: ${groupName}`);
+                count++;
+            }
+            await new Promise(r => setTimeout(r, 200));
+        }
+        return { synced: count, total: metadata.participants.length };
+
+    } catch (e) {
+        console.error("Error sync group members:", e);
+        throw e;
+    }
+}
+
 // --- FUNCIÓN PRINCIPAL DE CONEXIÓN ---
 
 async function startWhatsApp(locationId, slotId) {
     const sessionId = `${locationId}_slot${slotId}`;
     const existing = sessions.get(sessionId);
 
-    // Si ya existe y está conectado, solo actualizamos el timestamp de actividad
     if (existing && existing.sock && existing.isConnected) {
         existing.lastActivity = Date.now();
         return existing;
@@ -245,7 +307,7 @@ async function startWhatsApp(locationId, slotId) {
         isConnected: false,
         myNumber: null,
         isDestroying: false,
-        lastActivity: Date.now() // RASTREO DE ACTIVIDAD INICIAL
+        lastActivity: Date.now()
     };
     sessions.set(sessionId, sessionData);
 
@@ -254,7 +316,6 @@ async function startWhatsApp(locationId, slotId) {
     const baileys = await import("@whiskeysockets/baileys");
     const { default: makeWASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, initAuthCreds, BufferJSON } = baileys;
 
-    // --- Adaptador PostgreSQL para Auth ---
     async function usePostgreSQLAuthState(pool, id) {
         const readData = async (key) => {
             try {
@@ -312,7 +373,6 @@ async function startWhatsApp(locationId, slotId) {
     sessionData.sock = sock;
     initFunction(sock);
 
-    // Evento Credenciales
     sock.ev.on("creds.update", async (creds) => {
         if (!sessionData.isDestroying) {
             await saveCreds(creds);
@@ -324,11 +384,8 @@ async function startWhatsApp(locationId, slotId) {
         }
     });
 
-    // Evento Conexión
     sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
-
-        // Actualizar actividad en cada cambio de conexión
         sessionData.lastActivity = Date.now();
 
         if (qr) {
@@ -363,7 +420,6 @@ async function startWhatsApp(locationId, slotId) {
                 sessions.delete(sessionId);
 
                 if (isLogout) {
-                    // Lógica de logout (limpiar DB y avisar)
                     let clientPhone = sessionData.myNumber;
                     if (!clientPhone || clientPhone === "Desconocido") {
                         try {
@@ -391,12 +447,13 @@ async function startWhatsApp(locationId, slotId) {
         }
     });
 
-    // Evento Mensajes (DELEGADO AL HANDLER)
     sock.ev.on("messages.upsert", async (msg) => {
-        // Actualizamos actividad
         sessionData.lastActivity = Date.now();
 
-        // Delegar lógica al handler externo
+        // 🔥 FIX ANTIDUPLICADOS: Filtramos solo eventos 'notify'
+        // Esto evita procesar historiales (append) que causan duplicados al conectar
+        if (msg.type !== 'notify') return;
+
         await handleIncomingMessage(
             msg,
             sock,
@@ -409,76 +466,6 @@ async function startWhatsApp(locationId, slotId) {
     });
 
     return sessionData;
-}
-
-// 🆕 Obtener listado de grupos donde participa el bot
-async function getGroups(locationId, slotId) {
-    const session = sessions.get(`${locationId}_slot${slotId}`);
-    if (!session || !session.sock) throw new Error("Sesión no conectada");
-
-    try {
-        // Baileys: Fetch all groups
-        const groups = await session.sock.groupFetchAllParticipating();
-        // Convertir objeto a array
-        return Object.values(groups).map(g => ({
-            id: g.id,
-            subject: g.subject,
-            participants: g.participants.length
-        }));
-    } catch (e) {
-        console.error("Error fetching groups:", e);
-        return [];
-    }
-}
-
-// 🆕 Sincronizar miembros de un grupo hacia GHL
-async function syncGroupMembers(locationId, slotId, groupJid) {
-    const session = sessions.get(`${locationId}_slot${slotId}`);
-    if (!session || !session.sock) throw new Error("Sesión no conectada");
-
-    // Importamos dinámicamente o movemos require arriba si es circular, 
-    // pero idealmente 'ghlService' debería inyectarse o requerirse al inicio.
-    // Para evitar ciclos, asumimos que findOrCreateGHLContact está disponible o lo requerimos aquí:
-    const { findOrCreateGHLContact, addTagToContact } = require("./ghlService");
-
-    try {
-        const metadata = await session.sock.groupMetadata(groupJid);
-        const groupName = metadata.subject;
-
-        console.log(`🔄 Sincronizando ${metadata.participants.length} miembros del grupo ${groupName}...`);
-
-        let count = 0;
-        for (const p of metadata.participants) {
-            // Ignoramos al propio bot
-            const myId = session.sock.user?.id?.split(':')[0];
-            if (p.id.includes(myId)) continue;
-
-            const phone = p.id.split('@')[0];
-
-            // Creamos contacto en GHL
-            const contact = await findOrCreateGHLContact(
-                locationId,
-                phone,
-                "Miembro Grupo", // Nombre genérico, GHL o WA podrían actualizarlo luego
-                null,
-                false,
-                true // createUnknown
-            );
-
-            if (contact?.id) {
-                // Etiquetamos para saber de dónde vino
-                await addTagToContact(locationId, contact.id, `Miembro: ${groupName}`);
-                count++;
-            }
-            // Pequeña pausa para no saturar API
-            await new Promise(r => setTimeout(r, 200));
-        }
-        return { synced: count, total: metadata.participants.length };
-
-    } catch (e) {
-        console.error("Error sync group members:", e);
-        throw e;
-    }
 }
 
 module.exports = {
