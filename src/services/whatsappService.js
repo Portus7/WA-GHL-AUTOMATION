@@ -247,7 +247,6 @@ async function getGroups(locationId, slotId) {
     }
 }
 
-// 🆕 Sincronizar miembros
 async function syncGroupMembers(locationId, slotId, groupJid) {
     const session = sessions.get(`${locationId}_slot${slotId}`);
     if (!session || !session.sock) throw new Error("Sesión no conectada");
@@ -260,26 +259,56 @@ async function syncGroupMembers(locationId, slotId, groupJid) {
 
         console.log(`🔄 Sincronizando ${metadata.participants.length} miembros del grupo ${groupName}...`);
 
+        // 1. OBTENER MI NÚMERO LIMPIO
+        // session.sock.user.id puede venir como "12345:2@s.whatsapp.net" o "12345@lid"
+        // Extraemos solo la parte numérica antes del ':' o del '@'
+        const myRawId = session.sock.user?.id || "";
+        // Primero quitamos el dominio, luego quitamos el puerto (:2)
+        const myNumber = myRawId.split('@')[0].split(':')[0];
+
+        // LOG PARA DEBUG (Puedes borrarlo luego)
+        console.log(`🤖 Mi ID limpio: ${myNumber}`);
+
         let count = 0;
         for (const p of metadata.participants) {
-            const myId = session.sock.user?.id?.split(':')[0];
-            if (p.id.includes(myId)) continue;
+            const participantJid = p.id;
 
-            const phone = p.id.split('@')[0];
+            // 2. DESCARTAR LIDs
+            // Si el ID termina en @lid, no es un número de teléfono válido para GHL.
+            if (participantJid.includes('@lid')) {
+                console.log(`⚠️ Ignorando LID: ${participantJid}`);
+                continue;
+            }
 
+            // 3. LIMPIAR NÚMERO DEL MIEMBRO
+            // Transformar "59598..:12@s.whatsapp.net" -> "59598.."
+            const participantNumber = participantJid.split('@')[0].split(':')[0];
+
+            // 4. COMPARAR CON MI NÚMERO (EVITAR CREAR EL BOT)
+            if (participantNumber === myNumber) {
+                console.log(`⏩ Saltando mi propio número: ${participantNumber}`);
+                continue;
+            }
+
+            // Log para ver qué número se envía realmente a GHL
+            console.log(`👤 Procesando: ${participantNumber} (Original: ${participantJid})`);
+
+            // Usamos el número limpio 'participantNumber'
             const contact = await findOrCreateGHLContact(
                 locationId,
-                phone,
+                participantNumber,
                 "Miembro Grupo",
                 null,
                 false,
-                true
+                true // createUnknownContacts = true
             );
 
             if (contact?.id) {
                 await addTagToContact(locationId, contact.id, `Miembro: ${groupName}`);
                 count++;
             }
+
+            // Delay para evitar Rate Limits
             await new Promise(r => setTimeout(r, 200));
         }
         return { synced: count, total: metadata.participants.length };
