@@ -4,6 +4,8 @@ const { normalizePhone } = require("../helpers/utils");
 
 const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
 
+// --- Helpers de Tokens ---
+
 async function saveTokens(locationId, tokenData) {
   const sql = `INSERT INTO auth_db (locationid, raw_token) VALUES ($1, $2::jsonb) ON CONFLICT (locationid) DO UPDATE SET raw_token = EXCLUDED.raw_token`;
   await pool.query(sql, [locationId, JSON.stringify(tokenData)]);
@@ -18,8 +20,6 @@ async function ensureAgencyToken() {
   const AGENCY_ROW_ID = "__AGENCY__";
   let tokens = await getTokens(AGENCY_ROW_ID);
   if (!tokens) throw new Error("No hay tokens agencia");
-  // Aquí podrías agregar lógica de refresh si es necesario para agencia, 
-  // pero usualmente se usa el de location para operaciones diarias.
   return tokens.access_token;
 }
 
@@ -96,63 +96,106 @@ async function callGHLWithLocation(locationId, config) {
 
 // --- Lógica de Contactos ---
 
+// Helper para detectar nombres genéricos de forma más robusta
+function isGenericName(name) {
+  if (!name) return true;
+  const n = name.toLowerCase().trim();
+  // Detecta variaciones como "Miembro Grupo", "Miembro Grupo 2", "Usuario WhatsApp", etc.
+  return n.includes("miembro") ||
+    n.includes("usuario") ||
+    n.includes("system outbound") ||
+    n === "";
+}
+
 async function findOrCreateGHLContact(locationId, phone, waName, contactId, isFromMe, createUnknownContacts = true) {
   const rawPhone = phone.replace(/\D/g, '');
   const phoneWithPlus = `+${rawPhone}`;
+
+  // Si soy yo, uso un genérico para no romper mi propio contacto si existiera con otro nombre
   const safeName = (waName && waName.trim() && !isFromMe) ? waName : "Usuario WhatsApp";
 
+  // 1. BUSQUEDA POR ID (Si viene del routing)
   if (contactId) {
     try {
       const res = await callGHLWithLocation(locationId, { method: "GET", url: `https://services.leadconnectorhq.com/contacts/${contactId}` });
       const contact = res.data.contact || res.data;
       if (contact?.id) {
-        // Update name logic if needed
-        const currentName = ((contact.firstName || "") + " " + (contact.lastName || "")).toLowerCase().trim();
-        if ((currentName === "usuario whatsapp" || currentName === "") && safeName !== "Usuario WhatsApp") {
-          await callGHLWithLocation(locationId, { method: "PUT", url: `https://services.leadconnectorhq.com/contacts/${contact.id}`, data: { firstName: safeName, lastName: "" } }).catch(() => { });
+        // --- AUTO-CORRECCIÓN DE NOMBRE ---
+        const currentName = ((contact.firstName || "") + " " + (contact.lastName || "")).trim();
+
+        // Si el nombre en GHL es genérico ("Miembro Grupo") Y el nuevo nombre NO lo es ("Juan Perez")
+        if (isGenericName(currentName) && !isGenericName(safeName)) {
+          console.log(`✨ [Auto-Fix] Actualizando nombre ID: "${currentName}" -> "${safeName}"`);
+          await callGHLWithLocation(locationId, {
+            method: "PUT",
+            url: `https://services.leadconnectorhq.com/contacts/${contact.id}`,
+            data: { firstName: safeName, lastName: "" }
+          }).catch((e) => console.error("Error actualizando nombre:", e.message));
         }
         return contact;
       }
     } catch (err) { }
   }
 
-  // Búsqueda por Query
+  // 2. BUSQUEDA POR TELEFONO (Query)
   try {
     const searchRes = await callGHLWithLocation(locationId, {
       method: "GET", url: "https://services.leadconnectorhq.com/contacts/",
       params: { locationId: locationId, query: rawPhone, limit: 1 }
     });
+
     if (searchRes.data?.contacts?.length > 0) {
       const found = searchRes.data.contacts[0];
       const foundPhone = found.phone ? found.phone.replace(/\D/g, '') : "";
+
       if (foundPhone.includes(rawPhone) || rawPhone.includes(foundPhone)) {
-        // Update name check
-        if ((found.firstName === "Usuario" || found.firstName === "Usuario WhatsApp") && safeName !== "Usuario WhatsApp") {
-          await callGHLWithLocation(locationId, { method: "PUT", url: `https://services.leadconnectorhq.com/contacts/${found.id}`, data: { firstName: safeName, lastName: "" } }).catch(() => { });
+        // --- AUTO-CORRECCIÓN DE NOMBRE ---
+        const currentName = ((found.firstName || "") + " " + (found.lastName || "")).trim();
+
+        if (isGenericName(currentName) && !isGenericName(safeName)) {
+          console.log(`✨ [Auto-Fix] Actualizando nombre Query: "${currentName}" -> "${safeName}"`);
+          await callGHLWithLocation(locationId, {
+            method: "PUT",
+            url: `https://services.leadconnectorhq.com/contacts/${found.id}`,
+            data: { firstName: safeName, lastName: "" }
+          }).catch((e) => console.error("Error actualizando nombre:", e.message));
         }
         return found;
       }
     }
   } catch (e) { }
 
-  // Crear
+  // 3. CREAR CONTACTO NUEVO
+  // Solo crear si está habilitado createUnknownContacts
+  if (!createUnknownContacts) {
+    console.log(`⚠️ Contacto desconocido ${phoneWithPlus} ignorado por configuración.`);
+    return null;
+  }
+
   try {
     const createdRes = await callGHLWithLocation(locationId, {
       method: "POST", url: "https://services.leadconnectorhq.com/contacts/",
       data: { locationId, phone: phoneWithPlus, firstName: safeName, source: "WhatsApp Baileys" }
     });
-    console.log(`✅ Contacto creado: ${createdRes.data.contact}, en ${locationId} `);
-    await addTagToContact(locationId, createdRes.data.contact.id, "whatsapp");
+    console.log(`✅ Contacto creado: ${createdRes.data.contact?.id || 'ID?'}, Nombre: ${safeName}`);
+
+    if (createdRes.data.contact?.id) {
+      await addTagToContact(locationId, createdRes.data.contact.id, "whatsapp");
+    }
+
     return createdRes.data.contact || createdRes.data;
   } catch (err) {
     const body = err.response?.data;
-    if (err.response?.status === 400 && body?.meta?.contactId) return { id: body.meta.contactId, phone: phoneWithPlus };
+    // Si falla porque ya existe, devolvemos el ID existente
+    if (err.response?.status === 400 && body?.meta?.contactId) {
+      return { id: body.meta.contactId, phone: phoneWithPlus };
+    }
     return null;
   }
 }
+
 async function addTagToContact(locationId, contactId, tag) {
   try {
-    console.log(`🏷️ Agregando tag '${tag}' al contacto ${contactId}...`);
     await callGHLWithLocation(locationId, {
       method: "POST",
       url: `https://services.leadconnectorhq.com/contacts/${contactId}/tags`,
@@ -164,7 +207,6 @@ async function addTagToContact(locationId, contactId, tag) {
 }
 
 async function deleteTagsContact(locationId, contactId, tags) {
-  console.log(`🗑️ Eliminando tags '${tags}' del contacto ${contactId}...`);
   try {
     await callGHLWithLocation(locationId, {
       method: "DELETE",
@@ -176,12 +218,10 @@ async function deleteTagsContact(locationId, contactId, tags) {
   }
 }
 
-
 async function logMessageToGHL(locationId, contactId, text, direction, attachments = []) {
   try {
     let url = "https://services.leadconnectorhq.com/conversations/messages";
 
-    // Objeto base
     const payload = {
       type: "SMS",
       contactId,
@@ -194,7 +234,6 @@ async function logMessageToGHL(locationId, contactId, text, direction, attachmen
       payload.attachments = attachments;
     }
 
-    // Cambiar endpoint si es inbound
     if (direction === "inbound") {
       url = "https://services.leadconnectorhq.com/conversations/messages/inbound";
     }
@@ -205,10 +244,9 @@ async function logMessageToGHL(locationId, contactId, text, direction, attachmen
       data: payload
     });
 
-    console.log(`✅ GHL Sync [${direction}]: ${text ? text.substring(0, 15) : 'Media'}... (Media: ${attachments.length})`);
+    console.log(`✅ GHL Sync [${direction}]: ${text ? text.substring(0, 15) : 'Media'}...`);
 
   } catch (err) {
-    // 🔥 FIX: Loguear el error real que devuelve GHL para saber qué pasó
     const errorMsg = err.response?.data ? JSON.stringify(err.response.data) : err.message;
     console.error(`❌ GHL Log Error (${direction}):`, errorMsg);
   }
@@ -234,11 +272,9 @@ async function getLocationUsers(locationId) {
   }
 }
 
-// 🆕 Asignar usuario responsable al contacto
 async function assignContactOwner(locationId, contactId, userId) {
   if (!userId) return;
   try {
-    console.log(`👤 Asignando responsable ${userId} al contacto ${contactId}...`);
     await callGHLWithLocation(locationId, {
       method: "PUT",
       url: `https://services.leadconnectorhq.com/contacts/${contactId}`,
