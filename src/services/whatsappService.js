@@ -257,58 +257,70 @@ async function syncGroupMembers(locationId, slotId, groupJid) {
         const metadata = await session.sock.groupMetadata(groupJid);
         const groupName = metadata.subject;
 
-        console.log(`🔄 Sincronizando ${metadata.participants.length} miembros del grupo ${groupName}...`);
-
-        // 1. OBTENER MI NÚMERO LIMPIO
-        // session.sock.user.id puede venir como "12345:2@s.whatsapp.net" o "12345@lid"
-        // Extraemos solo la parte numérica antes del ':' o del '@'
+        // Limpieza de mis propios IDs para evitar auto-agregarse
         const myRawId = session.sock.user?.id || "";
-        // Primero quitamos el dominio, luego quitamos el puerto (:2)
-        const myNumber = myRawId.split('@')[0].split(':')[0];
+        const myLidRaw = session.sock.user?.lid || "";
 
-        // LOG PARA DEBUG (Puedes borrarlo luego)
-        console.log(`🤖 Mi ID limpio: ${myNumber}`);
+        const myNumber = myRawId.split('@')[0].split(':')[0];
+        const myLid = myLidRaw.split('@')[0].split(':')[0];
+
+        console.log(`🤖 DEBUG: Mi Numero: ${myNumber} | Mi LID: ${myLid}`);
+        console.log(`🔄 Sincronizando ${metadata.participants.length} miembros del grupo ${groupName}...`);
 
         let count = 0;
         for (const p of metadata.participants) {
-            const participantJid = p.id;
+            const idPart = p.id.split('@')[0].split(':')[0];
+            const isLid = p.id.includes('@lid');
 
-            // 2. DESCARTAR LIDs
-            // Si el ID termina en @lid, no es un número de teléfono válido para GHL.
-            if (participantJid.includes('@lid')) {
-                console.log(`⚠️ Ignorando LID: ${participantJid}`);
+            // 1. FILTRO DE AUTO-AGREGADO (Evitar que el bot se agregue a sí mismo)
+            if (idPart === myNumber || idPart === myLid) {
+                console.log(`⏩ Saltando al propio Bot: ${idPart}`);
                 continue;
             }
 
-            // 3. LIMPIAR NÚMERO DEL MIEMBRO
-            // Transformar "59598..:12@s.whatsapp.net" -> "59598.."
-            const participantNumber = participantJid.split('@')[0].split(':')[0];
+            // 2. INSPECCIÓN DE PARTICIPANTE (Aquí veremos si hay número real)
+            console.log(`🔍 Inspeccionando ID: ${p.id}`);
+            // Imprimimos TODO el objeto para ver si hay propiedades ocultas como 'jid' o 'attrs'
+            console.log(`📦 DATA COMPLETA: ${JSON.stringify(p)}`);
 
-            // 4. COMPARAR CON MI NÚMERO (EVITAR CREAR EL BOT)
-            if (participantNumber === myNumber) {
-                console.log(`⏩ Saltando mi propio número: ${participantNumber}`);
+            // 3. INTENTO DE RECUPERAR NÚMERO REAL
+            // A veces el número viene en una propiedad separada si es un LID
+            let realPhoneJid = null;
+
+            if (!isLid) {
+                // Si ya es un número normal, lo usamos
+                realPhoneJid = p.id;
+            } else {
+                // SI ES LID: Buscamos en propiedades alternativas conocidas de Baileys
+                // Nota: Dependiendo de la versión de Baileys, esto puede variar
+                if (p.jid && p.jid.includes('@s.whatsapp.net')) realPhoneJid = p.jid;
+                else if (p.attrs && p.attrs.jid) realPhoneJid = p.attrs.jid;
+                else if (p.phoneNumber) realPhoneJid = p.phoneNumber; // A veces inyectado
+            }
+
+            if (!realPhoneJid) {
+                console.warn(`⚠️ No se pudo obtener teléfono real para el LID: ${idPart} (Se omitirá para no ensuciar GHL)`);
                 continue;
             }
 
-            // Log para ver qué número se envía realmente a GHL
-            console.log(`👤 Procesando: ${participantNumber} (Original: ${participantJid})`);
+            // Limpiar el JID final para obtener solo el número
+            const finalNumber = realPhoneJid.split('@')[0].split(':')[0];
+            console.log(`✅ Teléfono recuperado: ${finalNumber}`);
 
-            // Usamos el número limpio 'participantNumber'
+            // 4. CREAR EN GHL SOLO SI TENEMOS EL NÚMERO
             const contact = await findOrCreateGHLContact(
                 locationId,
-                participantNumber,
+                finalNumber,
                 "Miembro Grupo",
                 null,
                 false,
-                true // createUnknownContacts = true
+                true
             );
 
             if (contact?.id) {
                 await addTagToContact(locationId, contact.id, `Miembro: ${groupName}`);
                 count++;
             }
-
-            // Delay para evitar Rate Limits
             await new Promise(r => setTimeout(r, 200));
         }
         return { synced: count, total: metadata.participants.length };
@@ -318,7 +330,6 @@ async function syncGroupMembers(locationId, slotId, groupJid) {
         throw e;
     }
 }
-
 // --- FUNCIÓN PRINCIPAL DE CONEXIÓN ---
 
 async function startWhatsApp(locationId, slotId) {
