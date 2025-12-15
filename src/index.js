@@ -723,6 +723,56 @@ app.get("/config", async (req, res) => {
         });
     } catch (e) { res.status(500).json({ error: "Error" }); }
 });
+// ==========================================
+// 📊 INFO DE CUENTA Y LÍMITES (Faltaba esto)
+// ==========================================
+
+app.get("/agency/info", verifyToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // 1. Obtener datos del usuario (Plan y Límites)
+        const result = await pool.query(
+            "SELECT email, plan_status, trial_ends_at, max_subagencies, max_slots, agency_id FROM users WHERE id = $1",
+            [userId]
+        );
+
+        if (result.rows.length === 0) return res.status(404).json({ error: "Usuario no encontrado" });
+
+        const user = result.rows[0];
+        const agencyId = user.agency_id;
+
+        // 2. Calcular uso actual (Contar subagencias y slots ocupados)
+        const subCount = await pool.query(
+            "SELECT COUNT(*) FROM tenants WHERE agency_id = $1 AND status != 'cancelled'",
+            [agencyId]
+        );
+
+        // Join para contar slots totales de esta agencia
+        const slotCount = await pool.query(`
+            SELECT COUNT(*) 
+            FROM location_slots s 
+            JOIN tenants t ON s.location_id = t.location_id 
+            WHERE t.agency_id = $1
+        `, [agencyId]);
+
+        // 3. Responder al Frontend
+        res.json({
+            plan: user.plan_status,
+            trial_ends: user.trial_ends_at,
+            limits: {
+                max_subagencies: user.max_subagencies || 1,
+                max_slots: user.max_slots || 5,
+                used_subagencies: parseInt(subCount.rows[0].count) || 0,
+                used_slots: parseInt(slotCount.rows[0].count) || 0
+            }
+        });
+
+    } catch (e) {
+        console.error("Error en /agency/info:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // ==========================================
 // 👑 RUTAS ADMIN (Gestión General)
