@@ -3,276 +3,109 @@
 
 <head>
     <meta charset="UTF-8" />
-    <title>WhatsApp Multi-Device</title>
+    <title>Gestión de Dispositivos - Clic&App</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        indigo: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' }
+                    }
+                }
+            }
+        }
+    </script>
+
     <style>
+        /* Ajustes finos que Tailwind CDN a veces necesita */
         body {
-            font-family: system-ui, -apple-system, sans-serif;
-            background: #f3f4f6;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 20px;
-            margin: 0;
-            min-height: 100vh;
+            font-family: 'Inter', sans-serif;
         }
 
-        .container {
-            width: 100%;
-            max-width: 600px;
-        }
-
-        h1 {
-            text-align: center;
-            color: #1f2937;
-            margin-bottom: 20px;
-            font-size: 1.5rem;
-        }
-
-        /* --- TARJETAS --- */
-        .slot-card {
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-            border: 1px solid #e5e7eb;
-            transition: all 0.3s ease;
-        }
-
-        .slot-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-
-        .title-wrapper {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .slot-title {
-            font-weight: 700;
-            font-size: 1.1rem;
-            color: #374151;
-        }
-
-        .edit-btn {
-            background: none;
-            border: none;
-            cursor: pointer;
-            color: #9ca3af;
-            padding: 4px;
-            transition: color 0.2s;
-        }
-
-        .edit-btn:hover {
-            color: #4f46e5;
-        }
-
-        /* --- BADGES --- */
-        .badge {
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .badge-off {
-            background: #fee2e2;
-            color: #991b1b;
-        }
-
-        .badge-on {
-            background: #dcfce7;
-            color: #166534;
-        }
-
-        /* --- ZONA DE GESTIÓN (NUEVO) --- */
-        .management-area {
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 15px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .control-group {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .control-label {
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: #475569;
-        }
-
-        .select-input {
-            padding: 6px 10px;
-            border-radius: 6px;
-            border: 1px solid #cbd5e1;
-            background: white;
-            font-size: 0.85rem;
-            color: #334155;
-            outline: none;
-            cursor: pointer;
-            min-width: 140px;
-            max-width: 200px;
-        }
-
-        .select-input:focus {
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 2px #e0e7ff;
-        }
-
-        /* --- BOTONES --- */
-        .btn {
-            width: 100%;
-            padding: 12px;
-            border-radius: 8px;
-            border: none;
-            font-weight: 600;
-            cursor: pointer;
-            font-size: 0.95rem;
-            transition: all 0.2s;
-            margin-top: 10px;
-        }
-
-        .btn-primary {
-            background: #25D366;
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: #1da851;
-        }
-
-        .btn-danger {
-            background: #fff;
-            color: #ef4444;
-            border: 1px solid #fecaca;
-        }
-
-        .btn-danger:hover {
-            background: #fef2f2;
-            border-color: #ef4444;
-        }
-
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        /* --- QR AREA --- */
-        .qr-area {
-            margin-top: 15px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            display: none;
-        }
-
-        .qr-area.active {
-            display: flex;
-        }
-
-        .qr-canvas {
-            margin: 15px 0;
-            border: 4px solid #fff;
-            padding: 10px;
-            border-radius: 12px;
-            background: white;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-        }
-
-        .status-msg {
-            font-size: 0.9rem;
-            color: #4b5563;
-            margin-bottom: 5px;
-        }
-
-        /* --- PANTALLA BLOQUEO --- */
-        .blocked-screen {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: #f3f4f6;
-            z-index: 9999;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-
-        .blocked-card {
-            background: white;
-            max-width: 450px;
-            width: 100%;
-            padding: 40px;
-            border-radius: 16px;
-            text-align: center;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
-            border: 1px solid #e5e7eb;
+        .qr-canvas img {
+            margin: 0 auto;
         }
     </style>
 </head>
 
-<body>
+<body class="bg-gray-50 text-gray-900 min-h-screen flex flex-col items-center py-10 px-4">
 
-    <div id="loader-view" class="container">
-        <div style="text-align:center; margin-top: 50px;">
-            <div style="margin-bottom: 15px; font-size: 2rem;">⌛</div>
-            <div style="color:#6b7280;">Cargando configuración...</div>
-        </div>
+    <div id="loader-view" class="flex flex-col items-center justify-center mt-20 animate-pulse">
+        <div class="w-16 h-16 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+        <p class="text-gray-500 font-medium">Cargando configuración...</p>
     </div>
 
-    <div id="app-view" class="container" style="display: none;">
-        <h1>Gestión de WhatsApp</h1>
-        <div id="slots-container"></div>
+    <div id="app-view" class="w-full max-w-2xl hidden animate-in fade-in duration-500">
+
+        <div class="mb-8 text-center">
+            <div
+                class="inline-flex items-center justify-center w-12 h-12 bg-indigo-600 rounded-xl text-white font-bold text-xl shadow-lg shadow-indigo-200 mb-4">
+                CA
+            </div>
+            <h1 class="text-2xl font-bold text-gray-900 tracking-tight">Gestión de WhatsApp</h1>
+            <p class="text-gray-500 mt-1 text-sm">Control directo de conexiones del servidor</p>
+        </div>
+
+        <div id="slots-container" class="space-y-6"></div>
     </div>
 
     <script>
         const params = new URLSearchParams(window.location.search);
         const locationId = params.get("location_id") || params.get("locationId");
 
-        // Configuración Toast de SweetAlert2
+        // Toast Config
         const Toast = Swal.mixin({
             toast: true,
             position: 'top-end',
             showConfirmButton: false,
             timer: 3000,
-            timerProgressBar: true
+            timerProgressBar: true,
+            didOpen: (toast) => {
+                toast.addEventListener('mouseenter', Swal.stopTimer)
+                toast.addEventListener('mouseleave', Swal.resumeTimer)
+            }
         });
 
-        if (!locationId) document.body.innerHTML = "<h3 style='text-align:center; margin-top:50px; color:red'>Error Fatal: Falta location_id</h3>";
+        if (!locationId) {
+            document.body.innerHTML = `
+                <div class="flex items-center justify-center h-screen">
+                    <div class="bg-white p-8 rounded-2xl shadow-xl text-center max-w-md mx-4 border border-red-100">
+                        <div class="text-red-500 text-5xl mb-4">⚠️</div>
+                        <h3 class="text-xl font-bold text-gray-900 mb-2">Falta Identificador</h3>
+                        <p class="text-gray-500">No se ha especificado el <code>location_id</code> en la URL.</p>
+                    </div>
+                </div>`;
+        }
 
         const appView = document.getElementById("app-view");
         const loaderView = document.getElementById("loader-view");
         const container = document.getElementById("slots-container");
         const activeConnections = new Set();
         const connectionIntervals = new Map();
-
-        // Variable para guardar usuarios de GHL
         let ghlUsers = [];
+
+        // --- ICONOS SVG (Lucide style) ---
+        const ICONS = {
+            edit: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>`,
+            smartphone: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>`,
+            check: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
+            trash: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>`,
+            qr: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></svg>`
+        };
 
         async function init() {
             try {
-                // 1. Obtener Configuración General
+                // 1. Configuración
                 const confRes = await fetch(`/config?locationId=${locationId}`);
                 if (!confRes.ok) throw new Error("Error de conexión");
                 const conf = await confRes.json();
@@ -282,32 +115,28 @@
                     return;
                 }
 
-                // 2. Obtener Usuarios de GHL (para el dropdown de responsables)
+                // 2. Usuarios GHL
                 try {
                     const usersRes = await fetch(`/public/ghl-users?locationId=${locationId}`);
-                    if (usersRes.ok) {
-                        ghlUsers = await usersRes.json();
-                    }
-                } catch (e) {
-                    console.error("Error cargando usuarios GHL", e);
-                }
+                    if (usersRes.ok) ghlUsers = await usersRes.json();
+                } catch (e) { console.error("Error usuarios", e); }
 
                 loaderView.style.display = "none";
                 appView.style.display = "block";
 
-                // Ordenamos slots por prioridad para renderizar en orden correcto
                 const slots = conf.slots || [];
-                // Si la prioridad es null, usamos 99 (al final)
                 slots.sort((a, b) => (a.priority || 99) - (b.priority || 99));
-
                 renderSlots(slots);
 
-                // Polling de estado cada 5s
                 setInterval(syncAllSlots, 5000);
 
             } catch (e) {
                 console.error(e);
-                loaderView.innerHTML = "<h3 style='color:red; text-align:center'>Error al cargar.</h3>";
+                loaderView.innerHTML = `
+                    <div class="bg-red-50 p-6 rounded-xl border border-red-100 text-center">
+                        <p class="text-red-600 font-bold">Error al cargar la configuración.</p>
+                        <button onclick="location.reload()" class="mt-4 text-sm text-red-500 hover:underline">Reintentar</button>
+                    </div>`;
             }
         }
 
@@ -316,7 +145,13 @@
             const totalSlots = slotsArray.length;
 
             if (totalSlots === 0) {
-                container.innerHTML = "<p style='text-align:center; color:#6b7280; padding:20px'>No hay dispositivos configurados.</p>";
+                container.innerHTML = `
+                    <div class="bg-white p-10 rounded-2xl border border-gray-200 text-center shadow-sm">
+                        <div class="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-400">
+                            ${ICONS.smartphone}
+                        </div>
+                        <p class="text-gray-500 font-medium">No hay dispositivos configurados para esta ubicación.</p>
+                    </div>`;
                 return;
             }
 
@@ -324,72 +159,96 @@
                 const i = slot.id;
                 const currentName = slot.name || `Dispositivo #${i}`;
                 const currentPrio = slot.priority || 99;
-
-                // Extraer el usuario asignado desde settings (si existe)
                 const settings = slot.settings || {};
                 const currentAssigned = settings.ghl_assigned_user || "";
 
-                // --- Generar Opciones de Prioridad ---
-                // Solo mostramos números del 1 al N (donde N es la cantidad de slots)
+                // Selectores de opciones
                 let prioOptions = "";
                 for (let p = 1; p <= totalSlots; p++) {
-                    const label = p === 1 ? `${p} (Máxima)` : p;
                     const selected = p === currentPrio ? 'selected' : '';
-                    prioOptions += `<option value="${p}" ${selected}>${label}</option>`;
+                    prioOptions += `<option value="${p}" ${selected}>${p} ${p === 1 ? '(Alta)' : ''}</option>`;
                 }
-                // Si la prioridad actual está fuera del rango (ej: 99), agregamos opción extra
-                if (currentPrio > totalSlots) {
-                    prioOptions += `<option value="${currentPrio}" selected>${currentPrio} (Sin orden)</option>`;
-                }
+                if (currentPrio > totalSlots) prioOptions += `<option value="${currentPrio}" selected>${currentPrio}</option>`;
 
-                // --- Generar Opciones de Usuarios ---
                 let userOptions = `<option value="">-- Automático --</option>`;
                 ghlUsers.forEach(u => {
                     const selected = u.id === currentAssigned ? 'selected' : '';
                     userOptions += `<option value="${u.id}" ${selected}>${u.name}</option>`;
                 });
 
+                // HTML Estructura tipo Tarjeta Dashboard
                 const html = `
-                <div class="slot-card" id="card-${i}" data-slot-id="${i}">
-                    <div class="slot-header">
-                        <div class="title-wrapper">
-                            <div class="slot-title" id="title-text-${i}">${currentName}</div>
-                            <button class="edit-btn" onclick="editSlotName(${i})" title="Editar nombre">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden transition-all hover:shadow-md group" id="card-${i}" data-slot-id="${i}">
+                    
+                    <div class="p-5 border-b border-gray-100 flex justify-between items-start bg-gradient-to-r from-gray-50/50 to-white">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 shadow-sm border border-indigo-100">
+                                ${ICONS.smartphone}
+                            </div>
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <h3 class="font-bold text-gray-800 text-lg leading-tight" id="title-text-${i}">${currentName}</h3>
+                                    <button onclick="editSlotName(${i})" class="text-gray-400 hover:text-indigo-600 transition p-1 hover:bg-gray-100 rounded-md">
+                                        ${ICONS.edit}
+                                    </button>
+                                </div>
+                                <p class="text-xs text-gray-400 font-mono mt-0.5">Slot ID: ${i}</p>
+                            </div>
+                        </div>
+                        <div id="badge-${i}" class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500 border border-gray-200">
+                            Desconectado
+                        </div>
+                    </div>
+
+                    <div class="p-5">
+                        <div class="grid grid-cols-2 gap-4 mb-6">
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Prioridad</label>
+                                <select onchange="changePriority(${i}, this.value)" class="w-full text-sm bg-gray-50 border border-gray-200 text-gray-700 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 outline-none transition hover:border-gray-300 cursor-pointer">
+                                    ${prioOptions}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">Asignado a</label>
+                                <select onchange="changeResponsible(${i}, this.value)" class="w-full text-sm bg-gray-50 border border-gray-200 text-gray-700 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 outline-none transition hover:border-gray-300 cursor-pointer">
+                                    ${userOptions}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div id="connected-view-${i}" style="display:none" class="animate-in fade-in slide-in-from-bottom-2">
+                            <div class="bg-emerald-50 border border-emerald-100 rounded-xl p-4 flex items-center justify-between mb-4">
+                                <div class="flex items-center gap-3">
+                                    <div class="bg-emerald-100 p-2 rounded-full text-emerald-600">
+                                        ${ICONS.check}
+                                    </div>
+                                    <div>
+                                        <p class="text-xs font-bold text-emerald-700 uppercase tracking-wide">Sincronizado</p>
+                                        <p class="text-lg font-bold text-gray-800 font-mono tracking-tight" id="phone-${i}">...</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <button onclick="disconnect(${i})" class="w-full flex items-center justify-center gap-2 py-3 border border-red-200 text-red-600 hover:bg-red-50 font-bold rounded-xl transition text-sm">
+                                ${ICONS.trash} Desconectar Dispositivo
                             </button>
                         </div>
-                        <div id="badge-${i}" class="badge badge-off">Desconectado</div>
-                    </div>
 
-                    <div class="management-area">
-                        <div class="control-group">
-                            <label class="control-label">Prioridad de Envío:</label>
-                            <select class="select-input" onchange="changePriority(${i}, this.value)">
-                                ${prioOptions}
-                            </select>
-                        </div>
-                        <div class="control-group">
-                            <label class="control-label">Asignar Chat a:</label>
-                            <select class="select-input" onchange="changeResponsible(${i}, this.value)">
-                                ${userOptions}
-                            </select>
-                        </div>
-                    </div>
-
-                    <div id="connected-view-${i}" style="display:none">
-                        <div style="text-align:center; margin: 20px 0;">
-                            <div style="font-size: 1.3rem; font-weight:bold; color:#111827" id="phone-${i}">...</div>
-                            <small style="color:#059669">● Sincronizado</small>
-                        </div>
-                        <button class="btn btn-danger" onclick="disconnect(${i})">Cerrar Sesión</button>
-                    </div>
-
-                    <div id="disconnected-view-${i}">
-                        <button id="btn-${i}" class="btn btn-primary" onclick="startConnect(${i})">Vincular WhatsApp</button>
-                        <div id="qr-area-${i}" class="qr-area">
-                            <span id="msg-${i}" class="status-msg">Solicitando código QR...</span>
-                            <div id="qr-canvas-${i}" class="qr-canvas"></div>
-                            <button class="btn btn-danger" style="width: auto; padding: 8px 20px; margin-top: 10px; font-size: 0.85rem;" onclick="cancelConnect(${i})">Cancelar</button>
+                        <div id="disconnected-view-${i}">
+                            <button id="btn-${i}" onclick="startConnect(${i})" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-lg shadow-indigo-200 hover:shadow-xl transition-all active:scale-[0.98] flex items-center justify-center gap-2">
+                                ${ICONS.qr} Vincular WhatsApp
+                            </button>
+                            
+                            <div id="qr-area-${i}" class="hidden flex-col items-center mt-6 p-6 bg-gray-50 rounded-2xl border border-gray-200 relative animate-in zoom-in-95 duration-300">
+                                <div class="absolute top-0 left-0 w-full h-1 bg-indigo-500 rounded-t-2xl loading-bar"></div>
+                                <p id="msg-${i}" class="text-sm font-medium text-gray-600 mb-4 flex items-center gap-2">
+                                    <span class="inline-block w-2 h-2 bg-indigo-500 rounded-full animate-ping"></span>
+                                    Generando código QR...
+                                </p>
+                                <div id="qr-canvas-${i}" class="qr-canvas bg-white p-3 rounded-xl shadow-sm border border-gray-100"></div>
+                                <button onclick="cancelConnect(${i})" class="mt-6 text-sm text-red-500 font-bold hover:text-red-700 hover:underline">
+                                    Cancelar vinculación
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>`;
@@ -399,31 +258,17 @@
             });
         }
 
-        // --- FUNCIONES DE CAMBIO (NUEVO) ---
+        // --- LÓGICA DE NEGOCIO (Igual que antes pero adaptada) ---
 
         async function changePriority(slotId, newPriority) {
-            const val = parseInt(newPriority);
-            Toast.fire({ icon: 'info', title: 'Reordenando...' });
-
             try {
                 const res = await fetch(`/public/update-slot-config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        locationId,
-                        slotId,
-                        priority: val
-                    })
+                    body: JSON.stringify({ locationId, slotId, priority: parseInt(newPriority) })
                 });
-
-                if (!res.ok) throw new Error("Fallo al actualizar");
-
-                // Recargamos para ver el nuevo orden
-                setTimeout(() => window.location.reload(), 500);
-
-            } catch (e) {
-                Toast.fire({ icon: 'error', title: 'Error al cambiar prioridad' });
-            }
+                if (res.ok) setTimeout(() => window.location.reload(), 500);
+            } catch (e) { Toast.fire({ icon: 'error', title: 'Error actualizando' }); }
         }
 
         async function changeResponsible(slotId, userId) {
@@ -431,42 +276,29 @@
                 const res = await fetch(`/public/update-slot-config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        locationId,
-                        slotId,
-                        assignedUser: userId // Puede ser string vacío para "Automático"
-                    })
+                    body: JSON.stringify({ locationId, slotId, assignedUser: userId })
                 });
-
-                if (res.ok) {
-                    Toast.fire({ icon: 'success', title: 'Responsable actualizado' });
-                } else {
-                    throw new Error("Fallo");
-                }
-            } catch (e) {
-                Toast.fire({ icon: 'error', title: 'No se pudo guardar el responsable' });
-            }
+                if (res.ok) Toast.fire({ icon: 'success', title: 'Responsable guardado' });
+            } catch (e) { Toast.fire({ icon: 'error', title: 'Error guardando' }); }
         }
 
-        // --- FUNCIONES ORIGINALES ---
-
         async function editSlotName(slot) {
-            const currentName = document.getElementById(`title-text-${slot}`).textContent;
+            const currentName = document.getElementById(`title-text-${slot}`).textContent.trim();
             const { value: newName } = await Swal.fire({
-                title: 'Editar nombre',
+                title: 'Renombrar Dispositivo',
                 input: 'text',
                 inputValue: currentName,
                 showCancelButton: true,
                 confirmButtonText: 'Guardar',
                 cancelButtonText: 'Cancelar',
-                confirmButtonColor: '#4f46e5'
+                confirmButtonColor: '#4f46e5',
+                customClass: { popup: 'rounded-2xl', confirmButton: 'rounded-xl', cancelButton: 'rounded-xl' }
             });
 
             if (newName && newName !== currentName) {
                 document.getElementById(`title-text-${slot}`).textContent = newName;
                 await fetch("/config-slot", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ locationId, slot, slotName: newName })
                 });
                 Toast.fire({ icon: 'success', title: 'Nombre actualizado' });
@@ -474,11 +306,9 @@
         }
 
         function syncAllSlots() {
-            document.querySelectorAll('.slot-card').forEach(card => {
+            document.querySelectorAll('[data-slot-id]').forEach(card => {
                 const slotId = card.getAttribute('data-slot-id');
-                if (slotId && !activeConnections.has(parseInt(slotId))) {
-                    checkStatus(slotId);
-                }
+                if (slotId && !activeConnections.has(parseInt(slotId))) checkStatus(slotId);
             });
         }
 
@@ -492,7 +322,7 @@
 
         function updateUI(slot, isConnected, phone) {
             const badge = document.getElementById(`badge-${slot}`);
-            if (!badge) return; // Por si se elimina la tarjeta
+            if (!badge) return;
 
             const viewCon = document.getElementById(`connected-view-${slot}`);
             const viewDisc = document.getElementById(`disconnected-view-${slot}`);
@@ -500,19 +330,22 @@
             const qrArea = document.getElementById(`qr-area-${slot}`);
 
             if (isConnected) {
-                if (badge.textContent !== "ACTIVO") {
-                    badge.className = "badge badge-on";
-                    badge.textContent = "ACTIVO";
+                if (badge.innerText !== "ACTIVO") {
+                    badge.className = "px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-700 border border-emerald-200 shadow-sm";
+                    badge.innerText = "ACTIVO";
+                    badge.innerHTML = `<span class="inline-block w-1.5 h-1.5 bg-emerald-500 rounded-full mr-1.5 mb-0.5"></span> ACTIVO`;
+
                     viewCon.style.display = "block";
                     viewDisc.style.display = "none";
-                    qrArea.classList.remove("active");
+                    qrArea.classList.add("hidden");
+                    qrArea.classList.remove("flex");
                     activeConnections.delete(slot);
                 }
                 phoneText.textContent = "+" + phone;
             } else {
-                if (badge.textContent !== "INACTIVO" && !activeConnections.has(slot)) {
-                    badge.className = "badge badge-off";
-                    badge.textContent = "INACTIVO";
+                if (badge.innerText !== "DESCONECTADO" && !activeConnections.has(slot)) {
+                    badge.className = "px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500 border border-gray-200";
+                    badge.innerText = "DESCONECTADO";
                     viewCon.style.display = "none";
                     viewDisc.style.display = "block";
                 }
@@ -525,9 +358,9 @@
             const qrArea = document.getElementById(`qr-area-${slot}`);
             const qrCanvas = document.getElementById(`qr-canvas-${slot}`);
 
-            btn.disabled = true;
-            btn.textContent = "Cargando...";
-            qrArea.classList.add("active");
+            btn.classList.add("hidden");
+            qrArea.classList.remove("hidden");
+            qrArea.classList.add("flex");
             qrCanvas.innerHTML = "";
 
             try {
@@ -535,13 +368,9 @@
                 if (!res.ok) throw new Error("Fallo inicio");
 
                 const localInterval = setInterval(async () => {
-                    if (!document.getElementById(`card-${slot}`)) { // Tarjeta eliminada
-                        clearInterval(localInterval);
-                        return;
-                    }
+                    if (!document.getElementById(`card-${slot}`)) { clearInterval(localInterval); return; }
 
                     const s = await fetch(`/status?locationId=${locationId}&slot=${slot}`).then(r => r.json());
-
                     if (s.connected) {
                         clearInterval(localInterval);
                         connectionIntervals.delete(slot);
@@ -552,8 +381,8 @@
 
                     const q = await fetch(`/qr?locationId=${locationId}&slot=${slot}`).then(r => r.json());
                     if (q.qr && qrCanvas.innerHTML === "") {
-                        new QRCode(qrCanvas, { text: q.qr, width: 200, height: 200 });
-                        btn.textContent = "Escanea con WhatsApp";
+                        document.getElementById(`msg-${slot}`).innerHTML = "Escanea este código con WhatsApp";
+                        new QRCode(qrCanvas, { text: q.qr, width: 220, height: 220, colorDark: "#111827", colorLight: "#ffffff" });
                     }
                 }, 2000);
 
@@ -561,21 +390,24 @@
 
             } catch (e) {
                 activeConnections.delete(slot);
-                btn.disabled = false;
-                btn.textContent = "Vincular WhatsApp";
-                Toast.fire({ icon: 'error', title: 'Error al iniciar conexión' });
+                btn.classList.remove("hidden");
+                qrArea.classList.add("hidden");
+                qrArea.classList.remove("flex");
+                Toast.fire({ icon: 'error', title: 'Error de conexión' });
             }
         }
 
         async function disconnect(slot) {
             const result = await Swal.fire({
-                title: '¿Cerrar sesión?',
-                text: "Se desconectará el dispositivo.",
+                title: '¿Desconectar?',
+                text: "El bot dejará de funcionar en este número.",
                 icon: 'warning',
                 showCancelButton: true,
                 confirmButtonColor: '#ef4444',
-                confirmButtonText: 'Sí, cerrar',
-                cancelButtonText: 'Cancelar'
+                cancelButtonColor: '#9ca3af',
+                confirmButtonText: 'Sí, desconectar',
+                cancelButtonText: 'Cancelar',
+                customClass: { popup: 'rounded-2xl', confirmButton: 'rounded-xl', cancelButton: 'rounded-xl' }
             });
 
             if (!result.isConfirmed) return;
@@ -583,39 +415,34 @@
             try {
                 await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
                 window.location.reload();
-            } catch (e) {
-                Toast.fire({ icon: 'error', title: 'Error al desconectar' });
-            }
+            } catch (e) { Toast.fire({ icon: 'error', title: 'Error al desconectar' }); }
         }
 
         async function cancelConnect(slot) {
             const interval = connectionIntervals.get(slot);
-            if (interval) {
-                clearInterval(interval);
-                connectionIntervals.delete(slot);
-            }
+            if (interval) { clearInterval(interval); connectionIntervals.delete(slot); }
             activeConnections.delete(slot);
 
-            document.getElementById(`qr-area-${slot}`).classList.remove("active");
+            document.getElementById(`qr-area-${slot}`).classList.add("hidden");
+            document.getElementById(`qr-area-${slot}`).classList.remove("flex");
             document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
-            const btn = document.getElementById(`btn-${slot}`);
-            btn.disabled = false;
-            btn.textContent = "Vincular WhatsApp";
+            document.getElementById(`btn-${slot}`).classList.remove("hidden");
 
             await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
         }
 
         function showBlockedScreen(reason) {
             let msg = "Su cuenta no está activa.";
-            if (reason === "trial_expired") msg = "Periodo de prueba finalizado.";
+            if (reason === "trial_expired") msg = "Su periodo de prueba ha finalizado.";
             else if (reason === "subscription_inactive") msg = "Suscripción inactiva o cancelada.";
 
             document.body.innerHTML = `
-            <div class="blocked-screen">
-                <div class="blocked-card">
-                    <div style="font-size:3rem;margin-bottom:20px">🔒</div>
-                    <h2 style="margin:0 0 10px 0;color:#1f2937">Acceso Restringido</h2>
-                    <p style="color:#6b7280">${msg}</p>
+            <div class="fixed inset-0 bg-gray-100 flex items-center justify-center p-6">
+                <div class="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full text-center border border-gray-200">
+                    <div class="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500 text-4xl">🔒</div>
+                    <h2 class="text-2xl font-bold text-gray-900 mb-2">Acceso Restringido</h2>
+                    <p class="text-gray-500 mb-6">${msg}</p>
+                    <a href="https://wa.clicandapp.com" class="block w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition">Contactar Soporte</a>
                 </div>
             </div>`;
         }
