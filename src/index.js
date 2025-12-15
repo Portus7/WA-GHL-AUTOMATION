@@ -477,11 +477,68 @@ app.put("/agency/slots/:locationId/:slotId/settings", verifyToken, async (req, r
     }
 });
 
+// ✅ NUEVO ENDPOINT: Actualizar Configuración (Prioridad/Responsable) con Auth
+app.post("/agency/update-slot-config", verifyToken, async (req, res) => {
+    const { locationId, slotId, priority, assignedUser } = req.body;
+
+    try {
+        // Lógica de SWAP de Prioridad
+        if (priority) {
+            const currentRes = await pool.query(
+                "SELECT priority FROM location_slots WHERE location_id = $1 AND slot_id = $2",
+                [locationId, slotId]
+            );
+            const oldPriority = currentRes.rows[0]?.priority || 99;
+
+            const targetRes = await pool.query(
+                "SELECT slot_id FROM location_slots WHERE location_id = $1 AND priority = $2",
+                [locationId, priority]
+            );
+
+            if (targetRes.rows.length > 0) {
+                const targetSlotId = targetRes.rows[0].slot_id;
+                await pool.query(
+                    "UPDATE location_slots SET priority = $1 WHERE location_id = $2 AND slot_id = $3",
+                    [oldPriority, locationId, targetSlotId]
+                );
+            }
+
+            await pool.query(
+                "UPDATE location_slots SET priority = $1 WHERE location_id = $2 AND slot_id = $3",
+                [priority, locationId, slotId]
+            );
+        }
+
+        // Lógica de Usuario Responsable
+        if (assignedUser !== undefined) {
+            const setRes = await pool.query(
+                "SELECT settings FROM location_slots WHERE location_id = $1 AND slot_id = $2",
+                [locationId, slotId]
+            );
+
+            let currentSettings = setRes.rows[0]?.settings || {};
+            currentSettings.ghl_assigned_user = assignedUser;
+
+            await pool.query(
+                "UPDATE location_slots SET settings = $1::jsonb WHERE location_id = $2 AND slot_id = $3",
+                [JSON.stringify(currentSettings), locationId, slotId]
+            );
+        }
+
+        res.json({ success: true });
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.get("/agency/location-details/:locationId", verifyToken, async (req, res) => {
     const { locationId } = req.params;
     try {
         const [slots, keys, tenant] = await Promise.all([
-            pool.query("SELECT * FROM location_slots WHERE location_id=$1 ORDER BY slot_id", [locationId]),
+            // ✅ FIX: Ordenar por prioridad, no por ID, para que el frontend respete el orden
+            pool.query("SELECT * FROM location_slots WHERE location_id=$1 ORDER BY priority ASC", [locationId]),
             pool.query("SELECT * FROM keyword_tags WHERE location_id=$1 ORDER BY created_at DESC", [locationId]),
             pool.query("SELECT name FROM tenants WHERE location_id=$1", [locationId])
         ]);
