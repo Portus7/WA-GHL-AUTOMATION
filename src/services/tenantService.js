@@ -32,19 +32,15 @@ async function getTenantConfig(locationId) {
 }
 
 // 2. Registrar un nuevo cliente (Webhook INSTALL)
-// Se llama cuando alguien instala la app desde el Marketplace
-async function registerNewTenant(locationId, companyId) {
+async function registerNewTenant(locationId, companyId, initialStatus = 'active') {
     try {
-        console.log(`📥 Procesando instalación para Location: ${locationId}, Agency: ${companyId}`);
+        console.log(`📥 Procesando instalación para Location: ${locationId}, Agency: ${companyId}, Status: ${initialStatus}`);
 
-        const trialDays = 14; // Damos 14 días de prueba
+        const trialDays = 14;
         const trialEnd = new Date();
         trialEnd.setDate(trialEnd.getDate() + trialDays);
-
-        // Asignamos plan por defecto (asegurarse que ID 1 exista en subscription_plans)
         const planId = 1;
 
-        // Feature flags por defecto
         const defaultSettings = {
             show_source_label: true,
             create_unknown_contacts: true,
@@ -52,28 +48,26 @@ async function registerNewTenant(locationId, companyId) {
             send_disconnect_message: true
         };
 
-        // UPSERT: Si ya existe, actualizamos para reactivarlo o extender trial
-        // IMPORTANTE: Guardamos companyId como agency_id para vincularlo al dueño
         const sql = `
             INSERT INTO tenants (location_id, status, trial_ends_at, plan_id, settings, created_at, agency_id)
-            VALUES ($1, 'active', $2, $3, $4::jsonb, NOW(), $5)
+            VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), $6)
             ON CONFLICT (location_id) 
             DO UPDATE SET 
-                status = 'active', -- Reactivamos si estaba inactivo
-                agency_id = EXCLUDED.agency_id, -- Actualizamos agencia por si cambió
+                status = EXCLUDED.status, -- Actualizamos al estado que enviamos
+                agency_id = EXCLUDED.agency_id,
                 updated_at = NOW()
         `;
 
-        await pool.query(sql, [locationId, trialEnd, planId, JSON.stringify(defaultSettings), companyId]);
+        // Pasamos initialStatus en lugar de hardcodear 'active'
+        await pool.query(sql, [locationId, initialStatus, trialEnd, planId, JSON.stringify(defaultSettings), companyId]);
 
-        console.log(`🎉 Tenant Registrado/Actualizado: ${locationId} (Vinculado a Agencia: ${companyId})`);
+        console.log(`🎉 Tenant Registrado: ${locationId} (${initialStatus})`);
 
     } catch (e) {
         console.error("❌ Error registrando tenant en DB:", e.message);
         throw e;
     }
 }
-
 // 3. Actualizar configuraciones
 async function updateTenantSettings(locationId, newSettings) {
     // Implementación futura

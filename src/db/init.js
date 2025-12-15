@@ -115,14 +115,24 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_keyword_tags_location ON keyword_tags(location_id);
     `);
 
-    // 8. Tabla de USUARIOS (Con agency_id para jerarquía)
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
-        role VARCHAR(50) DEFAULT 'admin', -- admin, agency
-        agency_id VARCHAR(255),           -- ID de la Agencia (GHL Company ID)
+        role VARCHAR(50) DEFAULT 'admin',
+        agency_id VARCHAR(255),
+        
+        -- Facturación (Stripe)
+        stripe_customer_id VARCHAR(255),
+        stripe_subscription_id VARCHAR(255),
+        plan_status VARCHAR(50) DEFAULT 'trial',
+        trial_ends_at TIMESTAMP,
+
+        -- Límites de Recursos (Bolsa Global)
+        max_subagencies INT DEFAULT 1,    
+        max_slots INT DEFAULT 5,
+
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
