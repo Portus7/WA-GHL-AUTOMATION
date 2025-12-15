@@ -83,7 +83,7 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_routing_location ON phone_routing(location_id);
     `);
 
-    // 6. Tabla Configuración Slots
+    // 6. Tabla Configuración Slots (Dispositivos)
     await client.query(`
       CREATE TABLE IF NOT EXISTS location_slots (
         location_id VARCHAR(255) REFERENCES tenants(location_id) ON DELETE CASCADE,
@@ -92,6 +92,7 @@ const initDb = async () => {
         phone_number VARCHAR(50),
         priority INT DEFAULT 99,
         slot_name VARCHAR(100),
+        is_favorite BOOLEAN DEFAULT FALSE,
         settings JSONB DEFAULT '{ 
             "show_source_label": true, 
             "create_unknown_contacts": true,
