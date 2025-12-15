@@ -41,22 +41,33 @@ async function processKeywordTags(locationId, contactId, text, currentSlotId = n
 
         if (tagRules.length === 0) return;
 
-        const tagsToApply = new Set();
         const lowerText = text.toLowerCase();
         const deviceFooter = "[Enviado desde otro dispositivo]";
 
         for (const rule of tagRules) {
             const keyword = rule.keyword.toLowerCase();
-            if (rule.keyword !== deviceFooter && lowerText.includes(keyword)) {
-                tagsToApply.add(rule.tag);
-            }
-            if (isMobileContext && rule.keyword === deviceFooter) {
-                tagsToApply.add(rule.tag);
-            }
-        }
+            const tag = rule.tag;
 
-        if (tagsToApply.size > 0) {
-            await Promise.all(Array.from(tagsToApply).map(tag => addTagToContact(locationId, contactId, tag)));
+            let match = false;
+            // Coincidencia normal o mensaje desde móvil
+            if (rule.keyword !== deviceFooter && lowerText.includes(keyword)) match = true;
+            if (isMobileContext && rule.keyword === deviceFooter) match = true;
+
+            if (match) {
+                // 🔥 LÓGICA ESPECIAL PARA PRIORIDAD
+                if (tag.startsWith("[PRIOR]:")) {
+                    // Extraemos el valor limpio. Ej: "[PRIOR]: finanzas" -> "finanzas"
+                    const cleanValue = tag.replace("[PRIOR]:", "").trim();
+                    const { setPriorTag } = require("./ghlService");
+
+                    // Usamos la función que borra los anteriores
+                    await setPriorTag(locationId, contactId, cleanValue);
+                } else {
+                    // Tag normal (acumulativo)
+                    const { addTagToContact } = require("./ghlService");
+                    await addTagToContact(locationId, contactId, tag);
+                }
+            }
         }
     } catch (e) {
         console.error("Error procesando tags:", e);

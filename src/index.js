@@ -43,6 +43,7 @@ const {
     addTagToContact,
     assignContactOwner,
     getLocationUsers,
+    getContact, // ✅ IMPORTANTE: Necesario para leer los tags del contacto
 } = require("./services/ghlService");
 
 const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/utils");
@@ -225,13 +226,48 @@ app.post("/ghl/webhook", async (req, res) => {
                 if (messageDelay > 0) await sleep(messageDelay);
             }
 
-            // --- INTENTO 1: RECUPERAR ID REAL DESDE DB ---
-            let realJidUser = null;
-            let realSlotId = null;
+            // --- PASO 1: ENRUTAMIENTO PRIORITARIO POR TAGS (NUEVO) ---
+            let prioritySlotId = null;
 
             if (contactId) {
                 try {
-                    // Buscamos el teléfono original (sin redondeo)
+                    // Obtenemos contacto para leer sus tags
+                    const contact = await getContact(locationId, contactId);
+                    const tags = contact?.tags || [];
+
+                    // Buscamos si tiene algun tag que empiece con [PRIOR]:
+                    const priorTag = tags.find(t => t.startsWith("[PRIOR]:"));
+
+                    if (priorTag) {
+                        const targetRoutingValue = priorTag.replace("[PRIOR]:", "").trim().toLowerCase();
+                        console.log(`🔀 Tag de prioridad detectado: "${targetRoutingValue}"`);
+
+                        // Buscamos en la DB qué slot tiene este routing_tag
+                        const slotQuery = `
+                            SELECT slot_id, phone_number, settings 
+                            FROM location_slots 
+                            WHERE location_id = $1 
+                            AND settings->>'routing_tag' = $2
+                        `;
+                        const slotRes = await pool.query(slotQuery, [locationId, targetRoutingValue]);
+
+                        if (slotRes.rows.length > 0) {
+                            prioritySlotId = slotRes.rows[0].slot_id;
+                            console.log(`✅ Forzando envío por Slot ${prioritySlotId} (${targetRoutingValue})`);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error Priority Routing:", e.message);
+                }
+            }
+
+            // --- PASO 2: RECUPERAR ID REAL DESDE DB (O usar Priority) ---
+            let realJidUser = null;
+            let realSlotId = prioritySlotId; // Si encontramos prioridad, la usamos por defecto
+
+            if (contactId && !realSlotId) {
+                // Solo si NO hay prioridad definida, buscamos el "último slot usado" (Routing normal)
+                try {
                     const routingRes = await pool.query(
                         "SELECT phone, channel_number FROM phone_routing WHERE contact_id = $1 AND location_id = $2",
                         [contactId, locationId]
@@ -239,23 +275,22 @@ app.post("/ghl/webhook", async (req, res) => {
 
                     if (routingRes.rows.length > 0) {
                         realJidUser = routingRes.rows[0].phone;
-
-                        // Buscamos qué slot maneja este chat
                         const botNumber = routingRes.rows[0].channel_number;
                         const slotRes = await pool.query("SELECT slot_id FROM location_slots WHERE location_id=$1 AND phone_number=$2", [locationId, botNumber]);
                         if (slotRes.rows.length > 0) realSlotId = slotRes.rows[0].slot_id;
-
-                        console.log(`✅ Routing recuperado: ${realJidUser} (Slot ${realSlotId})`);
                     }
                 } catch (e) { console.error("Routing error:", e.message); }
             }
 
-            // Si falló el routing, usamos el de GHL (aunque esté redondeado)
+            // Normalización del teléfono destino
             const clientPhone = normalizePhone(phone);
+            // Si teníamos el real en la DB lo usamos, si no, usamos el que mandó GHL
             const jidUser = realJidUser ? realJidUser.replace(/\D/g, "") : clientPhone.replace(/\D/g, "");
 
+            // Obtenemos configuración de todos los slots
             const dbConfigs = await getLocationSlotsConfig(locationId);
 
+            // Filtramos solo los conectados
             let availableCandidates = dbConfigs.map(conf => ({
                 slot: conf.slot_id,
                 myNumber: conf.phone_number,
@@ -268,59 +303,47 @@ app.post("/ghl/webhook", async (req, res) => {
             let selected = null;
             let targetJid = null;
 
-            // --- INTENTO 2: BÚSQUEDA INTELIGENTE EN GRUPOS ACTIVOS ---
+            // --- PASO 3: SELECCIÓN DEL CANDIDATO (SLOT) ---
 
-            // Si el número parece un grupo (empieza por 12036... y es largo)
-            // GHL suele redondear los últimos dígitos, así que comparamos los primeros 15 dígitos.
-            const isPotentialGroup = jidUser.startsWith("12036") && jidUser.length >= 17;
-            const fuzzyJidPrefix = jidUser.substring(0, 15);
-
-            // Primero, si ya sabíamos el slot por routing, lo priorizamos
+            // Si ya determinamos un Slot (por Prioridad o por Routing), intentamos usarlo
             if (realSlotId) {
                 selected = availableCandidates.find(c => c.slot === realSlotId);
+
+                if (!selected && prioritySlotId) {
+                    // Si el slot prioritario NO está conectado, avisamos
+                    console.warn(`⚠️ Slot prioritario ${prioritySlotId} desconectado. Usando fallback.`);
+                }
             }
 
-            // Buscamos en la configuración de grupos de todos los slots
-            if (!targetJid) {
+            // --- PASO 4: BÚSQUEDA INTELIGENTE EN GRUPOS ACTIVOS (Si no hay Prioridad) ---
+            if (!selected && !prioritySlotId) {
+                const isPotentialGroup = jidUser.startsWith("12036") && jidUser.length >= 17;
+                const fuzzyJidPrefix = jidUser.substring(0, 15);
+
                 for (const candidate of availableCandidates) {
                     const groupsConfig = candidate.settings?.groups || {};
-
-                    // Buscamos una coincidencia (Exacta o Aproximada)
                     const foundGroupKey = Object.keys(groupsConfig).find(gKey => {
                         const cleanKey = gKey.replace(/\D/g, "");
-
-                        // 1. Coincidencia Exacta
                         if (cleanKey === jidUser) return true;
-
-                        // 2. Coincidencia Aproximada (Fuzzy) para corregir el error de GHL
-                        if (isPotentialGroup && cleanKey.startsWith(fuzzyJidPrefix)) {
-                            console.log(`🎯 Fuzzy Match: GHL mandó ${jidUser}, encontramos ${cleanKey}`);
-                            return true;
-                        }
-
+                        if (isPotentialGroup && cleanKey.startsWith(fuzzyJidPrefix)) return true;
                         return false;
                     });
 
                     if (foundGroupKey && groupsConfig[foundGroupKey].active) {
                         selected = candidate;
-                        targetJid = foundGroupKey; // ¡Usamos el ID correcto guardado en config!
-                        console.log(`📢 Grupo Encontrado y Activo: ${targetJid}`);
+                        targetJid = foundGroupKey;
                         break;
                     }
                 }
             }
 
             // --- FALLBACK FINAL ---
-            if (!selected) selected = availableCandidates[0];
+            if (!selected) selected = availableCandidates[0]; // Usamos el primero (o el de mayor prioridad por DB)
 
             if (!targetJid) {
-                // Si no lo encontramos en la config, intentamos construirlo
-                // Si es grupo y GHL lo redondeó, esto fallará, pero es el último recurso.
+                const isPotentialGroup = jidUser.startsWith("12036") && jidUser.length >= 17;
                 if (isPotentialGroup) {
-                    // Intentamos corregir manualmente si termina en 00 (típico redondeo)
-                    // (Esto es riesgoso, mejor confiar en la config arriba)
                     targetJid = jidUser + "@g.us";
-                    console.warn(`⚠️ Grupo desconocido (posiblemente corrupto): ${targetJid}`);
                 } else {
                     targetJid = jidUser + "@s.whatsapp.net";
                 }
@@ -354,8 +377,8 @@ app.post("/ghl/webhook", async (req, res) => {
 
                 if (sentMsg?.key?.id) botMessageIds.add(sentMsg.key.id);
 
-                // Guardamos routing solo si es contacto nuevo
-                if (!contactId) {
+                // Guardamos routing solo si es contacto nuevo y NO se forzó por prioridad
+                if (!contactId && !prioritySlotId) {
                     const contact = await findOrCreateGHLContact(locationId, clientPhone, "System Outbound", null, true);
                     if (contact?.id) await saveRouting(clientPhone, locationId, contact.id, selected.myNumber);
                 }
