@@ -48,7 +48,6 @@ const {
 // --- SERVICIOS DE PAGO Y PLANES (NUEVO) ---
 const { subscribe, manageBilling } = require("./controllers/paymentController");
 const { handleWebhook } = require("./controllers/webhookController");
-const { canAddSlot } = require("./services/planService");
 
 const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/utils");
 const { parseGHLCommand } = require("./helpers/parser");
