@@ -227,7 +227,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             if (q.conversation) qText = q.conversation;
             else if (q.extendedTextMessage) qText = q.extendedTextMessage.text;
             else qText = `[Archivo/Otro]:`;
-            console.log(q.extendedTextMessage, q.conversation);
+            console.log(JSON.stringify(contextInfo, null, 2));
             text = `> En respuesta a: "${qText.substring(0, 50)}..."\n\n${text}`;
         }
 
