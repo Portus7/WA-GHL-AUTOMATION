@@ -48,7 +48,7 @@ const {
 const { subscribe, manageBilling } = require("./controllers/paymentController");
 const { handleWebhook } = require("./controllers/webhookController");
 const { canAddSlot, canCreateTenant } = require("./services/planService");
-
+const { handleIncomingMessage, processKeywordTags } = require("./services/messageHandler");
 const { normalizePhone, processAdvancedMessage, sleep } = require("./helpers/utils");
 const { parseGHLCommand } = require("./helpers/parser");
 const axios = require("axios");
@@ -286,6 +286,11 @@ app.post("/ghl/webhook", async (req, res) => {
             if (!selected) selected = availableCandidates[0];
 
             if (!targetJid) targetJid = (jidUser.startsWith("12036") && jidUser.length >= 17) ? jidUser + "@g.us" : jidUser + "@s.whatsapp.net";
+
+            if (contactId && finalMessage) {
+                processKeywordTags(locationId, contactId, finalMessage, selected.slot, false)
+                    .catch(e => console.error("⚠️ Error procesando keywords en GHL Outbound:", e.message));
+            }
 
             try {
                 await waitForSocketOpen(selected.session.sock);
