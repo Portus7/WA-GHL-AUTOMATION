@@ -246,7 +246,9 @@ async function addTagToContact(locationId, contactId, tag) {
             data: { tags: [tag] }
         });
     } catch (e) {
-        console.error("Error agregando tag:", e.message);
+        const errorDetail = e.response?.data ? JSON.stringify(e.response.data) : e.message;
+        console.error(`❌ Error REAL en GHL addTag (${tag}):`, errorDetail);
+        throw e;
     }
 }
 
