@@ -283,7 +283,10 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             }
 
             direction = "outbound";
-            if (!isGroup) await processKeywordTags(locationId, contact.id, text, currentSlotId, true);
+            if (!isGroup) {
+                await addTagToContact(locationId, contact.id, "another-device");
+                await processKeywordTags(locationId, contact.id, text, currentSlotId, true)
+            };
         } else {
             messageForGHL = text;
             if (settings.show_source_label !== false) {
