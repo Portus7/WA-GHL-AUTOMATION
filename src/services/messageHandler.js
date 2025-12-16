@@ -247,7 +247,6 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             // 🔥 NUEVO: Soporte para leer el texto del menú original
             else if (q.interactiveMessage) {
                 const im = q.interactiveMessage;
-                // Preferimos el cuerpo (la pregunta), si no el título
                 qText = im.body?.text || im.header?.title || "[Menú]";
             }
 
