@@ -283,10 +283,29 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             }
 
             direction = "outbound";
+
+            // 🔥 BLOQUE CORREGIDO: Asignación de Tags para mensajes desde el celular
             if (!isGroup) {
-                await addTagToContact(locationId, contact.id, "another-device");
-                await processKeywordTags(locationId, contact.id, text, currentSlotId, true)
-            };
+                console.log(`📱 Detectado mensaje desde celular para contacto ${contact.id}. Aplicando tags...`);
+
+                // 1. Tag Fijo "another-device"
+                try {
+                    await addTagToContact(locationId, contact.id, "another-device");
+                    console.log("✅ Tag 'another-device' asignado.");
+                } catch (e) {
+                    console.error("❌ Error asignando tag another-device:", e.message);
+                }
+
+                // 2. Procesar Keywords (si hay reglas configuradas)
+                try {
+                    await processKeywordTags(locationId, contact.id, text, currentSlotId, true);
+                } catch (e) {
+                    console.error("❌ Error procesando keywords:", e.message);
+                }
+            } else {
+                console.log("⏩ Mensaje desde celular en GRUPO, omitiendo tags.");
+            }
+
         } else {
             messageForGHL = text;
             if (settings.show_source_label !== false) {
