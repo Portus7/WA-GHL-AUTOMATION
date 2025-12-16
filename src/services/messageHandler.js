@@ -204,6 +204,22 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
         else if (msgType === 'videoMessage') text = m.message.videoMessage.caption || "";
         else if (msgType === 'documentMessage') text = m.message.documentMessage.caption || "";
 
+        // 🔥 NUEVO: Soporte para respuestas de Botones y Listas
+        else if (msgType === 'interactiveResponseMessage') {
+            const ir = m.message.interactiveResponseMessage;
+            // Intentar sacar el texto visible del botón, si no, el nombre interno
+            text = ir.body?.text || ir.nativeFlowResponseMessage?.selectedDisplayName || "[Respuesta Interactiva]";
+        }
+        else if (msgType === 'templateButtonReplyMessage') {
+            text = m.message.templateButtonReplyMessage.selectedDisplayText;
+        }
+        else if (msgType === 'buttonsResponseMessage') {
+            text = m.message.buttonsResponseMessage.selectedDisplayText;
+        }
+        else if (msgType === 'listResponseMessage') {
+            text = m.message.listResponseMessage.title;
+        }
+
         // Ignorar mensajes de sistema (ej: cambios de claves)
         if (msgType === 'senderKeyDistributionMessage' || msgType === 'protocolMessage') return;
 
@@ -224,10 +240,20 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
         if (contextInfo && contextInfo.quotedMessage) {
             let qText = "";
             const q = contextInfo.quotedMessage;
+
             if (q.conversation) qText = q.conversation;
             else if (q.extendedTextMessage) qText = q.extendedTextMessage.text;
-            else qText = `[Archivo/Otro]:`;
-            console.log(JSON.stringify(contextInfo, null, 2));
+
+            // 🔥 NUEVO: Soporte para leer el texto del menú original
+            else if (q.interactiveMessage) {
+                const im = q.interactiveMessage;
+                // Preferimos el cuerpo (la pregunta), si no el título
+                qText = im.body?.text || im.header?.title || "[Menú]";
+            }
+
+            else qText = "[Archivo/Otro]";
+
+            // console.log(JSON.stringify(contextInfo, null, 2)); // Debug opcional
             text = `> En respuesta a: "${qText.substring(0, 50)}..."\n\n${text}`;
         }
 
