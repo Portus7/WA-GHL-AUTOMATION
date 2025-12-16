@@ -226,7 +226,8 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
             const q = contextInfo.quotedMessage;
             if (q.conversation) qText = q.conversation;
             else if (q.extendedTextMessage) qText = q.extendedTextMessage.text;
-            else qText = `[Archivo/Otro]: ${q.extendedTextMessage.text}`;
+            else qText = `[Archivo/Otro]:`;
+            console.log(q.extendedTextMessage, q.conversation);
             text = `> En respuesta a: "${qText.substring(0, 50)}..."\n\n${text}`;
         }
 
