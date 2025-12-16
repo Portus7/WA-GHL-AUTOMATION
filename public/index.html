@@ -111,40 +111,15 @@
     <script>
         const params = new URLSearchParams(window.location.search);
         const locationId = params.get("location_id") || params.get("locationId");
+        const Toast = Swal.mixin({ toast: true, position: 'bottom-end', showConfirmButton: false, timer: 3000, timerProgressBar: true, customClass: { popup: 'rounded-xl text-sm font-semibold shadow-xl' } });
 
-        // Configuración Toast
-        const Toast = Swal.mixin({
-            toast: true,
-            position: 'bottom-end',
-            showConfirmButton: false,
-            timer: 3000,
-            timerProgressBar: true,
-            customClass: {
-                popup: 'rounded-xl text-sm font-semibold shadow-xl'
-            }
-        });
+        if (!locationId) document.body.innerHTML = `<div class="flex items-center justify-center h-screen bg-gray-50"><div class="bg-white p-8 rounded-2xl shadow-xl text-center max-w-md mx-4 border border-red-100"><h3 class="text-xl font-bold text-gray-900 mb-2">Error</h3><p class="text-gray-500">Falta location_id</p></div></div>`;
+        else document.getElementById('location-display').textContent = locationId;
 
-        if (!locationId) {
-            document.body.innerHTML = `
-                <div class="flex items-center justify-center h-screen bg-gray-50">
-                    <div class="bg-white p-8 rounded-2xl shadow-xl text-center max-w-md mx-4 border border-red-100">
-                        <div class="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500 text-3xl">⚠️</div>
-                        <h3 class="text-xl font-bold text-gray-900 mb-2">Error de Identificación</h3>
-                        <p class="text-gray-500 leading-relaxed">No se ha encontrado el <code>location_id</code>. Acceda desde el panel principal.</p>
-                    </div>
-                </div>`;
-        } else {
-            document.getElementById('location-display').textContent = locationId;
-        }
-
-        const appView = document.getElementById("app-view");
-        const loaderView = document.getElementById("loader-view");
         const container = document.getElementById("slots-container");
-        const activeConnections = new Set();
-        const connectionIntervals = new Map();
+        const activeConnections = new Set(), connectionIntervals = new Map();
         let ghlUsers = [];
 
-        // Iconos SVG
         const ICONS = {
             edit: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>`,
             smartphone: `<svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>`,
@@ -159,66 +134,30 @@
 
         async function init() {
             try {
-                const confRes = await fetch(`/config?locationId=${locationId}`);
-                if (!confRes.ok) throw new Error("API");
-                const conf = await confRes.json();
+                const confRes = await fetch(`/config?locationId=${locationId}`); if (!confRes.ok) throw new Error("API"); const conf = await confRes.json();
+                if (conf.is_active === false) { showBlockedScreen(conf.reason); return; }
+                try { const u = await fetch(`/public/ghl-users?locationId=${locationId}`); if (u.ok) ghlUsers = await u.json(); } catch (e) { }
 
-                if (conf.is_active === false) {
-                    showBlockedScreen(conf.reason);
-                    return;
-                }
+                document.getElementById("loader-view").style.display = "none";
+                document.getElementById("app-view").style.display = "block";
 
-                try {
-                    const u = await fetch(`/public/ghl-users?locationId=${locationId}`);
-                    if (u.ok) ghlUsers = await u.json();
-                } catch (e) { }
+                const slots = conf.slots || []; slots.sort((a, b) => (a.priority || 99) - (b.priority || 99)); renderSlots(slots);
 
-                loaderView.style.display = "none";
-                appView.style.display = "block";
-
-                const slots = conf.slots || [];
-                slots.sort((a, b) => (a.priority || 99) - (b.priority || 99));
-                renderSlots(slots);
-
-                setInterval(syncAllSlots, 5000);
-
-            } catch (e) {
-                loaderView.innerHTML = `<div class="bg-red-50 px-6 py-4 rounded-xl border border-red-100 text-red-600 font-semibold">Error de conexión.</div>`;
-            }
+                // Polling cada 3 segundos para reactividad
+                setInterval(syncAllSlots, 3000);
+            } catch (e) { document.getElementById("loader-view").innerHTML = "Error de conexión."; }
         }
 
         function renderSlots(slotsArray) {
-            container.innerHTML = "";
-            const total = slotsArray.length;
-
-            if (total === 0) {
-                container.innerHTML = `
-                    <div class="col-span-full bg-white p-12 rounded-2xl border-2 border-dashed border-gray-200 text-center">
-                        <div class="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-300">${ICONS.smartphone}</div>
-                        <h3 class="text-lg font-bold text-gray-900">Sin Dispositivos</h3>
-                        <p class="text-gray-500 mt-1">No hay slots configurados para esta ubicación.</p>
-                    </div>`;
-                return;
-            }
-
+            container.innerHTML = ""; const total = slotsArray.length;
+            if (total === 0) { container.innerHTML = `<p class="text-center p-10 text-gray-500">Sin dispositivos.</p>`; return; }
             slotsArray.forEach(slot => {
-                const i = slot.id;
-                const name = slot.name || `Slot ${i}`;
-                const prio = slot.priority || 99;
-                const sets = slot.settings || {};
-                const assigned = sets.ghl_assigned_user || "";
-                const isFav = slot.is_favorite || false;
-
-                let pOps = "";
-                for (let p = 1; p <= total; p++) pOps += `<option value="${p}" ${p === prio ? 'selected' : ''}>${p}</option>`;
-                if (prio > total) pOps += `<option value="${prio}" selected>${prio}</option>`;
-
-                let uOps = `<option value="">-- Auto --</option>`;
-                ghlUsers.forEach(u => uOps += `<option value="${u.id}" ${u.id === assigned ? 'selected' : ''}>${u.name}</option>`);
+                const i = slot.id; const name = slot.name || `Slot ${i}`; const prio = slot.priority || 99; const sets = slot.settings || {}; const assigned = sets.ghl_assigned_user || ""; const isFav = slot.is_favorite || false;
+                let pOps = ""; for (let p = 1; p <= total; p++) pOps += `<option value="${p}" ${p === prio ? 'selected' : ''}>${p}</option>`; if (prio > total) pOps += `<option value="${prio}" selected>${prio}</option>`;
+                let uOps = `<option value="">-- Auto --</option>`; ghlUsers.forEach(u => uOps += `<option value="${u.id}" ${u.id === assigned ? 'selected' : ''}>${u.name}</option>`);
 
                 const html = `
                 <div class="bg-white rounded-2xl card-border shadow-md hover:shadow-lg transition-all duration-300 group flex flex-col overflow-hidden" id="card-${i}" data-slot-id="${i}">
-                    
                     <div class="px-5 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                         <div class="flex items-center gap-4">
                             <div class="w-12 h-12 rounded-xl bg-white border border-gray-200 flex items-center justify-center text-indigo-600 shadow-sm">${ICONS.smartphone}</div>
@@ -226,312 +165,114 @@
                                 <div class="flex items-center gap-2">
                                     <h3 class="font-bold text-gray-900 text-base truncate max-w-[120px]" id="title-text-${i}" title="${name}">${name}</h3>
                                     <button onclick="editSlotName(${i})" class="text-gray-400 hover:text-indigo-600 transition p-1 rounded-md hover:bg-white">${ICONS.edit}</button>
-                                    <button id="star-btn-${i}" onclick="toggleFavorite(${i}, ${isFav})" class="transition p-1 rounded-md ${isFav ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-400'}" title="Favorito">${isFav ? ICONS.starFilled : ICONS.star}</button>
+                                    <button id="star-btn-${i}" onclick="toggleFavorite(${i})" class="transition p-1 rounded-md ${isFav ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-400'}" title="Favorito">${isFav ? ICONS.starFilled : ICONS.star}</button>
                                 </div>
                                 <p class="text-xs text-gray-400 font-medium font-mono mt-0.5 tracking-wide">ID: ${i}</p>
                             </div>
                         </div>
                         <div id="badge-${i}" class="px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide bg-gray-100 text-gray-500 border border-gray-200 shadow-sm">OFF</div>
                     </div>
-
                     <div class="px-5 py-4 bg-white border-b border-gray-50">
                         <div class="grid grid-cols-2 gap-3">
-                            <div class="relative">
-                                <div class="absolute inset-y-0 left-3 flex items-center pointer-events-none text-gray-400">${ICONS.sort}</div>
-                                <select onchange="changePriority(${i}, this.value)" class="w-full pl-9 pr-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-lg text-gray-700 input-focus outline-none cursor-pointer hover:bg-gray-100 transition font-medium">${pOps}</select>
-                            </div>
-                            <div class="relative">
-                                <div class="absolute inset-y-0 left-3 flex items-center pointer-events-none text-gray-400">${ICONS.user}</div>
-                                <select onchange="changeResponsible(${i}, this.value)" class="w-full pl-9 pr-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-lg text-gray-700 input-focus outline-none cursor-pointer hover:bg-gray-100 transition font-medium">${uOps}</select>
-                            </div>
+                            <div class="relative"><div class="absolute inset-y-0 left-3 flex items-center pointer-events-none text-gray-400">${ICONS.sort}</div><select id="select-prio-${i}" onchange="changePriority(${i}, this.value)" class="w-full pl-9 pr-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-lg text-gray-700 input-focus outline-none cursor-pointer hover:bg-gray-100 transition font-medium">${pOps}</select></div>
+                            <div class="relative"><div class="absolute inset-y-0 left-3 flex items-center pointer-events-none text-gray-400">${ICONS.user}</div><select id="select-user-${i}" onchange="changeResponsible(${i}, this.value)" class="w-full pl-9 pr-3 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-lg text-gray-700 input-focus outline-none cursor-pointer hover:bg-gray-100 transition font-medium">${uOps}</select></div>
                         </div>
                     </div>
-
                     <div id="connected-view-${i}" style="display:none" class="p-6 flex-1 flex flex-col justify-center animate-in fade-in bg-gradient-to-b from-white to-gray-50/30">
-                        <div class="text-center mb-6">
-                            <p class="text-2xl font-bold text-gray-900 font-mono tracking-tight" id="phone-${i}">...</p>
-                            <div class="flex items-center justify-center gap-2 mt-2">
-                                <span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span>
-                                <p class="text-xs font-bold text-emerald-600 uppercase tracking-widest">En Línea</p>
-                            </div>
-                        </div>
+                        <div class="text-center mb-6"><p class="text-2xl font-bold text-gray-900 font-mono tracking-tight" id="phone-${i}">...</p><div class="flex items-center justify-center gap-2 mt-2"><span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span><p class="text-xs font-bold text-emerald-600 uppercase tracking-widest">En Línea</p></div></div>
                         <button onclick="disconnect(${i})" class="w-full py-3 border border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 font-bold rounded-xl transition text-sm flex items-center justify-center gap-2">${ICONS.trash} Cerrar Sesión</button>
                     </div>
-
                     <div id="disconnected-view-${i}" class="p-5 flex-1 flex flex-col justify-center">
                         <button id="btn-${i}" onclick="startConnect(${i})" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-md hover:shadow-lg shadow-indigo-200 transition-all active:scale-[0.98] text-sm flex items-center justify-center gap-2.5">${ICONS.qr} Vincular WhatsApp</button>
-                        <div id="qr-area-${i}" class="hidden flex-col items-center mt-4 p-4 bg-white rounded-xl border border-gray-100 shadow-sm animate-in zoom-in-95">
-                            <p id="msg-${i}" class="text-xs font-semibold text-gray-500 mb-3 flex items-center gap-2"><span class="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></span>Cargando código...</p>
-                            <div id="qr-canvas-${i}" class="qr-canvas p-2 bg-white rounded-lg border border-gray-100 mb-3"></div>
-                            <button onclick="cancelConnect(${i})" class="text-xs text-red-500 hover:text-red-700 font-bold hover:underline py-1">Cancelar</button>
-                        </div>
+                        <div id="qr-area-${i}" class="hidden flex-col items-center mt-4 p-4 bg-white rounded-xl border border-gray-100 shadow-sm animate-in zoom-in-95"><p id="msg-${i}" class="text-xs font-semibold text-gray-500 mb-3 flex items-center gap-2"><span class="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></span>Cargando código...</p><div id="qr-canvas-${i}" class="qr-canvas p-2 bg-white rounded-lg border border-gray-100 mb-3"></div><button onclick="cancelConnect(${i})" class="text-xs text-red-500 hover:text-red-700 font-bold hover:underline py-1">Cancelar</button></div>
                     </div>
                 </div>`;
-                container.insertAdjacentHTML('beforeend', html);
-                checkStatus(i);
+                container.insertAdjacentHTML('beforeend', html); checkStatus(i);
             });
         }
 
-        async function toggleFavorite(slotId, currentState) {
-            const newState = !currentState;
+        async function toggleFavorite(slotId) {
             const btn = document.getElementById(`star-btn-${slotId}`);
-            if (btn) btn.innerHTML = newState ? ICONS.starFilled : ICONS.star;
-            if (newState) document.querySelectorAll('[id^="star-btn-"]').forEach(b => {
-                if (b.id !== `star-btn-${slotId}`) {
-                    b.innerHTML = ICONS.star;
-                    b.classList.remove('text-yellow-500');
-                    b.classList.add('text-gray-300');
-                }
-            });
-            btn.classList.toggle('text-yellow-500', newState);
-            btn.classList.toggle('text-gray-300', !newState);
-            try {
-                await fetch(`/public/update-slot-config`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        locationId,
-                        slotId,
-                        isFavorite: newState
-                    })
-                });
-                if (newState) Toast.fire({
-                    icon: 'success',
-                    title: 'Favorito actualizado'
-                });
-            } catch (e) {
-                window.location.reload();
+            // Verificar estado actual por la clase
+            const isFav = btn.classList.contains('text-yellow-500');
+            const newState = !isFav;
+
+            // UI Optimista
+            updateStarUI(slotId, newState);
+
+            try { await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, isFavorite: newState }) }); if (newState) Toast.fire({ icon: 'success', title: 'Favorito actualizado' }); } catch (e) { window.location.reload(); }
+        }
+
+        function updateStarUI(slotId, isFav) {
+            const btn = document.getElementById(`star-btn-${slotId}`);
+            if (!btn) return;
+            btn.innerHTML = isFav ? ICONS.starFilled : ICONS.star;
+            if (isFav) { // Desactivar otros
+                document.querySelectorAll('[id^="star-btn-"]').forEach(b => { if (b.id !== `star-btn-${slotId}`) { b.innerHTML = ICONS.star; b.classList.remove('text-yellow-500'); b.classList.add('text-gray-300'); } });
+                btn.classList.remove('text-gray-300'); btn.classList.add('text-yellow-500');
+            } else {
+                btn.classList.remove('text-yellow-500'); btn.classList.add('text-gray-300');
             }
         }
 
-        async function changePriority(slotId, newPriority) {
-            try {
-                await fetch(`/public/update-slot-config`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        locationId,
-                        slotId,
-                        priority: parseInt(newPriority)
-                    })
-                });
-                setTimeout(() => window.location.reload(), 300);
-            } catch (e) {
-                Toast.fire({
-                    icon: 'error',
-                    title: 'Error'
-                });
-            }
-        }
-
-        async function changeResponsible(slotId, userId) {
-            try {
-                const res = await fetch(`/public/update-slot-config`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        locationId,
-                        slotId,
-                        assignedUser: userId
-                    })
-                });
-                if (res.ok) Toast.fire({
-                    icon: 'success',
-                    title: 'Guardado'
-                });
-            } catch (e) {
-                Toast.fire({
-                    icon: 'error',
-                    title: 'Error'
-                });
-            }
-        }
-
-        async function editSlotName(slot) {
-            const currentName = document.getElementById(`title-text-${slot}`).textContent.trim();
-            const {
-                value: newName
-            } = await Swal.fire({
-                title: 'Nombre',
-                input: 'text',
-                inputValue: currentName,
-                showCancelButton: true,
-                confirmButtonText: 'Guardar',
-                confirmButtonColor: '#4f46e5',
-                customClass: {
-                    popup: 'rounded-2xl',
-                    confirmButton: 'rounded-xl px-5',
-                    cancelButton: 'rounded-xl px-5'
-                }
-            });
-            if (newName && newName !== currentName) {
-                document.getElementById(`title-text-${slot}`).textContent = newName;
-                await fetch("/config-slot", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                        locationId,
-                        slot,
-                        slotName: newName
-                    })
-                });
-                Toast.fire({
-                    icon: 'success',
-                    title: 'Actualizado'
-                });
-            }
-        }
-
-        function syncAllSlots() {
-            document.querySelectorAll('[data-slot-id]').forEach(c => {
-                const sid = c.getAttribute('data-slot-id');
-                if (!activeConnections.has(parseInt(sid))) checkStatus(sid);
-            });
-        }
+        // --- REACTIVIDAD: Sincronizar datos del servidor con la UI ---
+        function syncAllSlots() { document.querySelectorAll('[data-slot-id]').forEach(c => { checkStatus(c.getAttribute('data-slot-id')); }); }
 
         async function checkStatus(slot) {
             try {
                 const r = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
                 const d = await r.json();
+
+                // 1. Estado Conexión
                 updateUI(slot, d.connected, d.myNumber);
+
+                // 2. Sincronizar Favorito
+                if (d.is_favorite !== undefined) {
+                    const btn = document.getElementById(`star-btn-${slot}`);
+                    const currentIsFav = btn.classList.contains('text-yellow-500');
+                    if (d.is_favorite !== currentIsFav) updateStarUI(slot, d.is_favorite);
+                }
+
+                // 3. Sincronizar Prioridad
+                if (d.priority) {
+                    const sel = document.getElementById(`select-prio-${slot}`);
+                    if (sel && parseInt(sel.value) !== d.priority) sel.value = d.priority;
+                }
+
+                // 4. Sincronizar Usuario
+                if (d.settings?.ghl_assigned_user !== undefined) {
+                    const sel = document.getElementById(`select-user-${slot}`);
+                    if (sel && sel.value !== (d.settings.ghl_assigned_user || "")) sel.value = d.settings.ghl_assigned_user || "";
+                }
+
             } catch (e) { }
         }
 
         function updateUI(slot, isConnected, phone) {
-            const badge = document.getElementById(`badge-${slot}`),
-                viewCon = document.getElementById(`connected-view-${slot}`),
-                viewDisc = document.getElementById(`disconnected-view-${slot}`),
-                phoneText = document.getElementById(`phone-${slot}`),
-                qrArea = document.getElementById(`qr-area-${slot}`);
+            const badge = document.getElementById(`badge-${slot}`), viewCon = document.getElementById(`connected-view-${slot}`), viewDisc = document.getElementById(`disconnected-view-${slot}`), phoneText = document.getElementById(`phone-${slot}`), qrArea = document.getElementById(`qr-area-${slot}`);
             if (!badge) return;
             if (isConnected) {
                 if (badge.innerText !== "ACTIVO") {
-                    badge.className = "px-3 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-700 border border-emerald-200 shadow-sm flex items-center gap-1.5";
-                    badge.innerHTML = `<span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> ACTIVO`;
-                    viewCon.style.display = "flex";
-                    viewDisc.style.display = "none";
-                    qrArea.classList.add("hidden");
-                    qrArea.classList.remove("flex");
-                    activeConnections.delete(slot);
+                    badge.className = "px-3 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-700 border border-emerald-200 shadow-sm flex items-center gap-1.5"; badge.innerHTML = `<span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> ACTIVO`;
+                    viewCon.style.display = "flex"; viewDisc.style.display = "none"; qrArea.classList.add("hidden"); qrArea.classList.remove("flex"); activeConnections.delete(slot);
                 }
                 phoneText.textContent = "+" + phone;
             } else {
                 if (badge.innerText !== "OFF" && !activeConnections.has(slot)) {
-                    badge.className = "px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500 border border-gray-200";
-                    badge.innerText = "OFF";
-                    viewCon.style.display = "none";
-                    viewDisc.style.display = "flex";
+                    badge.className = "px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500 border border-gray-200"; badge.innerText = "OFF";
+                    viewCon.style.display = "none"; viewDisc.style.display = "flex";
                 }
             }
         }
 
-        async function startConnect(slot) {
-            activeConnections.add(slot);
-            const btn = document.getElementById(`btn-${slot}`),
-                qrArea = document.getElementById(`qr-area-${slot}`),
-                qrCanvas = document.getElementById(`qr-canvas-${slot}`);
-            btn.classList.add("hidden");
-            qrArea.classList.remove("hidden");
-            qrArea.classList.add("flex");
-            qrCanvas.innerHTML = "";
-            try {
-                const res = await fetch(`/start-whatsapp?locationId=${locationId}&slot=${slot}`, {
-                    method: "POST"
-                });
-                if (!res.ok) throw new Error("Fallo");
-                const localInterval = setInterval(async () => {
-                    if (!document.getElementById(`card-${slot}`)) {
-                        clearInterval(localInterval);
-                        return;
-                    }
-                    const s = await fetch(`/status?locationId=${locationId}&slot=${slot}`).then(r => r.json());
-                    if (s.connected) {
-                        clearInterval(localInterval);
-                        connectionIntervals.delete(slot);
-                        activeConnections.delete(slot);
-                        window.location.reload();
-                        return;
-                    }
-                    const q = await fetch(`/qr?locationId=${locationId}&slot=${slot}`).then(r => r.json());
-                    if (q.qr && qrCanvas.innerHTML === "") {
-                        document.getElementById(`msg-${slot}`).innerHTML = "Escanea con WhatsApp <span class='text-gray-400 font-normal ml-1'>(Menú > Dispositivos)</span>";
-                        new QRCode(qrCanvas, {
-                            text: q.qr,
-                            width: 200,
-                            height: 200,
-                            colorDark: "#1f2937",
-                            colorLight: "#ffffff"
-                        });
-                    }
-                }, 2000);
-                connectionIntervals.set(slot, localInterval);
-            } catch (e) {
-                activeConnections.delete(slot);
-                btn.classList.remove("hidden");
-                qrArea.classList.add("hidden");
-                qrArea.classList.remove("flex");
-                Toast.fire({
-                    icon: 'error',
-                    title: 'Error de conexión'
-                });
-            }
-        }
-
-        async function disconnect(slot) {
-            const r = await Swal.fire({
-                title: '¿Cerrar Sesión?',
-                text: "El bot se detendrá.",
-                icon: 'warning',
-                showCancelButton: true,
-                confirmButtonColor: '#ef4444',
-                cancelButtonColor: '#9ca3af',
-                confirmButtonText: 'Desconectar',
-                cancelButtonText: 'Volver',
-                customClass: {
-                    popup: 'rounded-2xl shadow-2xl',
-                    title: 'text-xl font-bold',
-                    confirmButton: 'rounded-xl px-6 py-2.5',
-                    cancelButton: 'rounded-xl px-6 py-2.5'
-                }
-            });
-            if (r.isConfirmed) {
-                await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, {
-                    method: "POST"
-                });
-                window.location.reload();
-            }
-        }
-
-        async function cancelConnect(slot) {
-            const interval = connectionIntervals.get(slot);
-            if (interval) {
-                clearInterval(interval);
-                connectionIntervals.delete(slot);
-            }
-            activeConnections.delete(slot);
-            document.getElementById(`qr-area-${slot}`).classList.add("hidden");
-            document.getElementById(`qr-area-${slot}`).classList.remove("flex");
-            document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
-            document.getElementById(`btn-${slot}`).classList.remove("hidden");
-            await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, {
-                method: "POST"
-            });
-        }
-
-        function showBlockedScreen(r) {
-            let msg = "Su cuenta no está activa.";
-            if (r === "trial_expired") msg = "Su periodo de prueba ha finalizado.";
-            else if (r === "subscription_inactive") msg = "Suscripción inactiva.";
-            document.body.innerHTML = `<div class="fixed inset-0 bg-gray-50 flex items-center justify-center p-6"><div class="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full text-center border border-gray-100"><div class="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500 text-4xl shadow-inner">🔒</div><h2 class="text-2xl font-extrabold text-gray-900 mb-2">Acceso Restringido</h2><p class="text-gray-500 mb-8 leading-relaxed">${msg}</p><a href="https://wa.clicandapp.com" class="block w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl hover:bg-indigo-700 transition shadow-lg shadow-indigo-200">Contactar Soporte</a></div></div>`;
-        }
+        // Resto de funciones (Change, Edit, Connect, Disconnect) - MISMAS DE SIEMPRE
+        async function changePriority(slotId, newPriority) { try { await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, priority: parseInt(newPriority) }) }); setTimeout(() => window.location.reload(), 300); } catch (e) { Toast.fire({ icon: 'error', title: 'Error' }); } }
+        async function changeResponsible(slotId, userId) { try { const res = await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, assignedUser: userId }) }); if (res.ok) Toast.fire({ icon: 'success', title: 'Guardado' }); } catch (e) { Toast.fire({ icon: 'error', title: 'Error' }); } }
+        async function editSlotName(slot) { const currentName = document.getElementById(`title-text-${slot}`).textContent.trim(); const { value: newName } = await Swal.fire({ title: 'Nombre', input: 'text', inputValue: currentName, showCancelButton: true, confirmButtonText: 'Guardar', confirmButtonColor: '#4f46e5', customClass: { popup: 'rounded-2xl', confirmButton: 'rounded-xl px-5', cancelButton: 'rounded-xl px-5' } }); if (newName && newName !== currentName) { document.getElementById(`title-text-${slot}`).textContent = newName; await fetch("/config-slot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ locationId, slot, slotName: newName }) }); Toast.fire({ icon: 'success', title: 'Actualizado' }); } }
+        async function startConnect(slot) { activeConnections.add(slot); const btn = document.getElementById(`btn-${slot}`), qrArea = document.getElementById(`qr-area-${slot}`), qrCanvas = document.getElementById(`qr-canvas-${slot}`); btn.classList.add("hidden"); qrArea.classList.remove("hidden"); qrArea.classList.add("flex"); qrCanvas.innerHTML = ""; try { const res = await fetch(`/start-whatsapp?locationId=${locationId}&slot=${slot}`, { method: "POST" }); if (!res.ok) throw new Error("Fallo"); const localInterval = setInterval(async () => { if (!document.getElementById(`card-${slot}`)) { clearInterval(localInterval); return; } const s = await fetch(`/status?locationId=${locationId}&slot=${slot}`).then(r => r.json()); if (s.connected) { clearInterval(localInterval); connectionIntervals.delete(slot); activeConnections.delete(slot); window.location.reload(); return; } const q = await fetch(`/qr?locationId=${locationId}&slot=${slot}`).then(r => r.json()); if (q.qr && qrCanvas.innerHTML === "") { document.getElementById(`msg-${slot}`).innerHTML = "Escanea con WhatsApp <span class='text-gray-400 font-normal ml-1'>(Menú > Dispositivos)</span>"; new QRCode(qrCanvas, { text: q.qr, width: 200, height: 200, colorDark: "#1f2937", colorLight: "#ffffff" }); } }, 2000); connectionIntervals.set(slot, localInterval); } catch (e) { activeConnections.delete(slot); btn.classList.remove("hidden"); qrArea.classList.add("hidden"); qrArea.classList.remove("flex"); Toast.fire({ icon: 'error', title: 'Error de conexión' }); } }
+        async function disconnect(slot) { const r = await Swal.fire({ title: '¿Cerrar Sesión?', text: "El bot se detendrá.", icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#9ca3af', confirmButtonText: 'Desconectar', cancelButtonText: 'Volver', customClass: { popup: 'rounded-2xl shadow-2xl', title: 'text-xl font-bold', confirmButton: 'rounded-xl px-6 py-2.5', cancelButton: 'rounded-xl px-6 py-2.5' } }); if (r.isConfirmed) { await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" }); window.location.reload(); } }
+        async function cancelConnect(slot) { const interval = connectionIntervals.get(slot); if (interval) { clearInterval(interval); connectionIntervals.delete(slot); } activeConnections.delete(slot); document.getElementById(`qr-area-${slot}`).classList.add("hidden"); document.getElementById(`qr-area-${slot}`).classList.remove("flex"); document.getElementById(`qr-canvas-${slot}`).innerHTML = ""; document.getElementById(`btn-${slot}`).classList.remove("hidden"); await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" }); }
+        function showBlockedScreen(r) { document.body.innerHTML = `<div class="fixed inset-0 bg-gray-50 flex items-center justify-center p-6"><div class="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full text-center border border-gray-100"><div class="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500 text-4xl shadow-inner">🔒</div><h2 class="text-2xl font-extrabold text-gray-900 mb-2">Acceso Restringido</h2><p class="text-gray-500 mb-8 leading-relaxed">Su cuenta no está activa.</p></div></div>`; }
 
         init();
     </script>
