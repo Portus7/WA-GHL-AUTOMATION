@@ -290,7 +290,7 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
 
                 // 1. Tag Fijo "another-device"
                 try {
-                    await addTagToContact(locationId, contact.id, "another");
+                    await addTagToContact(locationId, contact.id, "another device");
                     console.log("✅ Tag 'another-device' asignado.");
                 } catch (e) {
                     console.error("❌ Error asignando tag another-device:", e.message);
