@@ -433,6 +433,48 @@ app.put("/agency/settings/:locationId", verifyToken, async (req, res) => {
     try { await pool.query("UPDATE tenants SET settings=$1::jsonb WHERE location_id=$2", [JSON.stringify(req.body.settings), req.params.locationId]); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ✅ ELIMINAR SUBCUENTA COMPLETA (Liberar Licencia)
+app.delete("/agency/tenants/:locationId", verifyToken, async (req, res) => {
+    const { locationId } = req.params;
+
+    // Seguridad: Verificar que la location pertenece a la agencia del usuario
+    const userId = req.user.id;
+    try {
+        const userRes = await pool.query("SELECT agency_id FROM users WHERE id = $1", [userId]);
+        const myAgencyId = userRes.rows[0]?.agency_id;
+
+        // Verificar propiedad
+        const tenantRes = await pool.query("SELECT agency_id FROM tenants WHERE location_id = $1", [locationId]);
+        if (tenantRes.rows.length === 0) return res.status(404).json({ error: "Subcuenta no encontrada" });
+
+        if (tenantRes.rows[0].agency_id !== myAgencyId && req.user.role !== 'admin') {
+            return res.status(403).json({ error: "No tienes permiso sobre esta subcuenta" });
+        }
+
+        console.log(`🗑️ Eliminando subcuenta y liberando recursos: ${locationId}`);
+
+        // 1. Obtener y desconectar todos los slots activos
+        const slotsRes = await pool.query("SELECT slot_id FROM location_slots WHERE location_id = $1", [locationId]);
+        for (const row of slotsRes.rows) {
+            await deleteSessionData(locationId, row.slot_id, true); // true = borrar slot de DB
+        }
+
+        // 2. Eliminar datos asociados (Routing, Keywords, Auth)
+        await pool.query("DELETE FROM phone_routing WHERE location_id = $1", [locationId]);
+        await pool.query("DELETE FROM keyword_tags WHERE location_id = $1", [locationId]);
+        await pool.query("DELETE FROM auth_db WHERE locationid = $1", [locationId]);
+
+        // 3. Finalmente eliminar el Tenant (Esto libera el cupo en el conteo)
+        await pool.query("DELETE FROM tenants WHERE location_id = $1", [locationId]);
+
+        res.json({ success: true, message: "Subcuenta eliminada y cupo liberado." });
+
+    } catch (e) {
+        console.error("Error borrando tenant:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Admin Support Routes
 app.post("/admin/support/start", verifyToken, requireRole('admin'), async (req, res) => {
     try { await startWhatsApp(SUPPORT_LOC_ID, SUPPORT_SLOT_ID); res.json({ success: true, message: "Iniciando..." }); } catch (e) { res.status(500).json({ error: e.message }); }
