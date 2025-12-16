@@ -127,6 +127,11 @@ async function handleIncomingMessage(msg, sock, locationId, _poolArg, botMessage
         }
     }
 
+    if (remoteJid && remoteJid.includes("@lid")) {
+        console.log(`Ignorando evento LID para evitar duplicados: ${remoteJid}`);
+        return;
+    }
+
     // Filtros básicos
     if (!remoteJid || remoteJid.includes("status@") || remoteJid.includes("@newsletter")) return;
 
