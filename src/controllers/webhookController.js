@@ -18,42 +18,42 @@ const STRIPE_CONFIG = {
     'price_1SfK827Mhd9qo6A89iZ68SRi': { type: 'addon', name: '+1 Número WhatsApp (VIP)', increment: { slots: 1 } }
 };
 
-// --- HELPER: Recalcular Límites Reales ---
+// --- 1. MODIFICAR CÁLCULO DE LÍMITES ---
 async function recalculateUserLimits(client, userId) {
-    // 1. Obtener todas las suscripciones activas
     const res = await client.query("SELECT stripe_price_id, quantity FROM active_subscriptions WHERE user_id = $1", [userId]);
     const subs = res.rows;
 
-    // Valores por defecto (Trial/Gratis)
-    let totalSubs = 1;
-    let totalSlots = 5;
-    let planStatus = 'trial';
+    // Si tiene suscripciones pagas, empezamos de 0 para sumar lo contratado.
+    // Si no tiene nada, dejamos los valores del Trial (1 y 5).
+    let totalSubs = subs.length > 0 ? 0 : 1;
+    let totalSlots = subs.length > 0 ? 0 : 5;
 
-    // 2. Sumar según configuración
+    // Si tiene al menos una suscripción activa, el estado es 'active'
+    let planStatus = subs.length > 0 ? 'active' : 'trial';
+
     subs.forEach(sub => {
         const config = STRIPE_CONFIG[sub.stripe_price_id];
         if (config) {
-            if (config.type === 'base') {
-                planStatus = 'active';
-                // El plan base define el piso
-                totalSubs = Math.max(totalSubs, config.limits.subagencies);
-                totalSlots = Math.max(totalSlots, config.limits.slots);
-            } else if (config.type === 'addon') {
-                // Los addons suman al total
-                if (config.increment.subagencies) totalSubs += (config.increment.subagencies * sub.quantity);
-                if (config.increment.slots) totalSlots += (config.increment.slots * sub.quantity);
+            // 🔥 CAMBIO CLAVE: Sumamos SIEMPRE, sin importar si es base o addon
+            // Multiplicamos por quantity (por si compran 2 veces el mismo pack en una sola línea)
+            if (config.limits) {
+                totalSubs += (config.limits.subagencies || 0) * sub.quantity;
+                totalSlots += (config.limits.slots || 0) * sub.quantity;
+            }
+            if (config.increment) {
+                totalSubs += (config.increment.subagencies || 0) * sub.quantity;
+                totalSlots += (config.increment.slots || 0) * sub.quantity;
             }
         }
     });
 
-    // 3. Actualizar la tabla Users
+    // Actualizar tabla users
     await client.query(
         "UPDATE users SET max_subagencies = $1, max_slots = $2, plan_status = $3 WHERE id = $4",
         [totalSubs, totalSlots, planStatus, userId]
     );
-    console.log(`🔄 Límites recalculados User ${userId}: Subs=${totalSubs}, Slots=${totalSlots}`);
+    console.log(`🔄 Límites ACUMULADOS User ${userId}: Subs=${totalSubs}, Slots=${totalSlots}`);
 }
-
 // --- HANDLER DEL WEBHOOK ---
 const handleWebhook = async (req, res) => {
     const sig = req.headers['stripe-signature'];
@@ -85,11 +85,10 @@ const handleWebhook = async (req, res) => {
                     await client.query('BEGIN');
 
                     // Si es un plan base nuevo, borramos los anteriores bases para evitar conflictos
-                    if (config.type === 'base') {
-                        await client.query("DELETE FROM active_subscriptions WHERE user_id = $1 AND type = 'base'", [userId]);
-                    }
+                    // if (config.type === 'base') {
+                    //     await client.query("DELETE FROM active_subscriptions WHERE user_id = $1 AND type = 'base'", [userId]);
+                    // }
 
-                    // Insertar en nuestra tabla espejo
                     await client.query(`
                         INSERT INTO active_subscriptions 
                         (user_id, stripe_subscription_id, stripe_price_id, product_name, type, quantity, current_period_end)
