@@ -104,6 +104,7 @@ async function downloadAndSaveMedia(message, type) {
             filePath: filepath
         };
     } catch (e) {
+        console.log("Error en la media:", e)
         console.error("Error descargando media:", e);
         return null;
     }
