@@ -3,7 +3,7 @@ const { pool } = require('../config/db');
 require('dotenv').config();
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-const BASE_URL = process.env.API_PUBLIC_URL || 'http://localhost:5000';
+const BASE_URL = process.env.API_PUBLIC_URL_FRONT;
 
 /**
  * Crea una sesión de Checkout para comprar un plan

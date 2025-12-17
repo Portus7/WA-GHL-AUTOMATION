@@ -11,7 +11,7 @@ const mime = require("mime-types");
 
 const PUBLIC_DIR = path.join(__dirname, "..", "..", "public");
 const MEDIA_DIR = path.join(PUBLIC_DIR, "media");
-const API_PUBLIC_URL = process.env.API_PUBLIC_URL_FRONT
+const API_PUBLIC_URL = process.env.API_PUBLIC_URL || "https://wa.clicandapp.com";
 
 // --- Helpers Internos ---
 
