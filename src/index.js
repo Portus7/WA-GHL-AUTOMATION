@@ -554,6 +554,21 @@ app.get("/config", async (req, res) => {
 app.get("/admin/agencies", verifyToken, requireRole('admin'), async (req, res) => { const q = `SELECT agency_id, MAX(agency_name) as agency_name, COUNT(*) as total_subaccounts, COUNT(CASE WHEN status = 'active' THEN 1 END) as active_subaccounts FROM tenants WHERE agency_id IS NOT NULL GROUP BY agency_id`; const r = await pool.query(q); res.json(r.rows); });
 app.get("/admin/tenants", verifyToken, requireRole('admin'), async (req, res) => { const { agencyId } = req.query; let q = `SELECT t.*, p.name as plan_name FROM tenants t LEFT JOIN subscription_plans p ON t.plan_id = p.id`; const p = []; if (agencyId) { q += " WHERE t.agency_id = $1"; p.push(agencyId); } q += " ORDER BY t.created_at DESC"; const r = await pool.query(q, p); res.json(r.rows); });
 
+
+// ✅ OBTENER SUSCRIPCIONES ACTIVAS (DETALLADO)
+app.get("/payments/my-subscriptions", verifyToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const result = await pool.query(
+            "SELECT * FROM active_subscriptions WHERE user_id = $1 ORDER BY created_at DESC",
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ⏰ CRON JOB SUSPENSIÓN
 setInterval(async () => {
     console.log("⏰ Revisión de trials...");

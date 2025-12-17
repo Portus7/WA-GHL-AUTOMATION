@@ -2,12 +2,12 @@ const { pool } = require("../config/db");
 const bcrypt = require("bcryptjs");
 
 const initDb = async () => {
-  const client = await pool.connect();
-  try {
-    console.log("🛠️ Inicializando Base de Datos SaaS...");
+    const client = await pool.connect();
+    try {
+        console.log("🛠️ Inicializando Base de Datos SaaS...");
 
-    // 1. Tabla de PLANES
-    await client.query(`
+        // 1. Tabla de PLANES
+        await client.query(`
       CREATE TABLE IF NOT EXISTS subscription_plans (
         id SERIAL PRIMARY KEY,
         name VARCHAR(50) NOT NULL UNIQUE,
@@ -18,8 +18,8 @@ const initDb = async () => {
       );
     `);
 
-    // Seed de planes
-    await client.query(`
+        // Seed de planes
+        await client.query(`
       INSERT INTO subscription_plans (name, price, features) 
       VALUES 
       ('trial', 0, '{"white_label": false, "auto_create_contacts": true}'),
@@ -27,8 +27,8 @@ const initDb = async () => {
       ON CONFLICT (name) DO NOTHING;
     `);
 
-    // 2. Tabla de CLIENTES (TENANTS) - Con soporte para Agency ID
-    await client.query(`
+        // 2. Tabla de CLIENTES (TENANTS) - Con soporte para Agency ID
+        await client.query(`
       CREATE TABLE IF NOT EXISTS tenants (
         location_id VARCHAR(255) PRIMARY KEY,
         name VARCHAR(255),
@@ -49,8 +49,8 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_tenants_agency ON tenants(agency_id);
     `);
 
-    // 3. Tabla Tokens GHL (auth_db)
-    await client.query(`
+        // 3. Tabla Tokens GHL (auth_db)
+        await client.query(`
       CREATE TABLE IF NOT EXISTS auth_db (
         locationid VARCHAR(255) PRIMARY KEY REFERENCES tenants(location_id) ON DELETE CASCADE,
         raw_token JSONB NOT NULL,
@@ -59,8 +59,8 @@ const initDb = async () => {
       );
     `);
 
-    // 4. Tabla Sesiones Baileys
-    await client.query(`
+        // 4. Tabla Sesiones Baileys
+        await client.query(`
       CREATE TABLE IF NOT EXISTS baileys_auth (
         session_id VARCHAR(128) NOT NULL,
         key_id VARCHAR(128) NOT NULL,
@@ -70,8 +70,8 @@ const initDb = async () => {
       );
     `);
 
-    // 5. Tabla Routing
-    await client.query(`
+        // 5. Tabla Routing
+        await client.query(`
       CREATE TABLE IF NOT EXISTS phone_routing (
         phone VARCHAR(50) PRIMARY KEY,
         location_id VARCHAR(255) NOT NULL, 
@@ -83,8 +83,8 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_routing_location ON phone_routing(location_id);
     `);
 
-    // 6. Tabla Configuración Slots (Dispositivos)
-    await client.query(`
+        // 6. Tabla Configuración Slots (Dispositivos)
+        await client.query(`
       CREATE TABLE IF NOT EXISTS location_slots (
         location_id VARCHAR(255) REFERENCES tenants(location_id) ON DELETE CASCADE,
         agency_id VARCHAR(255),
@@ -104,8 +104,8 @@ const initDb = async () => {
       );
     `);
 
-    // 7. Tabla Keywords
-    await client.query(`
+        // 7. Tabla Keywords
+        await client.query(`
       CREATE TABLE IF NOT EXISTS keyword_tags (
         id SERIAL PRIMARY KEY,
         location_id TEXT NOT NULL, 
@@ -116,7 +116,7 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_keyword_tags_location ON keyword_tags(location_id);
     `);
 
-    await client.query(`
+        await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         email VARCHAR(255) UNIQUE NOT NULL,
@@ -138,24 +138,39 @@ const initDb = async () => {
       );
     `);
 
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS active_subscriptions (
+        id SERIAL PRIMARY KEY,
+        user_id INT REFERENCES users(id) ON DELETE CASCADE,
+        stripe_subscription_id VARCHAR(255), -- ID de la suscripción en Stripe (sub_...)
+        stripe_price_id VARCHAR(255),        -- ID del precio (price_...)
+        product_name VARCHAR(255),           -- Nombre legible (ej: "Agencia Pro")
+        type VARCHAR(50),                    -- 'base' o 'addon'
+        quantity INT DEFAULT 1,              -- Cantidad (útil para addons)
+        status VARCHAR(50) DEFAULT 'active', -- active, past_due, canceled
+        current_period_end TIMESTAMP,        -- Fecha de renovación
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_subs_user ON active_subscriptions(user_id);
+    `);
 
-    // CREAR USUARIO ADMIN POR DEFECTO
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash("admin123", salt);
+        // CREAR USUARIO ADMIN POR DEFECTO
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash("admin123", salt);
 
-    await client.query(`
+        await client.query(`
       INSERT INTO users (email, password_hash, role)
       VALUES ('admin@clicandapp.com', '${hashedPassword}', 'admin')
       ON CONFLICT (email) DO NOTHING;
     `);
 
-    console.log("✅ Base de Datos SaaS verificada y lista.");
-  } catch (error) {
-    console.error("❌ Error DB init:", error);
-    throw error;
-  } finally {
-    client.release();
-  }
+        console.log("✅ Base de Datos SaaS verificada y lista.");
+    } catch (error) {
+        console.error("❌ Error DB init:", error);
+        throw error;
+    } finally {
+        client.release();
+    }
 };
 
 module.exports = { initDb };
