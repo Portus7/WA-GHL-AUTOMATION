@@ -32,7 +32,7 @@ async function getTenantConfig(locationId) {
 }
 
 // 2. Registrar un nuevo cliente (Webhook INSTALL)
-async function registerNewTenant(locationId, companyId, initialStatus = 'active') {
+async function registerNewTenant(locationId, companyId, initialStatus = 'active', subscriptionId = null) {
     try {
         console.log(`📥 Procesando instalación para Location: ${locationId}, Agency: ${companyId}, Status: ${initialStatus}`);
 

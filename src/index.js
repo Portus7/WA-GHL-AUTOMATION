@@ -128,7 +128,7 @@ app.post("/auth/register", async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// WEBHOOK GHL APP INSTALL (Con Protección de Límites)
+// WEBHOOK GHL APP INSTALL
 app.post("/ghl/app-webhook", async (req, res) => {
     try {
         const evt = req.body;
@@ -136,6 +136,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
 
         if (evt.type === "INSTALL") {
             try {
+                // ... (Lógica de OAuth de GHL se mantiene igual) ...
                 const at = await ensureAgencyToken();
                 const ats = await getTokens(AGENCY_ROW_ID);
                 const lr = await axios.post("https://services.leadconnectorhq.com/oauth/locationToken", new URLSearchParams({ companyId: evt.companyId, locationId: evt.locationId }).toString(), { headers: { Authorization: `Bearer ${at}`, Version: GHL_API_VERSION, "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } });
@@ -143,22 +144,32 @@ app.post("/ghl/app-webhook", async (req, res) => {
                 await callGHLWithAgency({ method: "post", url: "https://services.leadconnectorhq.com/custom-menus/", data: { title: "WhatsApp - Clic&App", url: `${CUSTOM_MENU_URL_WA}?location_id=${evt.locationId}`, showOnCompany: false, showOnLocation: true, showToAllLocations: false, locations: [evt.locationId], openMode: "iframe", userRole: "all", allowCamera: false, allowMicrophone: false, icon: { name: "whatsapp", fontFamily: "fab" } } });
             } catch (errGHL) { console.error("❌ Error flujo GHL:", errGHL.message); }
 
-            // --- PROTECCIÓN DE LÍMITES ---
+            // --- PROTECCIÓN DE LÍMITES Y ASIGNACIÓN DE PLAN ---
             let statusToRegister = 'active';
+            let assignedSubscriptionId = null; // 1. Creamos la variable vacía
+
             try {
                 const userRes = await pool.query("SELECT id FROM users WHERE agency_id = $1", [evt.companyId]);
                 if (userRes.rows.length > 0) {
+                    // canCreateTenant ahora devuelve { allowed, reason, subscriptionId }
                     const check = await canCreateTenant(userRes.rows[0].id);
+
                     if (!check.allowed) {
                         console.warn(`⛔ Bloqueando instalación: ${check.reason}`);
                         statusToRegister = 'suspended';
+                    } else {
+                        // 2. Si está permitido, capturamos el ID de la suscripción que tiene hueco
+                        assignedSubscriptionId = check.subscriptionId;
                     }
                 }
             } catch (errCheck) { console.error("Error límites:", errCheck); }
 
-            await registerNewTenant(evt.locationId, evt.companyId, statusToRegister);
+            // 3. Pasamos la variable correcta (NO evt.subscriptionId)
+            await registerNewTenant(evt.locationId, evt.companyId, statusToRegister, assignedSubscriptionId);
+
             return res.json({ ok: true });
         }
+
         if (evt.type === "UNINSTALL") {
             await pool.query("UPDATE tenants SET status = 'cancelled' WHERE location_id = $1", [evt.locationId]);
             return res.json({ ok: true });
@@ -166,7 +177,6 @@ app.post("/ghl/app-webhook", async (req, res) => {
         res.json({ ignored: true });
     } catch (e) { res.status(500).json({ error: "Error procesando webhook" }); }
 });
-
 // WEBHOOK MENSAJERÍA (Con {{W#ID}} y Favoritos)
 app.post("/ghl/webhook", async (req, res) => {
     try {
