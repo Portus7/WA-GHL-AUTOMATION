@@ -5,6 +5,48 @@ const { pool } = require("../config/db");
 const JWT_SECRET = process.env.JWT_SECRET || false;
 if (!JWT_SECRET) throw new Error("JWT_SECRET no definido");
 
+
+// ✅ NUEVA FUNCIÓN: CAMBIAR CONTRASEÑA
+async function changePassword(req, res) {
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user.id;
+
+    if (!currentPassword || !newPassword) {
+        return res.status(400).json({ error: "Faltan datos." });
+    }
+
+    if (newPassword.length < 6) {
+        return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres." });
+    }
+
+    try {
+        // 1. Buscar usuario
+        const result = await pool.query("SELECT password_hash FROM users WHERE id = $1", [userId]);
+        const user = result.rows[0];
+
+        if (!user) return res.status(404).json({ error: "Usuario no encontrado." });
+
+        // 2. Verificar contraseña actual
+        const validPass = await bcrypt.compare(currentPassword, user.password_hash);
+        if (!validPass) {
+            return res.status(401).json({ error: "La contraseña actual es incorrecta." });
+        }
+
+        // 3. Hashear nueva contraseña
+        const salt = await bcrypt.genSalt(10);
+        const newHash = await bcrypt.hash(newPassword, salt);
+
+        // 4. Actualizar DB
+        await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [newHash, userId]);
+
+        res.json({ success: true, message: "Contraseña actualizada correctamente." });
+
+    } catch (e) {
+        console.error("Error cambiando password:", e);
+        res.status(500).json({ error: "Error interno del servidor." });
+    }
+}
+
 // 1. Login
 async function login(req, res) {
     const { email, password } = req.body;
@@ -75,4 +117,4 @@ const requireRole = (role) => {
     };
 };
 
-module.exports = { login, verifyToken, requireRole };
+module.exports = { login, verifyToken, requireRole, changePassword };

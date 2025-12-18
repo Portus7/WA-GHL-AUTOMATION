@@ -9,7 +9,7 @@ const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
 const rateLimit = require("express-rate-limit");
 
-const { login, verifyToken, requireRole } = require("./controllers/authController");
+const { login, verifyToken, requireRole, changePassword } = require("./controllers/authController");
 const { startMediaCleanup } = require("./services/mediaCleanup");
 
 // --- SERVICIOS WA ---
@@ -151,6 +151,7 @@ app.use("/qr", pollingLimiter);
 // ==========================================
 // 🔓 RUTAS PÚBLICAS
 // ==========================================
+app.post("/auth/change-password", verifyToken, changePassword);
 
 app.post("/auth/login", login);
 
