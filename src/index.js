@@ -568,6 +568,7 @@ app.get("/payments/my-subscriptions", verifyToken, async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+app.post("/payments/update-plan", verifyToken, updatePlan);
 
 // ⏰ CRON JOB SUSPENSIÓN
 setInterval(async () => {

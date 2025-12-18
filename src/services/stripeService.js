@@ -3,63 +3,63 @@ const { pool } = require('../config/db');
 require('dotenv').config();
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-const BASE_URL = process.env.API_PUBLIC_URL_FRONT;
+// Ajusta esto a tu URL real del frontend
+const BASE_URL = process.env.API_PUBLIC_URL_FRONT || 'https://clicandapp-frontend-web-wa.aqdlt2.easypanel.host';
 
-/**
- * Crea una sesión de Checkout para comprar un plan
- * @param {string} userId - ID interno del usuario (agencia)
- * @param {string} priceId - ID del precio en Stripe (price_...)
- */
 async function createCheckoutSession(userId, priceId) {
-    // 1. Obtener datos del usuario
     const userRes = await pool.query("SELECT email, stripe_customer_id FROM users WHERE id = $1", [userId]);
     const user = userRes.rows[0];
     if (!user) throw new Error("Usuario no encontrado");
 
     let customerId = user.stripe_customer_id;
-
-    // 2. Si no tiene ID de Stripe, lo creamos
     if (!customerId) {
-        const customer = await stripe.customers.create({
-            email: user.email,
-            metadata: { userId: userId.toString() } // Importante para el webhook
-        });
+        const customer = await stripe.customers.create({ email: user.email, metadata: { userId: userId.toString() } });
         customerId = customer.id;
         await pool.query("UPDATE users SET stripe_customer_id = $1 WHERE id = $2", [customerId, userId]);
     }
 
-    // 3. Crear sesión
     const session = await stripe.checkout.sessions.create({
         customer: customerId,
         mode: 'subscription',
         payment_method_types: ['card'],
         line_items: [{ price: priceId, quantity: 1 }],
-        success_url: `${BASE_URL}/admin/agency/dashboard?payment=success`, // Ajusta esta URL a tu frontend
+        success_url: `${BASE_URL}/admin/agency/dashboard?payment=success`,
         cancel_url: `${BASE_URL}/admin/agency/dashboard?payment=cancelled`,
-        metadata: {
-            userId: userId.toString(),
-            type: 'plan_subscription'
-        }
+        metadata: { userId: userId.toString() }
     });
-
     return session.url;
 }
 
-/**
- * Crea enlace al Portal de Cliente (Para cancelar, ver facturas, cambiar tarjeta)
- */
 async function createPortalSession(userId) {
     const userRes = await pool.query("SELECT stripe_customer_id FROM users WHERE id = $1", [userId]);
-    const customerId = userRes.rows[0]?.stripe_customer_id;
-
-    if (!customerId) throw new Error("No tienes una cuenta de facturación asociada.");
-
-    const portalSession = await stripe.billingPortal.sessions.create({
-        customer: customerId,
+    if (!userRes.rows[0]?.stripe_customer_id) throw new Error("Sin cuenta de facturación.");
+    const session = await stripe.billingPortal.sessions.create({
+        customer: userRes.rows[0].stripe_customer_id,
         return_url: `${BASE_URL}/admin/agency/dashboard`,
     });
-
-    return portalSession.url;
+    return session.url;
 }
 
-module.exports = { createCheckoutSession, createPortalSession, stripe };
+// ✅ NUEVA FUNCIÓN: CAMBIO DE PLAN IN-APP
+async function changeSubscriptionPlan(userId, subscriptionId, newPriceId) {
+    // 1. Verificar que la suscripción pertenezca al usuario en nuestra DB
+    const subRes = await pool.query(
+        "SELECT stripe_subscription_id FROM active_subscriptions WHERE user_id = $1 AND stripe_subscription_id = $2",
+        [userId, subscriptionId]
+    );
+    if (subRes.rows.length === 0) throw new Error("Suscripción no válida.");
+
+    // 2. Obtener el item de la suscripción en Stripe
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    const itemId = subscription.items.data[0].id;
+
+    // 3. Aplicar el cambio (Cobra/Devuelve la diferencia al instante)
+    const updated = await stripe.subscriptions.update(subscriptionId, {
+        items: [{ id: itemId, price: newPriceId }],
+        proration_behavior: 'always_invoice',
+    });
+
+    return updated;
+}
+
+module.exports = { createCheckoutSession, createPortalSession, changeSubscriptionPlan, stripe };
