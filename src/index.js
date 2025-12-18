@@ -71,6 +71,7 @@ const ALLOWED_ORIGINS = [
     "https://app.gohighlevel.com",
     "https://services.leadconnectorhq.com",
     "https://leadconnectorhq.com",
+    "https://wa.clicandapp.com",
     process.env.API_PUBLIC_URL_FRONT, // Tu frontend administrativo
     // Agrega aquí otros dominios de GHL si usas marca blanca (ej: app.tudominio.com)
 ];
