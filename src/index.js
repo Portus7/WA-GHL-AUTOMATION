@@ -135,6 +135,10 @@ app.post("/ghl/app-webhook", async (req, res) => {
         console.log("🔔 Webhook App recibido:", JSON.stringify(evt));
 
         if (evt.type === "INSTALL") {
+            if (!evt.locationId) {
+                console.log("ℹ️ Instalación de Agencia detectada. No se requiere acción de tenant.");
+                return res.json({ ok: true });
+            }
             try {
                 // ... (Lógica de OAuth de GHL se mantiene igual) ...
                 const at = await ensureAgencyToken();
