@@ -9,7 +9,7 @@ const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
 const rateLimit = require("express-rate-limit");
 
-const { login, verifyToken, requireRole } = require("./controllers/authController");
+const { login, verifyToken, requireRole, updatePlan } = require("./controllers/authController");
 const { startMediaCleanup } = require("./services/mediaCleanup");
 
 // --- SERVICIOS WA ---
