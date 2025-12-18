@@ -10,7 +10,10 @@ const STRIPE_CONFIG = {
 
     // Addons (Solo Slots Extras)
     'price_1SfK787Mhd9qo6A8WmPRs9Zy': { type: 'addon', name: '+1 Número WhatsApp', increment: { slots: 1 } },
-    'price_1SfK827Mhd9qo6A89iZ68SRi': { type: 'addon', name: '+1 Número WhatsApp (VIP)', increment: { slots: 1 } }
+    'price_1SfK827Mhd9qo6A89iZ68SRi': { type: 'addon', name: '+1 Número WhatsApp (VIP)', increment: { slots: 1 } },
+
+    'price_1SfK547Mhd9qo6A8SfvT8GF4': { type: 'addon', name: 'Subcuenta Extra (VIP)', limits: { subagencies: 1, slots: 5 } }
+
 };
 
 // --- Lógica de ACUMULACIÓN ---
