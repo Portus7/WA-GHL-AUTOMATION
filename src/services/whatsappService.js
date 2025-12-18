@@ -11,7 +11,7 @@ const { handleIncomingMessage } = require("./messageHandler");
 
 // Estado Global
 const sessions = new Map();
-const botMessageIds = new Set(); // Cache de IDs procesados (Entrantes y Salientes)
+const botMessageIds = new Map(); // Usamos Map para guardar ID -> Timestamp
 
 // Constantes
 const SUPPORT_LOC_ID = "__SYSTEM_SUPPORT__";
@@ -43,10 +43,22 @@ setInterval(() => {
     // 2. Limpiar cache de IDs de mensajes (Evitar consumo infinito de RAM)
     // Reiniciamos el Set si tiene demasiados elementos (ej: > 10,000)
     // Esto es seguro porque los duplicados ocurren en segundos, no horas después.
-    if (botMessageIds.size > 10000) {
-        console.log("🧹 Limpiando caché de IDs de mensajes...");
+    const ID_TTL = 5 * 60 * 1000; // 5 minutos
+
+    if (botMessageIds.size > 0) {
+        for (const [id, timestamp] of botMessageIds.entries()) {
+            if (now - timestamp > ID_TTL) {
+                botMessageIds.delete(id);
+            }
+        }
+    }
+
+    // Seguridad extra: Si por algún ataque masivo supera 50k, limpiamos agresivamente
+    if (botMessageIds.size > 50000) {
+        console.warn("⚠️ Cache de IDs saturado, limpieza forzada.");
         botMessageIds.clear();
     }
+
 }, CLEANUP_INTERVAL);
 
 
@@ -94,7 +106,8 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
         }
 
         const msg = await sock.sendInteractiveMessage(jid, payload);
-        if (msg?.key?.id) botMessageIds.add(msg.key.id);
+        if (msg?.key?.id) botMessageIds.set(msg.key.id, Date.now());
+
         return msg;
 
     } catch (e) {
@@ -115,7 +128,7 @@ async function sendInteractiveMessage(sock, jid, parsedData) {
         menuText += `\n\n_${footer || "Responde con el número de tu opción."}_`;
 
         const fallbackMsg = await sock.sendMessage(jid, { text: menuText });
-        if (fallbackMsg?.key?.id) botMessageIds.add(fallbackMsg.key.id);
+        if (fallbackMsg?.key?.id) botMessageIds.set(fallbackMsg.key.id, Date.now());
         return fallbackMsg;
     }
 }

@@ -3,7 +3,7 @@ const { pool } = require("../config/db");
 const { normalizePhone } = require("../helpers/utils");
 
 const GHL_API_VERSION = process.env.GHL_API_VERSION || "2021-07-28";
-
+const refreshPromises = new Map();
 // --- Helpers de Tokens ---
 
 async function saveTokens(locationId, tokenData) {
@@ -24,26 +24,49 @@ async function ensureAgencyToken() {
 }
 
 async function forceRefreshToken(locationId) {
-    console.log(`🔄 Refrescando token forzado para: ${locationId}`);
-    const tokens = await getTokens(locationId);
-    if (!tokens) throw new Error(`No hay tokens para ${locationId}`);
-    try {
-        const body = new URLSearchParams({
-            client_id: process.env.GHL_CLIENT_ID,
-            client_secret: process.env.GHL_CLIENT_SECRET,
-            grant_type: "refresh_token",
-            refresh_token: tokens.locationAccess.refresh_token
-        });
-        const res = await axios.post("https://services.leadconnectorhq.com/oauth/token", body.toString(), {
-            headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }
-        });
-        const newToken = res.data;
-        await saveTokens(locationId, { ...tokens, locationAccess: newToken });
-        return newToken.access_token;
-    } catch (e) {
-        console.error(`❌ Error refresh token: ${e.message}`);
-        throw e;
+    // 1. VERIFICAR BLOQUEO: Si ya hay un refresh en curso, devolvemos esa misma promesa.
+    if (refreshPromises.has(locationId)) {
+        console.log(`⏳ Esperando refresh token en curso para: ${locationId}`);
+        return refreshPromises.get(locationId);
     }
+
+    // 2. CREAR PROMESA DE REFRESH
+    const refreshTask = (async () => {
+        try {
+            console.log(`🔄 Iniciando refresco de token para: ${locationId}`);
+            const tokens = await getTokens(locationId);
+            if (!tokens) throw new Error(`No hay tokens para ${locationId}`);
+
+            const body = new URLSearchParams({
+                client_id: process.env.GHL_CLIENT_ID,
+                client_secret: process.env.GHL_CLIENT_SECRET,
+                grant_type: "refresh_token",
+                refresh_token: tokens.locationAccess.refresh_token
+            });
+
+            const res = await axios.post("https://services.leadconnectorhq.com/oauth/token", body.toString(), {
+                headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }
+            });
+
+            const newToken = res.data;
+            await saveTokens(locationId, { ...tokens, locationAccess: newToken });
+            console.log(`✅ Token refrescado con éxito para: ${locationId}`);
+
+            return newToken.access_token;
+
+        } catch (e) {
+            console.error(`❌ Error en refresh token (${locationId}): ${e.message}`);
+            throw e;
+        } finally {
+            // 3. LIBERAR BLOQUEO: Pase lo que pase (éxito o error), limpiamos el mapa.
+            refreshPromises.delete(locationId);
+        }
+    })();
+
+    // Guardamos la promesa en el mapa
+    refreshPromises.set(locationId, refreshTask);
+
+    return refreshTask;
 }
 
 async function ensureLocationToken(locationId) {

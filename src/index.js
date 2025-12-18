@@ -67,6 +67,14 @@ const AGENCY_ROW_ID = "__AGENCY__";
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const MEDIA_DIR = path.join(PUBLIC_DIR, "media");
 
+const ALLOWED_ORIGINS = [
+    "https://app.gohighlevel.com",
+    "https://services.leadconnectorhq.com",
+    "https://leadconnectorhq.com",
+    process.env.API_PUBLIC_URL_FRONT, // Tu frontend administrativo
+    // Agrega aquí otros dominios de GHL si usas marca blanca (ej: app.tudominio.com)
+];
+
 if (!fs.existsSync(MEDIA_DIR)) {
     fs.mkdirSync(MEDIA_DIR, { recursive: true });
 }
@@ -90,10 +98,35 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 app.use(express.static(PUBLIC_DIR));
 
 app.use(cors({
-    origin: "*",
+    origin: function (origin, callback) {
+        // Permitir peticiones sin origen (como móviles o curl) SOLO si no es navegador,
+        // pero para mayor seguridad en API pública, mejor filtrar estrictamente.
+        if (!origin) return callback(null, true);
+
+        if (ALLOWED_ORIGINS.some(domain => origin.includes(domain)) || origin.includes("localhost")) {
+            callback(null, true);
+        } else {
+            console.warn(`⛔ Bloqueo CORS para origen: ${origin}`);
+            callback(new Error('No permitido por CORS'));
+        }
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
+
+const requireIframeSecurity = (req, res, next) => {
+    const origin = req.headers['origin'] || req.headers['referer'];
+    const isAllowed = origin && (
+        ALLOWED_ORIGINS.some(domain => origin.includes(domain)) ||
+        origin.includes("localhost")
+    );
+
+    if (!isAllowed) {
+        return res.status(403).json({ error: "Acceso denegado: Origen no autorizado." });
+    }
+    next();
+};
 
 // ==========================================
 // 🛡️ RATE LIMITING
@@ -519,11 +552,11 @@ app.delete("/admin/support/disconnect", verifyToken, requireRole('admin'), async
 // 🌍 RUTAS PÚBLICAS IFRAME
 // ==========================================
 
-app.get("/public/ghl-users", async (req, res) => {
+app.get("/public/ghl-users", requireIframeSecurity, async (req, res) => {
     try { const { locationId } = req.query; if (!locationId) return res.status(400).json({ error: "Falta locationId" }); const users = await getLocationUsers(locationId); res.json(users.map(u => ({ id: u.id, name: u.name }))); } catch (e) { res.status(500).json({ error: "Error obteniendo usuarios" }); }
 });
 
-app.post("/public/update-slot-config", async (req, res) => {
+app.post("/public/update-slot-config", requireIframeSecurity, async (req, res) => {
     const { locationId, slotId, priority, assignedUser, isFavorite } = req.body;
     try {
         if (priority) {
@@ -550,13 +583,13 @@ app.post("/public/update-slot-config", async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post("/start-whatsapp", async (req, res) => { try { await startWhatsApp(req.query.locationId, req.query.slot); res.json({ success: true }); } catch (e) { res.status(500).json({ error: "Error" }); } });
-app.get("/qr", (req, res) => { const s = sessions.get(`${req.query.locationId}_slot${req.query.slot}`); if (s && s.qr) res.json({ qr: s.qr }); else res.status(404).json({ error: "No QR" }); });
-app.get("/status", async (req, res) => { const s = sessions.get(`${req.query.locationId}_slot${req.query.slot}`); let extra = {}; try { const r = await pool.query("SELECT * FROM location_slots WHERE location_id=$1 AND slot_id=$2", [req.query.locationId, req.query.slot]); if (r.rows.length) extra = r.rows[0]; } catch (e) { } res.json({ connected: s?.isConnected || false, myNumber: s?.myNumber, slotName: extra.slot_name, priority: extra.priority, settings: extra.settings, is_favorite: extra.is_favorite }); });
-app.post("/remove-slot", async (req, res) => { try { const locationId = req.query.locationId; const slot = req.query.slot; if (!locationId || !slot) return res.status(400).json({ error: "Faltan parámetros" }); await deleteSessionData(locationId, slot); res.json({ success: true }); } catch (e) { res.status(500).json({ error: "Error al desconectar" }); } });
-app.post("/config-slot", async (req, res) => { try { await pool.query(`INSERT INTO location_slots (location_id, slot_id, slot_name) VALUES ($1, $2, $3) ON CONFLICT (location_id, slot_id) DO UPDATE SET slot_name = EXCLUDED.slot_name`, [req.body.locationId, req.body.slot, req.body.slotName]); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post("/start-whatsapp", requireIframeSecurity, async (req, res) => { try { await startWhatsApp(req.query.locationId, req.query.slot); res.json({ success: true }); } catch (e) { res.status(500).json({ error: "Error" }); } });
+app.get("/qr", requireIframeSecurity, (req, res) => { const s = sessions.get(`${req.query.locationId}_slot${req.query.slot}`); if (s && s.qr) res.json({ qr: s.qr }); else res.status(404).json({ error: "No QR" }); });
+app.get("/status", requireIframeSecurity, async (req, res) => { const s = sessions.get(`${req.query.locationId}_slot${req.query.slot}`); let extra = {}; try { const r = await pool.query("SELECT * FROM location_slots WHERE location_id=$1 AND slot_id=$2", [req.query.locationId, req.query.slot]); if (r.rows.length) extra = r.rows[0]; } catch (e) { } res.json({ connected: s?.isConnected || false, myNumber: s?.myNumber, slotName: extra.slot_name, priority: extra.priority, settings: extra.settings, is_favorite: extra.is_favorite }); });
+app.post("/remove-slot", requireIframeSecurity, async (req, res) => { try { const locationId = req.query.locationId; const slot = req.query.slot; if (!locationId || !slot) return res.status(400).json({ error: "Faltan parámetros" }); await deleteSessionData(locationId, slot); res.json({ success: true }); } catch (e) { res.status(500).json({ error: "Error al desconectar" }); } });
+app.post("/config-slot", requireIframeSecurity, async (req, res) => { try { await pool.query(`INSERT INTO location_slots (location_id, slot_id, slot_name) VALUES ($1, $2, $3) ON CONFLICT (location_id, slot_id) DO UPDATE SET slot_name = EXCLUDED.slot_name`, [req.body.locationId, req.body.slot, req.body.slotName]); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
-app.get("/config", async (req, res) => {
+app.get("/config", requireIframeSecurity, async (req, res) => {
     try {
         const { locationId } = req.query;
         const tenantStatus = await getTenantConfig(locationId);
@@ -608,5 +641,44 @@ setInterval(async () => {
 }, 60 * 60 * 1000);
 
 // START
-async function restoreSessions() { try { const res = await pool.query("SELECT DISTINCT session_id FROM baileys_auth"); for (const row of res.rows) { const parts = row.session_id.split("_slot"); if (parts.length === 2) startWhatsApp(parts[0], parts[1]).catch(console.error); } } catch (e) { console.error(e); } }
+async function restoreSessions() {
+    try {
+        console.log("🔄 Iniciando restauración de sesiones...");
+
+        // 1. Obtener todas las sesiones únicas
+        const res = await pool.query("SELECT DISTINCT session_id FROM baileys_auth");
+        const totalSessions = res.rows.length;
+
+        console.log(`📊 Se encontraron ${totalSessions} sesiones para restaurar.`);
+
+        // 2. Iterar con pausa (Rate Limiting)
+        for (const [index, row] of res.rows.entries()) {
+            const parts = row.session_id.split("_slot");
+
+            if (parts.length === 2) {
+                const locationId = parts[0];
+                const slotId = parts[1];
+
+                // Calculamos el progreso para loguear
+                const progress = index + 1;
+                console.log(`[${progress}/${totalSessions}] 🚀 Iniciando: ${locationId} (Slot ${slotId})...`);
+
+                // 🔥 CLAVE: Lanzamos la conexión SIN await para no bloquear el hilo principal por completo,
+                // pero capturamos errores individuales para que uno no detenga a los demás.
+                startWhatsApp(locationId, slotId).catch(err => {
+                    console.error(`❌ Error al iniciar sesión ${row.session_id}:`, err.message);
+                });
+
+                // 🔥 CLAVE: Pausa de seguridad de 2 a 5 segundos entre arranques.
+                // Esto permite que la CPU baje y que la conexión TCP se establezca antes de abrir otra.
+                await sleep(2500);
+            }
+        }
+
+        console.log("✅ Proceso de restauración escalonada finalizado.");
+
+    } catch (e) {
+        console.error("❌ Error fatal restaurando sesiones:", e);
+    }
+}
 (async () => { try { await initDb(); startMediaCleanup(); app.listen(PORT, async () => { console.log(`API OK ${PORT}`); await restoreSessions(); }); } catch (e) { console.error("❌ Error fatal al iniciar:", e); process.exit(1); } })();
