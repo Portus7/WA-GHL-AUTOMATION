@@ -36,6 +36,7 @@ const {
     getTokens,
     ensureAgencyToken,
     callGHLWithAgency,
+    callGHLWithLocation,
     findOrCreateGHLContact,
     logMessageToGHL,
     addTagToContact,
@@ -169,8 +170,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
             } catch (errCheck) { console.error("Error límites:", errCheck); }
 
             // 3. Pasamos la variable correcta (NO evt.subscriptionId)
-            await registerNewTenant(evt.locationId, evt.companyId, statusToRegister, assignedSubscriptionId);
-
+            await registerNewTenant(evt.locationId, evt.companyId, statusToRegister, assignedSubscriptionId, locationName, agencyName);
             return res.json({ ok: true });
         }
 
