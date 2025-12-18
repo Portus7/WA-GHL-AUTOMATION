@@ -9,7 +9,7 @@ const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
 const rateLimit = require("express-rate-limit");
 
-const { login, verifyToken, requireRole, updatePlan } = require("./controllers/authController");
+const { login, verifyToken, requireRole } = require("./controllers/authController");
 const { startMediaCleanup } = require("./services/mediaCleanup");
 
 // --- SERVICIOS WA ---
@@ -45,7 +45,7 @@ const {
 } = require("./services/ghlService");
 
 // --- SERVICIOS DE PAGO Y PLANES ---
-const { subscribe, manageBilling } = require("./controllers/paymentController");
+const { subscribe, manageBilling, updatePlan } = require("./controllers/paymentController");
 const { handleWebhook } = require("./controllers/webhookController");
 const { canAddSlot, canCreateTenant } = require("./services/planService");
 const { handleIncomingMessage, processKeywordTags } = require("./services/messageHandler");
@@ -568,6 +568,7 @@ app.get("/payments/my-subscriptions", verifyToken, async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+
 app.post("/payments/update-plan", verifyToken, updatePlan);
 
 // ⏰ CRON JOB SUSPENSIÓN
