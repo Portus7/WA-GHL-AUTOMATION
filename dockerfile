@@ -4,12 +4,12 @@ FROM node:20-alpine
 # ✅ CORRECCIÓN 1: Usamos 'apk' en lugar de 'apt-get'
 # ✅ CORRECCIÓN 2: Agregamos 'git' (obligatorio para instalar Baileys desde GitHub)
 RUN apk add --no-cache \
-    git \
-    python3 \
-    make \
-    g++ \
-    ca-certificates \
-    tzdata
+  git \
+  python3 \
+  make \
+  g++ \
+  ca-certificates \
+  tzdata
 
 WORKDIR /app
 
@@ -39,6 +39,4 @@ EXPOSE 3001
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/status').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
-
-# Arranque
 CMD ["node", "src/index.js"]
