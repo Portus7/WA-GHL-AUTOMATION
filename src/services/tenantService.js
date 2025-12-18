@@ -49,8 +49,8 @@ async function registerNewTenant(locationId, companyId, initialStatus = 'active'
         };
 
         const sql = `
-            INSERT INTO tenants (location_id, status, trial_ends_at, plan_id, settings, created_at, agency_id)
-            VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), $6)
+            INSERT INTO tenants (location_id, status, trial_ends_at, plan_id, settings, created_at, agency_id, linked_subscription_id)
+            VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), $6, $7)
             ON CONFLICT (location_id) 
             DO UPDATE SET 
                 status = EXCLUDED.status, -- Actualizamos al estado que enviamos

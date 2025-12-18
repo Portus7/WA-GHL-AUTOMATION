@@ -1,6 +1,6 @@
 // src/services/planService.js
 const { pool } = require("../config/db");
-
+const { STRIPE_CONFIG } = require("../controllers/webhookController");
 /**
  * Verifica si una agencia puede crear una nueva subagencia (Tenant)
  */
@@ -86,4 +86,71 @@ async function canAddSlot(userId) {
     }
 }
 
-module.exports = { canCreateTenant, canAddSlot };
+/**
+ * Busca una suscripción activa que tenga espacio disponible para una nueva subagencia
+ */
+async function findAvailableSubscription(userId) {
+    // 1. Obtener todas las suscripciones del usuario
+    const subsRes = await pool.query(
+        "SELECT stripe_subscription_id, stripe_price_id, quantity FROM active_subscriptions WHERE user_id = $1 AND status = 'active'",
+        [userId]
+    );
+
+    // 2. Revisar cuál tiene cupo
+    for (const sub of subsRes.rows) {
+        // Cuántas subcuentas permite este plan (multiplicado por cantidad si compró varios packs)
+        // Nota: Necesitamos importar STRIPE_CONFIG o hardcodear la lógica aquí. 
+        // Para simplificar y evitar dependencias circulares, asumiremos la lógica estándar:
+        // (En un entorno real, exporta STRIPE_CONFIG a un archivo config separado)
+
+        let allowed = 0;
+        // Lógica simplificada basada en tus planes actuales
+        if (sub.stripe_price_id.includes('1SfJpk')) allowed = 1 * sub.quantity; // Regular
+        else if (sub.stripe_price_id.includes('1SfJqb')) allowed = 5 * sub.quantity; // Pro
+        else if (sub.stripe_price_id.includes('1SfJrZ')) allowed = 10 * sub.quantity; // Enterprise
+        else if (sub.stripe_price_id.includes('1SfK547')) allowed = 1 * sub.quantity; // VIP/Addon
+
+        // Contar cuántas subcuentas ya están vinculadas a ESTA suscripción específica
+        const usedRes = await pool.query(
+            "SELECT COUNT(*) FROM tenants WHERE linked_subscription_id = $1 AND status != 'cancelled'",
+            [sub.stripe_subscription_id]
+        );
+        const used = parseInt(usedRes.rows[0].count);
+
+        if (used < allowed) {
+            return sub.stripe_subscription_id; // ¡Encontramos una con espacio!
+        }
+    }
+    return null;
+}
+
+async function canCreateTenant(userId) {
+    const client = await pool.connect();
+    try {
+        // 1. Verificar estado general
+        const userRes = await client.query("SELECT plan_status FROM users WHERE id = $1", [userId]);
+        if (userRes.rows[0]?.plan_status !== 'active' && userRes.rows[0]?.plan_status !== 'trial') {
+            return { allowed: false, reason: "Suscripción inactiva." };
+        }
+
+        // 2. Buscar Slot de Suscripción Específico
+        const availableSubId = await findAvailableSubscription(userId);
+
+        if (!availableSubId) {
+            // Fallback: Si estamos en Trial o Admin, permitimos sin vincular (null)
+            // Pero si es usuario normal y no tiene hueco en sus planes, bloqueamos.
+            if (userRes.rows[0]?.plan_status === 'trial') return { allowed: true, subscriptionId: null };
+
+            return {
+                allowed: false,
+                reason: "No tienes cupo disponible en tus planes activos. Contrata un nuevo plan."
+            };
+        }
+
+        return { allowed: true, subscriptionId: availableSubId };
+    } finally {
+        client.release();
+    }
+}
+
+module.exports = { canCreateTenant, canAddSlot, findAvailableSubscription };

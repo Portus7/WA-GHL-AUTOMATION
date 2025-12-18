@@ -62,4 +62,21 @@ async function changeSubscriptionPlan(userId, subscriptionId, newPriceId) {
     return updated;
 }
 
-module.exports = { createCheckoutSession, createPortalSession, changeSubscriptionPlan, stripe };
+async function cancelSubscriptionAtPeriodEnd(userId, subscriptionId) {
+    // 1. Validar propiedad
+    const subRes = await pool.query(
+        "SELECT stripe_subscription_id FROM active_subscriptions WHERE user_id = $1 AND stripe_subscription_id = $2",
+        [userId, subscriptionId]
+    );
+    if (subRes.rows.length === 0) throw new Error("Suscripción no válida.");
+
+    // 2. Programar cancelación al final del ciclo
+    // En lugar de .cancel(), usamos .update() con cancel_at_period_end
+    const updated = await stripe.subscriptions.update(subscriptionId, {
+        cancel_at_period_end: true
+    });
+
+    return updated;
+}
+
+module.exports = { createCheckoutSession, createPortalSession, changeSubscriptionPlan, cancelSubscriptionAtPeriodEnd, stripe };

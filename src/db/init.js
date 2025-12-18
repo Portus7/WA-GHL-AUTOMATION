@@ -38,6 +38,7 @@ const initDb = async () => {
         status VARCHAR(20) DEFAULT 'active',
         trial_ends_at TIMESTAMP,
         subscription_ends_at TIMESTAMP,
+        linked_subscription_id VARCHAR(255),
         settings JSONB DEFAULT '{ 
             "show_source_label": true, 
             "create_unknown_contacts": true,
