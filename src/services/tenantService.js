@@ -59,7 +59,7 @@ async function registerNewTenant(locationId, companyId, initialStatus = 'active'
         `;
 
         // Pasamos initialStatus en lugar de hardcodear 'active'
-        await pool.query(sql, [locationId, initialStatus, trialEnd, planId, JSON.stringify(defaultSettings), companyId]);
+        await pool.query(sql, [locationId, initialStatus, trialEnd, planId, JSON.stringify(defaultSettings), companyId, subscriptionId]);
 
         console.log(`🎉 Tenant Registrado: ${locationId} (${initialStatus})`);
 
