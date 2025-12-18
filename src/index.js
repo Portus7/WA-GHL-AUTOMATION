@@ -81,6 +81,10 @@ if (!fs.existsSync(MEDIA_DIR)) {
 
 const app = express();
 
+app.get("/health", (req, res) => {
+    res.status(200).send("OK");
+});
+
 // ✅ Confiar en el proxy (Nginx/Docker)
 app.set('trust proxy', 1);
 
