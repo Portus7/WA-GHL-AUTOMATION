@@ -466,7 +466,7 @@ async function startWhatsApp(locationId, slotId) {
                 console.log(`🔄 Reconectando ${sessionId}... (Código: ${code})`);
                 setTimeout(() => startWhatsApp(locationId, slotId), 3000);
             } else {
-                console.log(`🛑 Sesión cerrada: ${sessionId}`);
+                console.log(`🛑 Sesión cerrada definitivamente: ${sessionId}. Razón: ${isLogout ? 'Logout/Credenciales Inválidas (401/403)' : 'Destrucción Manual'}. Código: ${code}`);
                 sessionData.isDestroying = true;
                 sessionData.isConnected = false;
                 sessionData.sock = null;
