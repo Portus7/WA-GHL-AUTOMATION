@@ -373,7 +373,7 @@ app.post("/ghl/webhook", async (req, res) => {
                             sentMsg = await selected.session.sock.sendMessage(targetJid, { text: finalMessage });
                         }
                     }
-                    if (sentMsg?.key?.id) botMessageIds.add(sentMsg.key.id);
+                    if (sentMsg?.key?.id) botMessageIds.set(sentMsg.key.id, Date.now());
                 }
 
                 if (!contactId && !forcedSlotId && !prioritySlotId) {
