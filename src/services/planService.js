@@ -105,10 +105,10 @@ async function findAvailableSubscription(userId) {
 
         let allowed = 0;
         // Lógica simplificada basada en tus planes actuales
-        if (sub.stripe_price_id.includes('1SfJpk')) allowed = 1 * sub.quantity; // Regular
-        else if (sub.stripe_price_id.includes('1SfJqb')) allowed = 5 * sub.quantity; // Pro
-        else if (sub.stripe_price_id.includes('1SfJrZ')) allowed = 10 * sub.quantity; // Enterprise
-        else if (sub.stripe_price_id.includes('1SfK547')) allowed = 1 * sub.quantity; // VIP/Addon
+        if (sub.stripe_price_id.includes('price_1SfJpk7Mhd9qo6A8AmFiKTdk')) allowed = 1 * sub.quantity; // Regular
+        else if (sub.stripe_price_id.includes('price_1SfJqb7Mhd9qo6A8zP0xydlX')) allowed = 5 * sub.quantity; // Pro
+        else if (sub.stripe_price_id.includes('price_1SfJrZ7Mhd9qo6A8WOn6BGbJ')) allowed = 10 * sub.quantity; // Enterprise
+        else if (sub.stripe_price_id.includes('price_1SfK547Mhd9qo6A8SfvT8GF4')) allowed = 1 * sub.quantity; // VIP/Addon
 
         // Contar cuántas subcuentas ya están vinculadas a ESTA suscripción específica
         const usedRes = await pool.query(
