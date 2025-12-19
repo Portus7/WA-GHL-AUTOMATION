@@ -70,4 +70,4 @@ async function cancelSubscription(req, res) {
     }
 }
 
-module.exports = { subscribe, manageBilling, updatePlan, cancelSubscription };
+module.exports = { subscribe, manageBilling, updatePlan, cancelSubscription, getCancellationPreview };

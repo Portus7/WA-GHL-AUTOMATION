@@ -46,7 +46,7 @@ const {
 } = require("./services/ghlService");
 
 // --- SERVICIOS DE PAGO Y PLANES ---
-const { subscribe, manageBilling, updatePlan, cancelSubscription } = require("./controllers/paymentController");
+const { subscribe, manageBilling, updatePlan, cancelSubscription, getCancellationPreview } = require("./controllers/paymentController");
 const { handleWebhook } = require("./controllers/webhookController");
 const { canAddSlot, canCreateTenant } = require("./services/planService");
 const { handleIncomingMessage, processKeywordTags } = require("./services/messageHandler");
@@ -636,7 +636,7 @@ app.get("/payments/my-subscriptions", verifyToken, async (req, res) => {
 
 app.post("/payments/update-plan", verifyToken, updatePlan);
 
-app.get("/payments/preview-cancel", verifyToken, cancelSubscription);
+app.get("/payments/preview-cancel", verifyToken, getCancellationPreview);
 
 // ⏰ CRON JOB SUSPENSIÓN
 setInterval(async () => {
