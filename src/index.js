@@ -636,7 +636,7 @@ app.get("/payments/my-subscriptions", verifyToken, async (req, res) => {
 
 app.post("/payments/update-plan", verifyToken, updatePlan);
 
-app.post("/payments/preview-cancel", verifyToken, cancelSubscription);
+app.get("/payments/preview-cancel", verifyToken, cancelSubscription);
 
 // ⏰ CRON JOB SUSPENSIÓN
 setInterval(async () => {
