@@ -273,6 +273,7 @@ app.post("/ghl/app-webhook", async (req, res) => {
                     }
 
                     // 4. Registro Final en Base de Datos (Esto habilita el panel)
+                    console.log(agencyName)
                     await registerNewTenant(
                         evt.locationId,
                         evt.companyId,
