@@ -1,5 +1,6 @@
 const { createCheckoutSession, createPortalSession, changeSubscriptionPlan } = require('../services/stripeService');
 const { cancelSubscriptionAtPeriodEnd } = require('../services/stripeService');
+const { pool } = require('../config/db');
 
 async function subscribe(req, res) {
     const { priceId } = req.body;
