@@ -105,10 +105,12 @@ async function findAvailableSubscription(userId) {
 
         let allowed = 0;
         // Lógica simplificada basada en tus planes actuales
-        if (sub.stripe_price_id.includes('price_1SfJpk7Mhd9qo6A8AmFiKTdk')) allowed = 1 * sub.quantity; // Regular
+        if (sub.stripe_price_id.includes('price_1SfJpk7Mhd9qo6A8AmFiKTdk')) allowed = 1 * sub.quantity; // Regular Tambien seria addon subcuenta pero sin vip
         else if (sub.stripe_price_id.includes('price_1SfJqb7Mhd9qo6A8zP0xydlX')) allowed = 5 * sub.quantity; // Pro
         else if (sub.stripe_price_id.includes('price_1SfJrZ7Mhd9qo6A8WOn6BGbJ')) allowed = 10 * sub.quantity; // Enterprise
-        else if (sub.stripe_price_id.includes('price_1SfK547Mhd9qo6A8SfvT8GF4')) allowed = 1 * sub.quantity; // VIP/Addon
+        else if (sub.stripe_price_id.includes('price_1SfK547Mhd9qo6A8SfvT8GF4')) allowed = 1 * sub.quantity; // VIP/Addon subcuenta
+        else if (sub.stripe_price_id.includes('price_1SfK787Mhd9qo6A8WmPRs9Zy')) allowed = 1 * sub.quantity; // Addon número
+        else if (sub.stripe_price_id.includes('price_1SfK827Mhd9qo6A89iZ68SRi')) allowed = 1 * sub.quantity; // VIP/Addon número
 
         // Contar cuántas subcuentas ya están vinculadas a ESTA suscripción específica
         const usedRes = await pool.query(
