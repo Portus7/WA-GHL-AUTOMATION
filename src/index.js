@@ -168,67 +168,155 @@ app.post("/auth/register", async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// WEBHOOK GHL APP INSTALL
 app.post("/ghl/app-webhook", async (req, res) => {
     try {
         const evt = req.body;
         console.log("🔔 Webhook App recibido:", JSON.stringify(evt));
 
+        // --- CASO 1: INSTALACIÓN ---
         if (evt.type === "INSTALL") {
-            if (!evt.locationId) {
-                console.log("ℹ️ Instalación de Agencia detectada. Omitiendo.");
-                return res.json({ ok: true });
-            }
+            // ✅ RESPUESTA INMEDIATA: Le decimos a GHL "Recibido" para que no corte la conexión.
+            res.json({ ok: true });
 
-            try {
-                // 1. Tokens y Menú (Tu código actual)
-                const at = await ensureAgencyToken();
-                const ats = await getTokens(AGENCY_ROW_ID);
-                const lr = await axios.post("https://services.leadconnectorhq.com/oauth/locationToken", new URLSearchParams({ companyId: evt.companyId, locationId: evt.locationId }).toString(), { headers: { Authorization: `Bearer ${at}`, Version: GHL_API_VERSION, "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" } });
-                await saveTokens(evt.locationId, { ...ats, locationAccess: lr.data });
-                await callGHLWithAgency({ method: "post", url: "https://services.leadconnectorhq.com/custom-menus/", data: { title: "WhatsApp - Clic&App", url: `${CUSTOM_MENU_URL_WA}?location_id=${evt.locationId}`, showOnCompany: false, showOnLocation: true, showToAllLocations: false, locations: [evt.locationId], openMode: "iframe", userRole: "all", allowCamera: false, allowMicrophone: false, icon: { name: "whatsapp", fontFamily: "fab" } } });
-            } catch (errGHL) { console.error("❌ Error flujo GHL:", errGHL.message); }
-
-            // 2. 🔥 DEFINIR VARIABLES FALTANTES (ESTO FALTABA)
-            let locationName = null;
-            try {
-                const locData = await callGHLWithLocation(evt.locationId, { method: "GET", url: `https://services.leadconnectorhq.com/locations/${evt.locationId}` });
-                locationName = locData.data.location?.name || locData.data?.name;
-            } catch (e) { console.warn("⚠️ No se pudo obtener nombre subcuenta"); }
-
-            const agencyName = evt.companyName || "Agencia Desconocida";
-
-            // 3. Límites (Tu código actual)
-            let statusToRegister = 'active';
-            let assignedSubscriptionId = null;
-            try {
-                const userRes = await pool.query("SELECT id FROM users WHERE agency_id = $1", [evt.companyId]);
-                if (userRes.rows.length > 0) {
-                    const check = await canCreateTenant(userRes.rows[0].id);
-                    if (!check.allowed) {
-                        console.warn(`⛔ Bloqueo por límites: ${check.reason}`);
-                        statusToRegister = 'suspended';
-                    } else {
-                        assignedSubscriptionId = check.subscriptionId;
+            // 🚀 PROCESAMIENTO EN SEGUNDO PLANO (Fire & Forget)
+            (async () => {
+                try {
+                    if (!evt.locationId) {
+                        console.log("ℹ️ Instalación de Agencia detectada. Omitiendo lógica de subcuenta.");
+                        return;
                     }
+
+                    console.log(`⏳ [Background] Iniciando instalación para ${evt.locationId}...`);
+
+                    // 1. Obtener y Guardar Tokens, Crear Menú (Lógica crítica)
+                    // Nota: Si esto falla, intentamos seguir, pero logueamos el error.
+                    try {
+                        const at = await ensureAgencyToken();
+                        const ats = await getTokens(AGENCY_ROW_ID);
+
+                        // Intercambio de token de locación
+                        const lr = await axios.post(
+                            "https://services.leadconnectorhq.com/oauth/locationToken",
+                            new URLSearchParams({
+                                companyId: evt.companyId,
+                                locationId: evt.locationId
+                            }).toString(),
+                            {
+                                headers: {
+                                    Authorization: `Bearer ${at}`,
+                                    Version: GHL_API_VERSION,
+                                    "Content-Type": "application/x-www-form-urlencoded",
+                                    Accept: "application/json"
+                                }
+                            }
+                        );
+
+                        await saveTokens(evt.locationId, { ...ats, locationAccess: lr.data });
+
+                        // Crear Custom Menu
+                        await callGHLWithAgency({
+                            method: "post",
+                            url: "https://services.leadconnectorhq.com/custom-menus/",
+                            data: {
+                                title: "WhatsApp - Clic&App",
+                                url: `${CUSTOM_MENU_URL_WA}?location_id=${evt.locationId}`,
+                                showOnCompany: false,
+                                showOnLocation: true,
+                                showToAllLocations: false,
+                                locations: [evt.locationId],
+                                openMode: "iframe",
+                                userRole: "all",
+                                allowCamera: false,
+                                allowMicrophone: false,
+                                icon: { name: "whatsapp", fontFamily: "fab" }
+                            }
+                        });
+                    } catch (errGHL) {
+                        console.warn(`⚠️ Advertencia en configuración GHL para ${evt.locationId}:`, errGHL.message);
+                    }
+
+                    // 2. Obtener Nombre de la Subcuenta (Para mostrar bonito en el panel)
+                    let locationName = null;
+                    try {
+                        const locData = await callGHLWithLocation(evt.locationId, {
+                            method: "GET",
+                            url: `https://services.leadconnectorhq.com/locations/${evt.locationId}`
+                        });
+                        locationName = locData.data.location?.name || locData.data?.name;
+                    } catch (e) {
+                        console.warn("⚠️ No se pudo obtener nombre de subcuenta (API GHL). Usando ID.");
+                    }
+
+                    const agencyName = evt.companyName || "Agencia Desconocida";
+
+                    // 3. Verificar Límites de la Agencia (Plan)
+                    let statusToRegister = 'active';
+                    let assignedSubscriptionId = null;
+
+                    try {
+                        // Buscamos al dueño de la agencia en nuestra DB
+                        const userRes = await pool.query("SELECT id FROM users WHERE agency_id = $1", [evt.companyId]);
+
+                        if (userRes.rows.length > 0) {
+                            const check = await canCreateTenant(userRes.rows[0].id);
+                            if (!check.allowed) {
+                                console.warn(`⛔ Bloqueo por límites para agencia ${evt.companyId}: ${check.reason}`);
+                                statusToRegister = 'suspended'; // Se crea pero suspendida
+                            } else {
+                                assignedSubscriptionId = check.subscriptionId;
+                            }
+                        } else {
+                            console.warn(`⚠️ Agencia ${evt.companyId} no encontrada en DB local. Se registrará sin vincular a usuario.`);
+                        }
+                    } catch (errCheck) {
+                        console.error("❌ Error verificando límites:", errCheck);
+                    }
+
+                    // 4. Registro Final en Base de Datos (Esto habilita el panel)
+                    await registerNewTenant(
+                        evt.locationId,
+                        evt.companyId,
+                        statusToRegister,
+                        assignedSubscriptionId,
+                        locationName,
+                        agencyName
+                    );
+
+                    console.log(`✅ [Background] Instalación EXITOSA para ${evt.locationId} (Estado: ${statusToRegister})`);
+
+                } catch (backgroundError) {
+                    console.error(`❌ ERROR CRÍTICO en instalación background (${evt.locationId}):`, backgroundError);
                 }
-            } catch (errCheck) { console.error("Error límites:", errCheck); }
+            })();
 
-            // 4. Registro Final (Ahora las variables SÍ existen)
-            await registerNewTenant(evt.locationId, evt.companyId, statusToRegister, assignedSubscriptionId, locationName, agencyName);
-
-            return res.json({ ok: true });
+            return; // Salimos de la función principal, la respuesta ya se envió al inicio.
         }
 
+        // --- CASO 2: DESINSTALACIÓN ---
         if (evt.type === "UNINSTALL") {
-            await pool.query("UPDATE tenants SET status = 'cancelled' WHERE location_id = $1", [evt.locationId]);
-            return res.json({ ok: true });
+            // ✅ RESPUESTA INMEDIATA
+            res.json({ ok: true });
+
+            // 🚀 PROCESAMIENTO EN SEGUNDO PLANO
+            (async () => {
+                try {
+                    console.log(`🗑️ [Background] Procesando desinstalación para ${evt.locationId}...`);
+                    await pool.query("UPDATE tenants SET status = 'cancelled' WHERE location_id = $1", [evt.locationId]);
+                    console.log(`✅ Tenant ${evt.locationId} marcado como cancelado.`);
+                } catch (e) {
+                    console.error(`❌ Error marcando tenant cancelado:`, e);
+                }
+            })();
+            return;
         }
+
+        // --- OTROS EVENTOS ---
         res.json({ ignored: true });
 
     } catch (e) {
-        console.error("❌ Error FATAL Webhook:", e); // 🔥 Agregado log para ver errores futuros
-        res.status(500).json({ error: "Error procesando webhook" });
+        console.error("❌ Error General en Webhook:", e);
+        // Intentamos responder error si aún no se ha enviado respuesta
+        if (!res.headersSent) res.status(500).json({ error: "Error procesando webhook" });
     }
 });
 
