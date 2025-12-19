@@ -638,6 +638,8 @@ app.post("/payments/update-plan", verifyToken, updatePlan);
 
 app.get("/payments/preview-cancel", verifyToken, getCancellationPreview);
 
+app.post("/payments/cancel", verifyToken, cancelSubscription);
+
 // ⏰ CRON JOB SUSPENSIÓN
 setInterval(async () => {
     console.log("⏰ Revisión de trials...");
