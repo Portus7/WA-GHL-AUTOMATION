@@ -448,6 +448,10 @@ async function startWhatsApp(locationId, slotId) {
         const { connection, lastDisconnect, qr } = update;
         sessionData.lastActivity = Date.now();
 
+        if (qr) {
+            sessionData.qr = qr;
+        }
+
         // 👇 EMITIR QR AL FRONTEND
         if (qr && io) {
             io.emit("wa_event", {
