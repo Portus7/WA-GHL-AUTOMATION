@@ -7,28 +7,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <script src="https://cdn.tailwindcss.com"></script>
-
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+    <script src="/socket.io/socket.io.js"></script>
 
     <script>
         tailwind.config = {
             theme: {
                 extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif']
-                    },
-                    colors: {
-                        indigo: {
-                            50: '#eef2ff',
-                            100: '#e0e7ff',
-                            500: '#6366f1',
-                            600: '#4f46e5',
-                            700: '#4338ca'
-                        }
-                    }
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: { indigo: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' } }
                 }
             }
         }
@@ -75,13 +65,11 @@
     </div>
 
     <div id="app-view" class="w-full max-w-[1400px] hidden fade-in">
-
         <div class="flex flex-col sm:flex-row items-center justify-between mb-8 px-1 gap-4">
             <div class="flex items-center gap-4">
                 <div
                     class="w-12 h-12 bg-gradient-to-br from-indigo-600 to-indigo-700 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-200">
-                    CA
-                </div>
+                    CA</div>
                 <div>
                     <h1 class="text-2xl font-bold text-gray-900 tracking-tight leading-none">Gestión de Dispositivos
                     </h1>
@@ -117,13 +105,13 @@
         else document.getElementById('location-display').textContent = locationId;
 
         const container = document.getElementById("slots-container");
-        const activeConnections = new Set(), connectionIntervals = new Map();
+        const activeConnections = new Set();
         let ghlUsers = [];
+        let socket; // Variable global para el socket
 
         const ICONS = {
             edit: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>`,
             smartphone: `<svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>`,
-            check: `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
             trash: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>`,
             qr: `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></svg>`,
             user: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
@@ -134,18 +122,81 @@
 
         async function init() {
             try {
-                const confRes = await fetch(`/config?locationId=${locationId}`); if (!confRes.ok) throw new Error("API"); const conf = await confRes.json();
+                // 1. Cargar Configuración Inicial (REST API)
+                const confRes = await fetch(`/config?locationId=${locationId}`);
+                if (!confRes.ok) throw new Error("API");
+                const conf = await confRes.json();
+
                 if (conf.is_active === false) { showBlockedScreen(conf.reason); return; }
                 try { const u = await fetch(`/public/ghl-users?locationId=${locationId}`); if (u.ok) ghlUsers = await u.json(); } catch (e) { }
 
                 document.getElementById("loader-view").style.display = "none";
                 document.getElementById("app-view").style.display = "block";
 
-                const slots = conf.slots || []; slots.sort((a, b) => (a.priority || 99) - (b.priority || 99)); renderSlots(slots);
+                const slots = conf.slots || [];
+                slots.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+                renderSlots(slots);
 
-                // Polling cada 3 segundos para reactividad
-                setInterval(syncAllSlots, 3000);
-            } catch (e) { document.getElementById("loader-view").innerHTML = "Error de conexión."; }
+                // 2. ✅ INICIAR WEBSOCKET
+                initSocket();
+
+                // ❌ ELIMINADO: setInterval(syncAllSlots, 3000); 
+
+            } catch (e) {
+                console.error(e);
+                document.getElementById("loader-view").innerHTML = "Error de conexión.";
+            }
+        }
+
+        // ✅ LÓGICA WEBSOCKET
+        function initSocket() {
+            socket = io(); // Conecta al mismo origen
+
+            socket.on('connect', () => {
+                console.log('🟢 Socket Conectado');
+            });
+
+            socket.on('wa_event', (payload) => {
+                // Filtrar eventos solo para esta locationId
+                if (payload.locationId !== locationId) return;
+
+                const slotId = payload.slotId;
+
+                // A. LLEGADA DE QR
+                if (payload.type === 'qr') {
+                    // Si estamos esperando conexión en este slot (botón presionado)
+                    if (activeConnections.has(slotId)) {
+                        renderQR(slotId, payload.data);
+                    }
+                }
+
+                // B. CAMBIO DE ESTADO (Conectado/Desconectado)
+                if (payload.type === 'connection') {
+                    // Actualizar UI del Slot
+                    checkStatus(slotId);
+
+                    // Si se conectó, limpiar estado de espera
+                    if (payload.status === 'open') {
+                        activeConnections.delete(slotId);
+                        // Opcional: Recargar página completa para limpiar estados
+                        // window.location.reload(); 
+                    }
+                }
+            });
+        }
+
+        function renderQR(slot, qrData) {
+            const qrArea = document.getElementById(`qr-area-${slot}`);
+            const qrCanvas = document.getElementById(`qr-canvas-${slot}`);
+            const msg = document.getElementById(`msg-${slot}`);
+
+            if (!qrArea || !qrCanvas) return;
+
+            if (qrCanvas.innerHTML === "") {
+                qrCanvas.innerHTML = ""; // Limpiar previo
+                msg.innerHTML = "Escanea con WhatsApp <span class='text-gray-400 font-normal ml-1'>(Menú > Dispositivos)</span>";
+                new QRCode(qrCanvas, { text: qrData, width: 200, height: 200, colorDark: "#1f2937", colorLight: "#ffffff" });
+            }
         }
 
         function renderSlots(slotsArray) {
@@ -193,13 +244,9 @@
 
         async function toggleFavorite(slotId) {
             const btn = document.getElementById(`star-btn-${slotId}`);
-            // Verificar estado actual por la clase
             const isFav = btn.classList.contains('text-yellow-500');
             const newState = !isFav;
-
-            // UI Optimista
             updateStarUI(slotId, newState);
-
             try { await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, isFavorite: newState }) }); if (newState) Toast.fire({ icon: 'success', title: 'Favorito actualizado' }); } catch (e) { window.location.reload(); }
         }
 
@@ -207,7 +254,7 @@
             const btn = document.getElementById(`star-btn-${slotId}`);
             if (!btn) return;
             btn.innerHTML = isFav ? ICONS.starFilled : ICONS.star;
-            if (isFav) { // Desactivar otros
+            if (isFav) {
                 document.querySelectorAll('[id^="star-btn-"]').forEach(b => { if (b.id !== `star-btn-${slotId}`) { b.innerHTML = ICONS.star; b.classList.remove('text-yellow-500'); b.classList.add('text-gray-300'); } });
                 btn.classList.remove('text-gray-300'); btn.classList.add('text-yellow-500');
             } else {
@@ -215,36 +262,16 @@
             }
         }
 
-        // --- REACTIVIDAD: Sincronizar datos del servidor con la UI ---
-        function syncAllSlots() { document.querySelectorAll('[data-slot-id]').forEach(c => { checkStatus(c.getAttribute('data-slot-id')); }); }
-
+        // Llamada única (no polling)
         async function checkStatus(slot) {
             try {
                 const r = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
                 const d = await r.json();
-
-                // 1. Estado Conexión
                 updateUI(slot, d.connected, d.myNumber);
 
-                // 2. Sincronizar Favorito
-                if (d.is_favorite !== undefined) {
-                    const btn = document.getElementById(`star-btn-${slot}`);
-                    const currentIsFav = btn.classList.contains('text-yellow-500');
-                    if (d.is_favorite !== currentIsFav) updateStarUI(slot, d.is_favorite);
-                }
-
-                // 3. Sincronizar Prioridad
-                if (d.priority) {
-                    const sel = document.getElementById(`select-prio-${slot}`);
-                    if (sel && parseInt(sel.value) !== d.priority) sel.value = d.priority;
-                }
-
-                // 4. Sincronizar Usuario
-                if (d.settings?.ghl_assigned_user !== undefined) {
-                    const sel = document.getElementById(`select-user-${slot}`);
-                    if (sel && sel.value !== (d.settings.ghl_assigned_user || "")) sel.value = d.settings.ghl_assigned_user || "";
-                }
-
+                if (d.is_favorite !== undefined) updateStarUI(slot, d.is_favorite);
+                if (d.priority) { const sel = document.getElementById(`select-prio-${slot}`); if (sel && parseInt(sel.value) !== d.priority) sel.value = d.priority; }
+                if (d.settings?.ghl_assigned_user !== undefined) { const sel = document.getElementById(`select-user-${slot}`); if (sel && sel.value !== (d.settings.ghl_assigned_user || "")) sel.value = d.settings.ghl_assigned_user || ""; }
             } catch (e) { }
         }
 
@@ -265,13 +292,29 @@
             }
         }
 
-        // Resto de funciones (Change, Edit, Connect, Disconnect) - MISMAS DE SIEMPRE
+        // --- ACCIONES DE USUARIO ---
+        async function startConnect(slot) {
+            activeConnections.add(slot); // Marcar como "esperando" para que el socket sepa que este slot quiere QR
+            const btn = document.getElementById(`btn-${slot}`), qrArea = document.getElementById(`qr-area-${slot}`), qrCanvas = document.getElementById(`qr-canvas-${slot}`);
+            btn.classList.add("hidden"); qrArea.classList.remove("hidden"); qrArea.classList.add("flex"); qrCanvas.innerHTML = "";
+            try {
+                // Pedir al backend que inicie sesión. El QR llegará por Socket.
+                await fetch(`/start-whatsapp?locationId=${locationId}&slot=${slot}`, { method: "POST" });
+                // Ya no necesitamos setInterval aquí. El socket manejará el QR.
+            } catch (e) {
+                activeConnections.delete(slot);
+                btn.classList.remove("hidden"); qrArea.classList.add("hidden"); qrArea.classList.remove("flex");
+                Toast.fire({ icon: 'error', title: 'Error de conexión' });
+            }
+        }
+
+        async function disconnect(slot) { const r = await Swal.fire({ title: '¿Cerrar Sesión?', text: "El bot se detendrá.", icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#9ca3af', confirmButtonText: 'Desconectar', cancelButtonText: 'Volver', customClass: { popup: 'rounded-2xl shadow-2xl', title: 'text-xl font-bold', confirmButton: 'rounded-xl px-6 py-2.5', cancelButton: 'rounded-xl px-6 py-2.5' } }); if (r.isConfirmed) { await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" }); } }
+        async function cancelConnect(slot) { activeConnections.delete(slot); document.getElementById(`qr-area-${slot}`).classList.add("hidden"); document.getElementById(`qr-area-${slot}`).classList.remove("flex"); document.getElementById(`qr-canvas-${slot}`).innerHTML = ""; document.getElementById(`btn-${slot}`).classList.remove("hidden"); await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" }); }
+
         async function changePriority(slotId, newPriority) { try { await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, priority: parseInt(newPriority) }) }); setTimeout(() => window.location.reload(), 300); } catch (e) { Toast.fire({ icon: 'error', title: 'Error' }); } }
         async function changeResponsible(slotId, userId) { try { const res = await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, assignedUser: userId }) }); if (res.ok) Toast.fire({ icon: 'success', title: 'Guardado' }); } catch (e) { Toast.fire({ icon: 'error', title: 'Error' }); } }
         async function editSlotName(slot) { const currentName = document.getElementById(`title-text-${slot}`).textContent.trim(); const { value: newName } = await Swal.fire({ title: 'Nombre', input: 'text', inputValue: currentName, showCancelButton: true, confirmButtonText: 'Guardar', confirmButtonColor: '#4f46e5', customClass: { popup: 'rounded-2xl', confirmButton: 'rounded-xl px-5', cancelButton: 'rounded-xl px-5' } }); if (newName && newName !== currentName) { document.getElementById(`title-text-${slot}`).textContent = newName; await fetch("/config-slot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ locationId, slot, slotName: newName }) }); Toast.fire({ icon: 'success', title: 'Actualizado' }); } }
-        async function startConnect(slot) { activeConnections.add(slot); const btn = document.getElementById(`btn-${slot}`), qrArea = document.getElementById(`qr-area-${slot}`), qrCanvas = document.getElementById(`qr-canvas-${slot}`); btn.classList.add("hidden"); qrArea.classList.remove("hidden"); qrArea.classList.add("flex"); qrCanvas.innerHTML = ""; try { const res = await fetch(`/start-whatsapp?locationId=${locationId}&slot=${slot}`, { method: "POST" }); if (!res.ok) throw new Error("Fallo"); const localInterval = setInterval(async () => { if (!document.getElementById(`card-${slot}`)) { clearInterval(localInterval); return; } const s = await fetch(`/status?locationId=${locationId}&slot=${slot}`).then(r => r.json()); if (s.connected) { clearInterval(localInterval); connectionIntervals.delete(slot); activeConnections.delete(slot); window.location.reload(); return; } const q = await fetch(`/qr?locationId=${locationId}&slot=${slot}`).then(r => r.json()); if (q.qr && qrCanvas.innerHTML === "") { document.getElementById(`msg-${slot}`).innerHTML = "Escanea con WhatsApp <span class='text-gray-400 font-normal ml-1'>(Menú > Dispositivos)</span>"; new QRCode(qrCanvas, { text: q.qr, width: 200, height: 200, colorDark: "#1f2937", colorLight: "#ffffff" }); } }, 2000); connectionIntervals.set(slot, localInterval); } catch (e) { activeConnections.delete(slot); btn.classList.remove("hidden"); qrArea.classList.add("hidden"); qrArea.classList.remove("flex"); Toast.fire({ icon: 'error', title: 'Error de conexión' }); } }
-        async function disconnect(slot) { const r = await Swal.fire({ title: '¿Cerrar Sesión?', text: "El bot se detendrá.", icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#9ca3af', confirmButtonText: 'Desconectar', cancelButtonText: 'Volver', customClass: { popup: 'rounded-2xl shadow-2xl', title: 'text-xl font-bold', confirmButton: 'rounded-xl px-6 py-2.5', cancelButton: 'rounded-xl px-6 py-2.5' } }); if (r.isConfirmed) { await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" }); window.location.reload(); } }
-        async function cancelConnect(slot) { const interval = connectionIntervals.get(slot); if (interval) { clearInterval(interval); connectionIntervals.delete(slot); } activeConnections.delete(slot); document.getElementById(`qr-area-${slot}`).classList.add("hidden"); document.getElementById(`qr-area-${slot}`).classList.remove("flex"); document.getElementById(`qr-canvas-${slot}`).innerHTML = ""; document.getElementById(`btn-${slot}`).classList.remove("hidden"); await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" }); }
+
         function showBlockedScreen(r) { document.body.innerHTML = `<div class="fixed inset-0 bg-gray-50 flex items-center justify-center p-6"><div class="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full text-center border border-gray-100"><div class="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500 text-4xl shadow-inner">🔒</div><h2 class="text-2xl font-extrabold text-gray-900 mb-2">Acceso Restringido</h2><p class="text-gray-500 mb-8 leading-relaxed">Su cuenta no está activa.</p></div></div>`; }
 
         init();
