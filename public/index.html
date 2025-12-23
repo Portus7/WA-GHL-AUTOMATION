@@ -105,9 +105,9 @@
         else document.getElementById('location-display').textContent = locationId;
 
         const container = document.getElementById("slots-container");
-        const activeConnections = new Set();
+        const activeConnections = new Set(); // Guardará IDs como STRINGS
         let ghlUsers = [];
-        let socket; // Variable global para el socket
+        let socket;
 
         const ICONS = {
             edit: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>`,
@@ -122,9 +122,9 @@
 
         async function init() {
             try {
-                // 1. Cargar Configuración Inicial (REST API)
+                // 1. Cargar Configuración Inicial
                 const confRes = await fetch(`/config?locationId=${locationId}`);
-                if (!confRes.ok) throw new Error("API");
+                if (!confRes.ok) throw new Error("API Error");
                 const conf = await confRes.json();
 
                 if (conf.is_active === false) { showBlockedScreen(conf.reason); return; }
@@ -137,48 +137,42 @@
                 slots.sort((a, b) => (a.priority || 99) - (b.priority || 99));
                 renderSlots(slots);
 
-                // 2. ✅ INICIAR WEBSOCKET
+                // 2. Iniciar WebSockets
                 initSocket();
-
-                // ❌ ELIMINADO: setInterval(syncAllSlots, 3000); 
 
             } catch (e) {
                 console.error(e);
-                document.getElementById("loader-view").innerHTML = "Error de conexión.";
+                document.getElementById("loader-view").innerHTML = "Error de conexión con el servidor.";
             }
         }
 
-        // ✅ LÓGICA WEBSOCKET
         function initSocket() {
-            socket = io(); // Conecta al mismo origen
+            socket = io();
 
-            socket.on('connect', () => {
-                console.log('🟢 Socket Conectado');
-            });
+            socket.on('connect', () => console.log('🟢 Socket Conectado'));
 
             socket.on('wa_event', (payload) => {
-                // Filtrar eventos solo para esta locationId
                 if (payload.locationId !== locationId) return;
 
-                const slotId = payload.slotId;
+                // ✅ FIX CRÍTICO: Convertir a String para comparar
+                const slotId = String(payload.slotId);
 
                 // A. LLEGADA DE QR
                 if (payload.type === 'qr') {
-                    // Si estamos esperando conexión en este slot (botón presionado)
+                    // Si este slot estaba esperando un QR...
                     if (activeConnections.has(slotId)) {
                         renderQR(slotId, payload.data);
                     }
                 }
 
-                // B. CAMBIO DE ESTADO (Conectado/Desconectado)
+                // B. CAMBIO DE ESTADO
                 if (payload.type === 'connection') {
-                    // Actualizar UI del Slot
-                    checkStatus(slotId);
+                    checkStatus(slotId); // Actualizar UI
 
-                    // Si se conectó, limpiar estado de espera
                     if (payload.status === 'open') {
+                        // Conectado -> Dejar de esperar QR
                         activeConnections.delete(slotId);
-                        // Opcional: Recargar página completa para limpiar estados
+                        // Opcional: Recargar para limpiar estados si se prefiere
                         // window.location.reload(); 
                     }
                 }
@@ -192,8 +186,8 @@
 
             if (!qrArea || !qrCanvas) return;
 
+            // Solo renderizar si el canvas está vacío (evitar re-pintados innecesarios)
             if (qrCanvas.innerHTML === "") {
-                qrCanvas.innerHTML = ""; // Limpiar previo
                 msg.innerHTML = "Escanea con WhatsApp <span class='text-gray-400 font-normal ml-1'>(Menú > Dispositivos)</span>";
                 new QRCode(qrCanvas, { text: qrData, width: 200, height: 200, colorDark: "#1f2937", colorLight: "#ffffff" });
             }
@@ -201,7 +195,7 @@
 
         function renderSlots(slotsArray) {
             container.innerHTML = ""; const total = slotsArray.length;
-            if (total === 0) { container.innerHTML = `<p class="text-center p-10 text-gray-500">Sin dispositivos.</p>`; return; }
+            if (total === 0) { container.innerHTML = `<p class="text-center p-10 text-gray-500">Sin dispositivos configurados.</p>`; return; }
             slotsArray.forEach(slot => {
                 const i = slot.id; const name = slot.name || `Slot ${i}`; const prio = slot.priority || 99; const sets = slot.settings || {}; const assigned = sets.ghl_assigned_user || ""; const isFav = slot.is_favorite || false;
                 let pOps = ""; for (let p = 1; p <= total; p++) pOps += `<option value="${p}" ${p === prio ? 'selected' : ''}>${p}</option>`; if (prio > total) pOps += `<option value="${prio}" selected>${prio}</option>`;
@@ -238,40 +232,22 @@
                         <div id="qr-area-${i}" class="hidden flex-col items-center mt-4 p-4 bg-white rounded-xl border border-gray-100 shadow-sm animate-in zoom-in-95"><p id="msg-${i}" class="text-xs font-semibold text-gray-500 mb-3 flex items-center gap-2"><span class="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></span>Cargando código...</p><div id="qr-canvas-${i}" class="qr-canvas p-2 bg-white rounded-lg border border-gray-100 mb-3"></div><button onclick="cancelConnect(${i})" class="text-xs text-red-500 hover:text-red-700 font-bold hover:underline py-1">Cancelar</button></div>
                     </div>
                 </div>`;
-                container.insertAdjacentHTML('beforeend', html); checkStatus(i);
+                container.insertAdjacentHTML('beforeend', html);
+                checkStatus(i); // Check inicial
             });
         }
 
-        async function toggleFavorite(slotId) {
-            const btn = document.getElementById(`star-btn-${slotId}`);
-            const isFav = btn.classList.contains('text-yellow-500');
-            const newState = !isFav;
-            updateStarUI(slotId, newState);
-            try { await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, isFavorite: newState }) }); if (newState) Toast.fire({ icon: 'success', title: 'Favorito actualizado' }); } catch (e) { window.location.reload(); }
-        }
-
-        function updateStarUI(slotId, isFav) {
-            const btn = document.getElementById(`star-btn-${slotId}`);
-            if (!btn) return;
-            btn.innerHTML = isFav ? ICONS.starFilled : ICONS.star;
-            if (isFav) {
-                document.querySelectorAll('[id^="star-btn-"]').forEach(b => { if (b.id !== `star-btn-${slotId}`) { b.innerHTML = ICONS.star; b.classList.remove('text-yellow-500'); b.classList.add('text-gray-300'); } });
-                btn.classList.remove('text-gray-300'); btn.classList.add('text-yellow-500');
-            } else {
-                btn.classList.remove('text-yellow-500'); btn.classList.add('text-gray-300');
-            }
-        }
-
-        // Llamada única (no polling)
         async function checkStatus(slot) {
             try {
                 const r = await fetch(`/status?locationId=${locationId}&slot=${slot}`);
                 const d = await r.json();
+
                 updateUI(slot, d.connected, d.myNumber);
 
                 if (d.is_favorite !== undefined) updateStarUI(slot, d.is_favorite);
                 if (d.priority) { const sel = document.getElementById(`select-prio-${slot}`); if (sel && parseInt(sel.value) !== d.priority) sel.value = d.priority; }
                 if (d.settings?.ghl_assigned_user !== undefined) { const sel = document.getElementById(`select-user-${slot}`); if (sel && sel.value !== (d.settings.ghl_assigned_user || "")) sel.value = d.settings.ghl_assigned_user || ""; }
+
             } catch (e) { }
         }
 
@@ -281,40 +257,53 @@
             if (isConnected) {
                 if (badge.innerText !== "ACTIVO") {
                     badge.className = "px-3 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-700 border border-emerald-200 shadow-sm flex items-center gap-1.5"; badge.innerHTML = `<span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> ACTIVO`;
-                    viewCon.style.display = "flex"; viewDisc.style.display = "none"; qrArea.classList.add("hidden"); qrArea.classList.remove("flex"); activeConnections.delete(slot);
+                    viewCon.style.display = "flex"; viewDisc.style.display = "none"; qrArea.classList.add("hidden"); qrArea.classList.remove("flex");
+                    // Limpiar estado de espera si se conectó
+                    activeConnections.delete(String(slot));
                 }
                 phoneText.textContent = "+" + phone;
             } else {
-                if (badge.innerText !== "OFF" && !activeConnections.has(slot)) {
+                if (badge.innerText !== "OFF" && !activeConnections.has(String(slot))) {
                     badge.className = "px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-gray-100 text-gray-500 border border-gray-200"; badge.innerText = "OFF";
                     viewCon.style.display = "none"; viewDisc.style.display = "flex";
                 }
             }
         }
 
-        // --- ACCIONES DE USUARIO ---
         async function startConnect(slot) {
-            activeConnections.add(slot); // Marcar como "esperando" para que el socket sepa que este slot quiere QR
+            const slotStr = String(slot);
+            activeConnections.add(slotStr); // ✅ Se guarda como String
+
             const btn = document.getElementById(`btn-${slot}`), qrArea = document.getElementById(`qr-area-${slot}`), qrCanvas = document.getElementById(`qr-canvas-${slot}`);
             btn.classList.add("hidden"); qrArea.classList.remove("hidden"); qrArea.classList.add("flex"); qrCanvas.innerHTML = "";
+
             try {
-                // Pedir al backend que inicie sesión. El QR llegará por Socket.
+                // Solicitar inicio de sesión. El QR llegará por el evento 'wa_event'
                 await fetch(`/start-whatsapp?locationId=${locationId}&slot=${slot}`, { method: "POST" });
-                // Ya no necesitamos setInterval aquí. El socket manejará el QR.
             } catch (e) {
-                activeConnections.delete(slot);
+                activeConnections.delete(slotStr);
                 btn.classList.remove("hidden"); qrArea.classList.add("hidden"); qrArea.classList.remove("flex");
                 Toast.fire({ icon: 'error', title: 'Error de conexión' });
             }
         }
 
-        async function disconnect(slot) { const r = await Swal.fire({ title: '¿Cerrar Sesión?', text: "El bot se detendrá.", icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#9ca3af', confirmButtonText: 'Desconectar', cancelButtonText: 'Volver', customClass: { popup: 'rounded-2xl shadow-2xl', title: 'text-xl font-bold', confirmButton: 'rounded-xl px-6 py-2.5', cancelButton: 'rounded-xl px-6 py-2.5' } }); if (r.isConfirmed) { await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" }); } }
-        async function cancelConnect(slot) { activeConnections.delete(slot); document.getElementById(`qr-area-${slot}`).classList.add("hidden"); document.getElementById(`qr-area-${slot}`).classList.remove("flex"); document.getElementById(`qr-canvas-${slot}`).innerHTML = ""; document.getElementById(`btn-${slot}`).classList.remove("hidden"); await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" }); }
+        async function cancelConnect(slot) {
+            const slotStr = String(slot);
+            activeConnections.delete(slotStr);
+            document.getElementById(`qr-area-${slot}`).classList.add("hidden");
+            document.getElementById(`qr-area-${slot}`).classList.remove("flex");
+            document.getElementById(`qr-canvas-${slot}`).innerHTML = "";
+            document.getElementById(`btn-${slot}`).classList.remove("hidden");
+            await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" });
+        }
 
+        // Resto de funciones auxiliares...
+        async function toggleFavorite(slotId) { const btn = document.getElementById(`star-btn-${slotId}`); const isFav = btn.classList.contains('text-yellow-500'); const newState = !isFav; updateStarUI(slotId, newState); try { await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, isFavorite: newState }) }); if (newState) Toast.fire({ icon: 'success', title: 'Favorito actualizado' }); } catch (e) { window.location.reload(); } }
+        function updateStarUI(slotId, isFav) { const btn = document.getElementById(`star-btn-${slotId}`); if (!btn) return; btn.innerHTML = isFav ? ICONS.starFilled : ICONS.star; if (isFav) { document.querySelectorAll('[id^="star-btn-"]').forEach(b => { if (b.id !== `star-btn-${slotId}`) { b.innerHTML = ICONS.star; b.classList.remove('text-yellow-500'); b.classList.add('text-gray-300'); } }); btn.classList.remove('text-gray-300'); btn.classList.add('text-yellow-500'); } else { btn.classList.remove('text-yellow-500'); btn.classList.add('text-gray-300'); } }
         async function changePriority(slotId, newPriority) { try { await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, priority: parseInt(newPriority) }) }); setTimeout(() => window.location.reload(), 300); } catch (e) { Toast.fire({ icon: 'error', title: 'Error' }); } }
         async function changeResponsible(slotId, userId) { try { const res = await fetch(`/public/update-slot-config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locationId, slotId, assignedUser: userId }) }); if (res.ok) Toast.fire({ icon: 'success', title: 'Guardado' }); } catch (e) { Toast.fire({ icon: 'error', title: 'Error' }); } }
         async function editSlotName(slot) { const currentName = document.getElementById(`title-text-${slot}`).textContent.trim(); const { value: newName } = await Swal.fire({ title: 'Nombre', input: 'text', inputValue: currentName, showCancelButton: true, confirmButtonText: 'Guardar', confirmButtonColor: '#4f46e5', customClass: { popup: 'rounded-2xl', confirmButton: 'rounded-xl px-5', cancelButton: 'rounded-xl px-5' } }); if (newName && newName !== currentName) { document.getElementById(`title-text-${slot}`).textContent = newName; await fetch("/config-slot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ locationId, slot, slotName: newName }) }); Toast.fire({ icon: 'success', title: 'Actualizado' }); } }
-
+        async function disconnect(slot) { const r = await Swal.fire({ title: '¿Cerrar Sesión?', text: "El bot se detendrá.", icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#9ca3af', confirmButtonText: 'Desconectar', cancelButtonText: 'Volver', customClass: { popup: 'rounded-2xl shadow-2xl', title: 'text-xl font-bold', confirmButton: 'rounded-xl px-6 py-2.5', cancelButton: 'rounded-xl px-6 py-2.5' } }); if (r.isConfirmed) { await fetch(`/remove-slot?locationId=${locationId}&slot=${slot}`, { method: "POST" }); } }
         function showBlockedScreen(r) { document.body.innerHTML = `<div class="fixed inset-0 bg-gray-50 flex items-center justify-center p-6"><div class="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full text-center border border-gray-100"><div class="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500 text-4xl shadow-inner">🔒</div><h2 class="text-2xl font-extrabold text-gray-900 mb-2">Acceso Restringido</h2><p class="text-gray-500 mb-8 leading-relaxed">Su cuenta no está activa.</p></div></div>`; }
 
         init();
