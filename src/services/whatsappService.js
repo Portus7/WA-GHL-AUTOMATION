@@ -17,9 +17,17 @@ const botMessageIds = new Map(); // Usamos Map para guardar ID -> Timestamp
 const SUPPORT_LOC_ID = "__SYSTEM_SUPPORT__";
 const SUPPORT_SLOT_ID = "1";
 
-// Configuración de limpieza de memoria
-const CLEANUP_INTERVAL = 60 * 60 * 1000; // Ejecutar cada 1 hora
+// Configuración de limpieza de memoria (Optimizada)
+// Antes: 1 hora. Ahora: 5 minutos para mantener la memoria ligera.
+const CLEANUP_INTERVAL = 5 * 60 * 1000;
 const MAX_INACTIVITY = 24 * 60 * 60 * 1000; // 24 horas de inactividad
+
+let io; // Variable para guardar la instancia de Socket.io
+
+// 👇 Función para recibir la instancia desde index.js
+const setSocket = (socketIo) => {
+    io = socketIo;
+};
 
 // --- GARBAGE COLLECTOR (Limpieza de RAM y IDs) ---
 setInterval(() => {
@@ -41,8 +49,6 @@ setInterval(() => {
     });
 
     // 2. Limpiar cache de IDs de mensajes (Evitar consumo infinito de RAM)
-    // Reiniciamos el Set si tiene demasiados elementos (ej: > 10,000)
-    // Esto es seguro porque los duplicados ocurren en segundos, no horas después.
     const ID_TTL = 5 * 60 * 1000; // 5 minutos
 
     if (botMessageIds.size > 0) {
@@ -343,6 +349,7 @@ async function syncGroupMembers(locationId, slotId, groupJid) {
         throw e;
     }
 }
+
 // --- FUNCIÓN PRINCIPAL DE CONEXIÓN ---
 
 async function startWhatsApp(locationId, slotId) {
@@ -441,10 +448,14 @@ async function startWhatsApp(locationId, slotId) {
         const { connection, lastDisconnect, qr } = update;
         sessionData.lastActivity = Date.now();
 
-        if (qr) {
-            sessionData.qr = qr;
-            sessionData.isConnected = false;
-            console.log(`📌 QR Generado: ${sessionId}`);
+        // 👇 EMITIR QR AL FRONTEND
+        if (qr && io) {
+            io.emit("wa_event", {
+                type: "qr",
+                locationId,
+                slotId,
+                data: qr
+            });
         }
 
         if (connection === "open") {
@@ -455,12 +466,33 @@ async function startWhatsApp(locationId, slotId) {
             sessionData.myNumber = myPhone;
             console.log(`✅ CONECTADO: ${sessionId} (${myPhone})`);
             syncSlotInfo(locationId, slotId, myPhone).catch(console.error);
+
+            // 👇 EMITIR CONEXIÓN EXITOSA
+            if (io) {
+                io.emit("wa_event", {
+                    type: "connection",
+                    status: "open",
+                    locationId,
+                    slotId,
+                    myNumber: sessionData.myNumber
+                });
+            }
         }
 
         if (connection === "close") {
             const code = lastDisconnect?.error?.output?.statusCode;
             const isLogout = code === 401 || code === 403 || code === 440;
             const shouldReconnect = !isLogout && !sessionData.isDestroying;
+
+            // 👇 EMITIR DESCONEXIÓN
+            if (io) {
+                io.emit("wa_event", {
+                    type: "connection",
+                    status: "close",
+                    locationId,
+                    slotId
+                });
+            }
 
             if (shouldReconnect) {
                 console.log(`🔄 Reconectando ${sessionId}... (Código: ${code})`);
@@ -536,5 +568,6 @@ module.exports = {
     SUPPORT_LOC_ID,
     SUPPORT_SLOT_ID,
     getGroups,
-    syncGroupMembers
+    syncGroupMembers,
+    setSocket
 };

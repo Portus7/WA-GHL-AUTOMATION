@@ -8,9 +8,11 @@ const { initDb } = require("./db/init");
 const { pool } = require("./config/db");
 const { registerNewTenant, getTenantConfig } = require("./services/tenantService");
 const rateLimit = require("express-rate-limit");
-
 const { login, verifyToken, requireRole, changePassword } = require("./controllers/authController");
 const { startMediaCleanup } = require("./services/mediaCleanup");
+const http = require('http');
+const { Server } = require("socket.io");
+
 
 // --- SERVICIOS WA ---
 const {
@@ -81,6 +83,18 @@ if (!fs.existsSync(MEDIA_DIR)) {
 }
 
 const app = express();
+const server = http.createServer(app);
+
+const io = new Server(server, {
+    cors: {
+        origin: ALLOWED_ORIGINS, // Reutilizamos tus orígenes permitidos
+        methods: ["GET", "POST"]
+    }
+});
+
+// Pasar la instancia de IO al servicio de WhatsApp
+const { setSocket } = require("./services/whatsappService");
+setSocket(io);
 
 app.get("/health", (req, res) => {
     res.status(200).send("OK");
@@ -770,7 +784,7 @@ async function restoreSessions() {
 
                 // 🔥 CLAVE: Pausa de seguridad de 2 a 5 segundos entre arranques.
                 // Esto permite que la CPU baje y que la conexión TCP se establezca antes de abrir otra.
-                await sleep(2500);
+                await sleep(1500);
             }
         }
 
@@ -780,4 +794,11 @@ async function restoreSessions() {
         console.error("❌ Error fatal restaurando sesiones:", e);
     }
 }
-(async () => { try { await initDb(); startMediaCleanup(); app.listen(PORT, async () => { console.log(`API OK ${PORT}`); await restoreSessions(); }); } catch (e) { console.error("❌ Error fatal al iniciar:", e); process.exit(1); } })();
+(async () => {
+    try {
+        await initDb(); startMediaCleanup(); server.listen(PORT, async () => {
+            console.log(`API & Socket.io OK en puerto ${PORT}`);
+            await restoreSessions();
+        });
+    } catch (e) { console.error("❌ Error fatal al iniciar:", e); process.exit(1); }
+})();
