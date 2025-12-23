@@ -92,6 +92,17 @@ const io = new Server(server, {
     }
 });
 
+// ✅ NUEVO: Gestión de Salas (Rooms) para optimizar tráfico
+io.on("connection", (socket) => {
+    // El cliente (Frontend) solicita unirse a una sala específica (su locationId)
+    socket.on("join_room", (room) => {
+        if (room) {
+            socket.join(room);
+            // console.log(`Socket ${socket.id} unido a sala: ${room}`);
+        }
+    });
+});
+
 // Pasar la instancia de IO al servicio de WhatsApp
 const { setSocket } = require("./services/whatsappService");
 setSocket(io);
@@ -573,7 +584,34 @@ app.post("/agency/slots/:locationId/:slotId/groups/sync-members", verifyToken, a
     try { const { locationId, slotId } = req.params; const { groupJid } = req.body; syncGroupMembers(locationId, slotId, groupJid).then(r => console.log(`✅ Sync: ${r.synced}`)).catch(e => console.error("❌ Sync:", e)); res.json({ success: true, message: "Sync iniciada." }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post("/agency/sync-ghl", verifyToken, async (req, res) => {
-    const { locationIdToVerify } = req.body; const userId = req.user.id; if (!locationIdToVerify) return res.status(400).json({ error: "Falta Location ID" }); try { await pool.query("UPDATE users SET agency_id = $1 WHERE id = $2", [locationIdToVerify, userId]); res.json({ success: true, newAgencyId: locationIdToVerify }); } catch (e) { res.status(500).json({ error: e.message }); }
+    const { locationIdToVerify } = req.body;
+    const userId = req.user.id;
+
+    if (!locationIdToVerify) return res.status(400).json({ error: "Falta Location ID" });
+
+    try {
+        // 1. Buscamos el tenant para saber su Company ID (agency_id real)
+        const tenantRes = await pool.query("SELECT agency_id FROM tenants WHERE location_id = $1", [locationIdToVerify]);
+
+        if (tenantRes.rows.length === 0) {
+            return res.status(404).json({ error: "Subcuenta no encontrada. Espera a que el webhook termine de procesar." });
+        }
+
+        const realAgencyId = tenantRes.rows[0].agency_id;
+
+        // 2. Vinculamos al usuario con la AGENCIA real, no con la subcuenta
+        if (realAgencyId) {
+            await pool.query("UPDATE users SET agency_id = $1 WHERE id = $2", [realAgencyId, userId]);
+            res.json({ success: true, newAgencyId: realAgencyId });
+        } else {
+            // Fallback raro: si no tiene agency_id, usamos lo que llegó (riesgoso pero cubre casos borde)
+            await pool.query("UPDATE users SET agency_id = $1 WHERE id = $2", [locationIdToVerify, userId]);
+            res.json({ success: true, newAgencyId: locationIdToVerify });
+        }
+
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 app.get("/agency/ghl-users/:locationId", verifyToken, async (req, res) => {
     try { const { locationId } = req.params; const users = await getLocationUsers(locationId); res.json(users); } catch (e) { res.status(500).json({ error: e.message }); }

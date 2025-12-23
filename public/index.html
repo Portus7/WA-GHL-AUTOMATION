@@ -149,9 +149,17 @@
         function initSocket() {
             socket = io();
 
-            socket.on('connect', () => console.log('🟢 Socket Conectado'));
+            // ✅ ÚNETE A LA SALA AL CONECTAR (O RECONECTAR)
+            socket.on('connect', () => {
+                console.log('🟢 Socket Conectado');
+                if (locationId) {
+                    console.log('🔌 Uniéndose a sala:', locationId);
+                    socket.emit('join_room', locationId);
+                }
+            });
 
             socket.on('wa_event', (payload) => {
+                // Doble check por seguridad, aunque el backend ya filtra por sala
                 if (payload.locationId !== locationId) return;
 
                 // ✅ FIX CRÍTICO: Convertir a String para comparar
@@ -172,8 +180,6 @@
                     if (payload.status === 'open') {
                         // Conectado -> Dejar de esperar QR
                         activeConnections.delete(slotId);
-                        // Opcional: Recargar para limpiar estados si se prefiere
-                        // window.location.reload(); 
                     }
                 }
             });

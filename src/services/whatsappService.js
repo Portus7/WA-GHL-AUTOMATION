@@ -18,7 +18,6 @@ const SUPPORT_LOC_ID = "__SYSTEM_SUPPORT__";
 const SUPPORT_SLOT_ID = "1";
 
 // Configuración de limpieza de memoria (Optimizada)
-// Antes: 1 hora. Ahora: 5 minutos para mantener la memoria ligera.
 const CLEANUP_INTERVAL = 5 * 60 * 1000;
 const MAX_INACTIVITY = 24 * 60 * 60 * 1000; // 24 horas de inactividad
 
@@ -48,7 +47,7 @@ setInterval(() => {
         }
     });
 
-    // 2. Limpiar cache de IDs de mensajes (Evitar consumo infinito de RAM)
+    // 2. Limpiar cache de IDs de mensajes
     const ID_TTL = 5 * 60 * 1000; // 5 minutos
 
     if (botMessageIds.size > 0) {
@@ -448,13 +447,15 @@ async function startWhatsApp(locationId, slotId) {
         const { connection, lastDisconnect, qr } = update;
         sessionData.lastActivity = Date.now();
 
+        // Guardamos QR en memoria para el endpoint REST /qr
         if (qr) {
             sessionData.qr = qr;
         }
 
-        // 👇 EMITIR QR AL FRONTEND
+        // 👇 EMITIR QR A LA SALA ESPECÍFICA DE LA LOCACIÓN
+        // ✅ CAMBIO: io.to(locationId) en lugar de io.emit()
         if (qr && io) {
-            io.emit("wa_event", {
+            io.to(locationId).emit("wa_event", {
                 type: "qr",
                 locationId,
                 slotId,
@@ -471,9 +472,10 @@ async function startWhatsApp(locationId, slotId) {
             console.log(`✅ CONECTADO: ${sessionId} (${myPhone})`);
             syncSlotInfo(locationId, slotId, myPhone).catch(console.error);
 
-            // 👇 EMITIR CONEXIÓN EXITOSA
+            // 👇 EMITIR CONEXIÓN A LA SALA ESPECÍFICA
+            // ✅ CAMBIO: io.to(locationId)
             if (io) {
-                io.emit("wa_event", {
+                io.to(locationId).emit("wa_event", {
                     type: "connection",
                     status: "open",
                     locationId,
@@ -488,9 +490,10 @@ async function startWhatsApp(locationId, slotId) {
             const isLogout = code === 401 || code === 403 || code === 440;
             const shouldReconnect = !isLogout && !sessionData.isDestroying;
 
-            // 👇 EMITIR DESCONEXIÓN
+            // 👇 EMITIR DESCONEXIÓN A LA SALA ESPECÍFICA
+            // ✅ CAMBIO: io.to(locationId)
             if (io) {
-                io.emit("wa_event", {
+                io.to(locationId).emit("wa_event", {
                     type: "connection",
                     status: "close",
                     locationId,
